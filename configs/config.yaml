@@ -1,0 +1,36 @@
+server:
+  name: genesis-sample
+  http:
+    addr: 0.0.0.0:8080
+  metrics:
+    addr: 0.0.0.0:9090
+
+log:
+  level: info
+  encoding: console
+
+config:
+  paths:
+    - ./configs
+  remote:
+    enabled: false
+
+cache:
+  addr: localhost:6379
+  db: 0
+  key_prefix: genesis
+
+db:
+  driver: mysql
+  dsn: user:password@tcp(localhost:3306)/genesis?parseTime=true
+  max_open_conns: 20
+  max_idle_conns: 10
+  conn_max_lifetime: 300s
+
+mq:
+  brokers:
+    - localhost:9092
+
+uid:
+  worker_id: 0
+  epoch: 2020-01-01T00:00:00Z
