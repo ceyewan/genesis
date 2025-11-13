@@ -8,7 +8,7 @@
 
 ## 行为准则（编程版八荣八耻）
 1. **以凭空猜测为耻，以查阅文档为荣**：对接口、配置、流程有疑问时，先读 `docs/`、`pkg/` 源码与注释。
-2. **以模糊执行为耻，以确认反馈为荣**：不确定的改动先询问或验证，避免“差不多”式修改。
+2. **以模糊执行为耻，以确认反馈为荣**：不确定的改动先询问或验证，避免"差不多"式修改。
 3. **以自说自话为耻，以对齐需求为荣**：实现前确认需求背景与边界，必要时向人类说明假设。
 4. **以重复造轮为耻，以复用抽象为荣**：优先复用 `pkg/` 接口和已存在的工具，避免新增无用抽象。
 5. **以跳过验证为耻，以主动测试为荣**：改动后运行对应的测试或静态检查，确保功能与行为稳定。
@@ -16,50 +16,130 @@
 7. **以假装理解为耻，以诚实求助为荣**：遇到不懂的概念或代码路径，坦诚指出并寻找答案。
 8. **以鲁莽提交为耻，以谨慎重构为荣**：重构前先理解上下游调用，必要时分步骤进行并记录风险。
 
-## 目录速览
-```
-.
-├── cmd/            # 应用入口（fx 应用将驻留于此）
-├── configs/        # 默认配置样例
-├── docs/           # 设计、组件、使用手册
-├── internal/       # 具体实现与适配器
-└── pkg/            # 对外公开的接口契约
+## 开发命令
+
+### 基础命令
+```bash
+# 依赖管理
+go mod tidy
+
+# 编译检查
+go build ./...
+
+# 运行测试
+go test ./...
+go test -v ./pkg/log/...  # 运行特定包的测试
+go test -run TestSpecificFunction ./pkg/log/  # 运行特定测试函数
+
+# 代码格式化
+go fmt ./...
+
+# 静态分析
+go vet ./...
+
+# 生成文档示例
+go test -run Example ./pkg/...
 ```
 
-## 设计原则
-- **抽象优先**：业务与外部调用方仅依赖 `pkg` 中的接口；实现细节封装在 `internal`。
-- **插件化实现**：同一接口可有多种实现（如 `internal/cache/redis`），方便替换与扩展。
-- **依赖注入**：统一通过 `fx.Module` 或构造函数注入依赖，保持生命周期受控。
-- **可观测性优先**：日志、指标、追踪是默认能力，组件开发需同步考虑。
-- **简洁交付**：默认配置可直接运行；复杂能力通过选项按需启用。
+### 应用运行
+```bash
+# 运行主服务（当前为占位符实现）
+go run ./cmd/server
 
-## 推荐工作流
-1. **学习顺序**：阅读 `DESIGN.md` → `docs/usage_guide.md` → 目标组件文档。
-2. **新增能力**：参考 `docs/module_creation_guide.md` 完成接口定义、实现、测试与文档。
-3. **依赖安装**：使用 `go mod tidy` 管理依赖；新增第三方库前确认必要性。
-4. **运行与测试**：
-   ```bash
-   go test ./...
-   go run ./cmd/server
-   ```
-   后续如引入 Makefile，再使用统一命令。
-5. **文档同步**：接口或行为变化必须同步更新 `docs/` 与相关样例配置。
+# 查看项目版本信息
+go version
+```
+
+## 核心架构
+
+### 接口与实现分离
+```
+pkg/                    # 对外接口层 - 业务代码依赖
+├── cache/             # 缓存接口
+├── config/            # 配置管理接口  
+├── db/                # 数据库接口
+├── log/               # 日志接口 ✅ 已完整实现
+├── middleware/        # 中间件接口
+├── mq/                # 消息队列接口
+├── uid/               # ID生成接口
+└── coord/             # 分布式协调接口
+
+internal/               # 具体实现层 - 可替换扩展
+├── cache/redis/       # Redis 缓存实现
+├── config/viper/      # Viper 配置实现
+├── db/gorm/           # GORM 数据库实现
+├── log/zap/           # Zap 日志实现 ✅ 已完整实现
+├── middleware/        # 限流、熔断、幂等实现
+├── mq/kafka/          # Kafka 消息队列实现
+├── uid/snowflake/     # 雪花算法 ID 实现
+└── coord/etcd/        # etcd 协调实现
+```
+
+### 已实现组件
+**日志组件 (pkg/log/ + internal/log/zap/)**
+- 支持结构化日志 (JSON/Console 格式)
+- 层次化命名空间 (`logger.Namespace("module")`)
+- 上下文感知 (`log.WithContext(ctx)`)
+- 分布式追踪支持 (`log.WithTraceID(ctx, traceID)`)
+- 日志轮转 (基于 lumberjack)
+- 开发/生产环境配置 (`log.GetDefaultConfig("development")`)
+
+### 依赖注入模式
+- 使用 `go.uber.org/fx` 进行依赖管理
+- 组件通过构造函数接受依赖
+- 生命周期统一管理
+
+### 配置驱动
+- 统一的配置接口 (`config.Provider`)
+- 支持热重载 (`Watch()` 方法)
+- 环境差异化配置 (`GetDefaultConfig(env)`)
+
+## 工作流程
+
+### 新增组件开发流程
+1. **接口定义**: 在 `pkg/component/` 中定义接口
+2. **默认实现**: 在 `internal/component/provider/` 中实现
+3. **单元测试**: 编写核心逻辑测试用例
+4. **集成测试**: 编写端到端测试
+5. **文档更新**: 更新 `docs/component.md`
+6. **示例代码**: 提供 `*_example_test.go`
+
+### 日志组件使用示例
+```go
+// 初始化
+config := log.GetDefaultConfig("development")
+err := log.Init(ctx, config, log.WithNamespace("user-service"))
+
+// 使用日志器
+logger := log.WithContext(ctx)
+logger.Info("user login", log.String("user_id", "12345"))
+
+// 命名空间日志
+userLogger := log.Namespace("auth")
+userLogger.Error("authentication failed", log.Err(err))
+```
 
 ## 代码守则
-- 所有 I/O 操作接受 `context.Context`，并通过日志记录携带 trace/请求信息。
-- 错误处理使用 `fmt.Errorf("...: %w", err)` 或 `errors.Join`，保持信息链完整。
-- 新增包需提供简要 `doc.go` 注释，帮助快速了解职责。
-- `gofmt`、`go vet`、`staticcheck` 通过后再交付结果。
 
-## 常见场景提示
-- **配置加载**：由 `config` 组件集中管理，避免在业务代码直接解析文件。
-- **数据库事务**：使用 `db.Transaction.ExecTx` 包裹事务逻辑，避免嵌套事务导致死锁。
-- **缓存幂等**：结合 `cache` 与 `middleware/once`，防止重复请求造成副作用。
-- **服务治理**：`middleware/ratelimit`、`middleware/breaker`、`middleware/once` 提供统一治理能力，保持业务代码纯净。
+### 接口设计原则
+- 所有接口方法接受 `context.Context` 作为第一个参数
+- 错误处理使用 `fmt.Errorf("...: %w", err)` 包装错误
+- 接口保持最小化，避免过度抽象
+
+### 实现层约束
+- `internal/` 包不能被 `pkg/` 导入
+- 实现不应泄漏第三方依赖到接口层
+- 提供降级方案，避免单点故障
+
+### 配置管理
+- 组件配置通过结构体定义，支持 JSON/YAML 标签
+- 必须提供 `Validate()` 方法检查配置有效性
+- 支持环境变量覆盖
 
 ## 绝对禁止
-- 直接向仓库提交明文密钥或凭证。
-- 擅自改动用户未交待的历史文件，除非修复因本次改动引发的问题。
-- 使用英文与用户或日志交互（除代码与 Go 保留字外）。
+- 直接向仓库提交明文密钥或凭证
+- 擅自改动用户未交待的历史文件，除非修复因本次改动引发的问题
+- 使用英文与用户或日志交互（除代码与 Go 保留字外）
+- 破坏 `pkg` 与 `internal` 的分层架构
 
 遵守上述规范，可确保在 Genesis 项目中高效、安全地迭代。
