@@ -1,3 +1,4 @@
+// pkg/lock/lock.go
 package lock
 
 import (
@@ -5,80 +6,41 @@ import (
 	"time"
 )
 
-// LockGuard represents an acquired lock that can be released.
-type LockGuard interface {
-	// Unlock releases the lock.
-	Unlock(ctx context.Context) error
-	// Token returns the unique token assigned to this lock.
-	Token() string
-}
-
-// Locker defines the interface for distributed locking operations.
+// Locker 分布式锁接口
+// 设计原则：简单、通用，支持不同底层实现（etcd、redis等）
 type Locker interface {
-	// TryLock attempts to acquire the lock without blocking.
-	// Returns (guard, true, nil) if successful; (nil, false, nil) if lock is held by another; (nil, false, err) on error.
-	TryLock(ctx context.Context, key string, opts ...Option) (LockGuard, bool, error)
+	// Lock 阻塞式加锁，直到成功获取锁或上下文取消
+	Lock(ctx context.Context, key string) error
 
-	// Lock acquires the lock, blocking until successful or context cancels.
-	Lock(ctx context.Context, key string, opts ...Option) (LockGuard, error)
+	// TryLock 非阻塞式加锁，立即返回是否成功
+	TryLock(ctx context.Context, key string) (bool, error)
 
-	// Sync flushes any pending operations (e.g., lease renewals). Should be called on shutdown.
-	Sync() error
+	// Unlock 释放锁
+	Unlock(ctx context.Context, key string) error
+
+	// LockWithTTL 带TTL的加锁，自动续期
+	// ttl: 锁的超时时间
+	LockWithTTL(ctx context.Context, key string, ttl time.Duration) error
+
+	// Close 关闭锁客户端，释放资源
+	Close() error
 }
 
-// Option is a functional option for lock configuration.
-type Option interface{}
-
-// WithTTL specifies the time-to-live for the lock.
-type WithTTL struct {
-	Duration time.Duration
+// LockOptions 锁配置选项
+type LockOptions struct {
+	// TTL 锁的默认超时时间
+	TTL time.Duration
+	// RetryInterval 重试间隔
+	RetryInterval time.Duration
+	// AutoRenew 是否自动续期
+	AutoRenew bool
 }
 
-// WithTimeout specifies how long to wait when blocking on Lock.
-type WithTimeout struct {
-	Duration time.Duration
-}
-
-// WithWaitStrategy specifies the retry/backoff strategy for Lock attempts.
-type WithWaitStrategy struct {
-	Strategy WaitStrategy
-}
-
-// WaitStrategy defines how to wait between lock acquisition attempts.
-type WaitStrategy interface {
-	// NextWait returns the duration to wait before the next attempt.
-	// attempts is zero-indexed.
-	NextWait(attempts int) (time.Duration, bool) // (duration, shouldRetry)
-}
-
-// ExponentialBackoff is a basic exponential backoff wait strategy.
-type ExponentialBackoff struct {
-	InitialDelay time.Duration
-	MaxDelay     time.Duration
-	Multiplier   float64
-	MaxAttempts  int
-}
-
-func (e *ExponentialBackoff) NextWait(attempts int) (time.Duration, bool) {
-	if e.MaxAttempts > 0 && attempts >= e.MaxAttempts {
-		return 0, false
+// DefaultLockOptions 默认配置
+func DefaultLockOptions() *LockOptions {
+	return &LockOptions{
+		TTL:           10 * time.Second,
+		RetryInterval: 100 * time.Millisecond,
+		AutoRenew:     true,
 	}
-	delay := time.Duration(float64(e.InitialDelay) * (e.Multiplier * float64(attempts)))
-	if delay > e.MaxDelay {
-		delay = e.MaxDelay
-	}
-	return delay, true
-}
-
-// LinearBackoff is a linear backoff wait strategy.
-type LinearBackoff struct {
-	Interval    time.Duration
-	MaxAttempts int
-}
-
-func (l *LinearBackoff) NextWait(attempts int) (time.Duration, bool) {
-	if l.MaxAttempts > 0 && attempts >= l.MaxAttempts {
-		return 0, false
-	}
-	return l.Interval, true
 }
