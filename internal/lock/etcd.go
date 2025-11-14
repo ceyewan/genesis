@@ -21,14 +21,22 @@ type EtcdLocker struct {
 	locks   map[string]*concurrency.Mutex // 维护已持有的锁
 }
 
-// NewEtcdLocker 创建 etcd 分布式锁实例
+// NewEtcdLocker 创建 etcd 分布式锁实例（兼容现有API）
 func NewEtcdLocker(opts *lock.LockOptions) (*EtcdLocker, error) {
 	if opts == nil {
 		opts = lock.DefaultLockOptions()
 	}
 
-	// 从全局管理器获取 etcd 客户端
-	client, err := connector.GetEtcdClient()
+	// 使用默认配置创建连接
+	connConfig := connector.ConnectionConfig{
+		Backend:   "etcd",
+		Endpoints: []string{"127.0.0.1:2379"},
+		Timeout:   5 * time.Second,
+	}
+
+	// 从连接管理器获取 etcd 客户端
+	manager := connector.GetManager()
+	client, err := manager.GetEtcdClient(connConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get etcd client: %w", err)
 	}
@@ -198,4 +206,24 @@ func (l *EtcdLocker) Close() error {
 	}
 
 	return nil
+}
+
+// NewEtcdLockerWithClient 使用现有客户端创建锁（支持连接复用）
+func NewEtcdLockerWithClient(client *clientv3.Client, opts *lock.LockOptions) (*EtcdLocker, error) {
+	if opts == nil {
+		opts = lock.DefaultLockOptions()
+	}
+
+	// 创建session，用于租约管理
+	session, err := concurrency.NewSession(client, concurrency.WithTTL(int(opts.TTL.Seconds())))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	return &EtcdLocker{
+		client:  client,
+		session: session,
+		options: opts,
+		locks:   make(map[string]*concurrency.Mutex),
+	}, nil
 }

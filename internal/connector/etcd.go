@@ -2,6 +2,8 @@
 package connector
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -9,84 +11,110 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-// GlobalManager 全局连接管理器（单例）
+// ConnectionConfig 连接配置（仅连接相关，与业务无关）
+type ConnectionConfig struct {
+	Backend   string        // 后端类型: etcd, redis
+	Endpoints []string      // 连接地址
+	Username  string        // 认证用户（可选）
+	Password  string        // 认证密码（可选）
+	Timeout   time.Duration // 连接超时（可选，默认5s）
+}
+
+// Manager 连接管理器（支持配置哈希复用）
+type Manager struct {
+	etcdClients map[string]*clientv3.Client // 配置哈希 -> etcd客户端
+	configs     map[string]ConnectionConfig // 配置哈希 -> 配置
+	mu          sync.RWMutex
+}
+
 var (
 	globalManager *Manager
-	initOnce      sync.Once
+	managerOnce   sync.Once
 )
 
-// Manager 连接管理器
-type Manager struct {
-	etcdClient *clientv3.Client
-	etcdConfig *EtcdConfig
-	initOnce   sync.Once
-	mu         sync.RWMutex
-}
-
-// EtcdConfig etcd配置
-type EtcdConfig struct {
-	Endpoints   []string      `json:"endpoints" yaml:"endpoints"`
-	Username    string        `json:"username" yaml:"username"`
-	Password    string        `json:"password" yaml:"password"`
-	DialTimeout time.Duration `json:"dial_timeout" yaml:"dial_timeout"`
-}
-
-// InitGlobalManager 初始化全局管理器（只能调用一次）
-func InitGlobalManager(config *EtcdConfig) error {
-	var initErr error
-	initOnce.Do(func() {
+// GetManager 获取全局连接管理器（单例）
+func GetManager() *Manager {
+	managerOnce.Do(func() {
 		globalManager = &Manager{
-			etcdConfig: config,
+			etcdClients: make(map[string]*clientv3.Client),
+			configs:     make(map[string]ConnectionConfig),
 		}
-		initErr = globalManager.init()
 	})
-	return initErr
+	return globalManager
 }
 
-// GetEtcdClient 获取etcd客户端（懒加载，线程安全）
-func GetEtcdClient() (*clientv3.Client, error) {
-	if globalManager == nil {
-		return nil, fmt.Errorf("global manager not initialized, call InitGlobalManager first")
+// GetEtcdClient 根据配置获取etcd客户端（自动复用）
+func (m *Manager) GetEtcdClient(config ConnectionConfig) (*clientv3.Client, error) {
+	// 应用默认值
+	if config.Backend == "" {
+		config.Backend = "etcd"
 	}
-	return globalManager.getEtcdClient()
+	if len(config.Endpoints) == 0 {
+		config.Endpoints = []string{"127.0.0.1:2379"}
+	}
+	if config.Timeout == 0 {
+		config.Timeout = 5 * time.Second
+	}
+
+	// 计算配置哈希
+	configHash := m.hashConfig(config)
+
+	// 检查是否已有相同配置的客户端
+	m.mu.RLock()
+	if client, exists := m.etcdClients[configHash]; exists {
+		m.mu.RUnlock()
+		return client, nil
+	}
+	m.mu.RUnlock()
+
+	// 创建新客户端
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 双重检查，避免并发重复创建
+	if client, exists := m.etcdClients[configHash]; exists {
+		return client, nil
+	}
+
+	// 创建新客户端
+	client, err := m.createEtcdClient(config)
+	if err != nil {
+		return nil, err
+	}
+
+	// 缓存客户端
+	m.etcdClients[configHash] = client
+	m.configs[configHash] = config
+
+	return client, nil
 }
 
-// 内部方法
-func (m *Manager) init() error {
-	// 这里实现真正的初始化逻辑
-	return nil
+// hashConfig 计算配置哈希（用于连接复用判断）
+func (m *Manager) hashConfig(config ConnectionConfig) string {
+	h := sha256.New()
+
+	// 关键配置字段参与哈希
+	h.Write([]byte(config.Backend))
+	for _, endpoint := range config.Endpoints {
+		h.Write([]byte(endpoint))
+	}
+	h.Write([]byte(config.Username))
+	h.Write([]byte(config.Password))
+	h.Write([]byte(config.Timeout.String()))
+
+	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (m *Manager) getEtcdClient() (*clientv3.Client, error) {
-	m.initOnce.Do(func() {
-		// 懒加载：第一次调用时才真正创建连接
-		client, err := m.createEtcdClient()
-		if err != nil {
-			// 记录错误，下次调用时重试
-			return
-		}
-		m.etcdClient = client
-	})
-
-	if m.etcdClient == nil {
-		return nil, fmt.Errorf("failed to create etcd client")
-	}
-	return m.etcdClient, nil
-}
-
-func (m *Manager) createEtcdClient() (*clientv3.Client, error) {
-	if m.etcdConfig == nil {
-		return nil, fmt.Errorf("etcd config is nil")
+// createEtcdClient 创建etcd客户端
+func (m *Manager) createEtcdClient(config ConnectionConfig) (*clientv3.Client, error) {
+	clientConfig := clientv3.Config{
+		Endpoints:   config.Endpoints,
+		Username:    config.Username,
+		Password:    config.Password,
+		DialTimeout: config.Timeout,
 	}
 
-	config := clientv3.Config{
-		Endpoints:   m.etcdConfig.Endpoints,
-		Username:    m.etcdConfig.Username,
-		Password:    m.etcdConfig.Password,
-		DialTimeout: m.etcdConfig.DialTimeout,
-	}
-
-	client, err := clientv3.New(config)
+	client, err := clientv3.New(clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create etcd client: %w", err)
 	}

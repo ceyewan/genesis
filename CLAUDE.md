@@ -142,4 +142,93 @@ userLogger.Error("authentication failed", log.Err(err))
 - 使用英文与用户或日志交互（除代码与 Go 保留字外）
 - 破坏 `pkg` 与 `internal` 的分层架构
 
+## 分布式锁组件设计经验（etcd-lock-optimization）
+
+### 项目阶段认知
+当前处于开发阶段，**不需要考虑API向后兼容性**，优先保证：
+- 易用性：一行初始化，简洁API
+- 简单性：避免用户困扰
+- 架构清晰：防止循环依赖
+
+### 核心设计成果
+
+**新的简单API**：
+```go
+// 一行初始化，全部默认
+locker, err := simple.New(nil, nil)
+
+// 自定义连接配置
+locker, err := simple.New(&simple.Config{
+    Backend:   "etcd",
+    Endpoints: []string{"localhost:2379"},
+}, nil)
+
+// 自定义行为配置
+locker, err := simple.New(nil, &simple.Option{
+    TTL:       30 * time.Second,
+    AutoRenew: false,
+})
+```
+
+**架构层次（无循环依赖）**：
+```
+pkg/lock/simple/          (新API层)
+  ↓
+pkg/lock/                 (接口定义)
+  ↓
+internal/lock/            (实现层)
+  ↓
+internal/connector/       (连接管理层)
+```
+
+### 关键设计原则
+
+1. **遵循Go规范**：`New(config, option)` - config必需，option可选
+2. **职责分离**：Config管连接，Option管行为
+3. **零值友好**：两个参数都可为nil，自动应用合理默认值
+4. **连接复用**：相同配置自动复用etcd连接，提升性能
+
+### 避免循环依赖的方法
+
+**验证命令**：
+```bash
+go build ./...                    # 确保编译成功
+go list -json ./pkg/lock/simple   # 检查依赖关系，确认无循环
+```
+
+**设计要点**：
+- 保持单向依赖层次
+- 接口定义在最上层（pkg/lock）
+- 实现层不依赖具体API层
+- 连接管理器作为独立底层服务
+
+### 配置分离策略
+
+**Config（连接相关）**：
+- Backend：后端类型
+- Endpoints：连接地址
+- Username/Password：认证信息
+- Timeout：连接超时
+
+**Option（行为相关）**：
+- TTL：锁超时时间
+- RetryInterval：重试间隔
+- AutoRenew：自动续期
+- MaxRetries：最大重试次数
+
+### 性能优化
+
+**连接复用机制**：
+- SHA256配置哈希作为连接池key
+- 读写锁优化并发性能
+- 双重检查避免重复创建
+- 懒加载连接创建
+
+### 开发阶段认知
+
+1. **无需向后兼容**：可大胆重构API
+2. **优先用户体验**：一行初始化，直观易用
+3. **架构清晰更重要**：避免为了兼容而妥协设计
+4. **渐进式重构**：分步骤验证，降低风险
+
 遵守上述规范，可确保在 Genesis 项目中高效、安全地迭代。

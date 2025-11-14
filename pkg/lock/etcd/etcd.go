@@ -27,18 +27,24 @@ func New(cfg *Config, opts *lockpkg.LockOptions) (lockpkg.Locker, error) {
 		return nil, fmt.Errorf("etcd config is nil")
 	}
 
-	internalCfg := &connector.EtcdConfig{
-		Endpoints:   cfg.Endpoints,
-		Username:    cfg.Username,
-		Password:    cfg.Password,
-		DialTimeout: cfg.DialTimeout,
+	// 转换到新的连接配置
+	connConfig := connector.ConnectionConfig{
+		Backend:   "etcd",
+		Endpoints: cfg.Endpoints,
+		Username:  cfg.Username,
+		Password:  cfg.Password,
+		Timeout:   cfg.DialTimeout,
 	}
 
-	if err := connector.InitGlobalManager(internalCfg); err != nil {
-		return nil, fmt.Errorf("failed to init etcd manager: %w", err)
+	// 使用连接管理器获取客户端
+	manager := connector.GetManager()
+	client, err := manager.GetEtcdClient(connConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get etcd client: %w", err)
 	}
 
-	locker, err := internallock.NewEtcdLocker(opts)
+	// 使用内部实现创建锁
+	locker, err := internallock.NewEtcdLockerWithClient(client, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create etcd locker: %w", err)
 	}
