@@ -76,6 +76,44 @@ func newEtcdLocker(config *Config, option *Option) (Locker, error) {
 }
 
 func newRedisLocker(config *Config, option *Option) (Locker, error) {
-	// TODO: 实现Redis锁支持
-	return nil, fmt.Errorf("redis backend not implemented yet")
+	// Redis只需要一个地址，取第一个endpoint
+	redisAddr := "127.0.0.1:6379"
+	if len(config.Endpoints) > 0 {
+		redisAddr = config.Endpoints[0]
+	}
+
+	// 转换到Redis连接配置
+	connConfig := connector.RedisConfig{
+		Addr:         redisAddr,
+		Password:     config.Password,
+		DB:           0, // 默认数据库0
+		PoolSize:     10,
+		MinIdleConns: 5,
+		MaxRetries:   3,
+		DialTimeout:  config.Timeout,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+	}
+
+	// 应用Redis默认值
+	if connConfig.DialTimeout == 0 {
+		connConfig.DialTimeout = 5 * time.Second
+	}
+
+	// 使用连接管理器获取复用连接
+	manager := connector.GetRedisManager()
+	client, err := manager.GetRedisClient(connConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get redis client: %w", err)
+	}
+
+	// 创建锁选项
+	opts := &lock.LockOptions{
+		TTL:           option.TTL,
+		RetryInterval: option.RetryInterval,
+		AutoRenew:     option.AutoRenew,
+	}
+
+	// 创建Redis锁（复用现有内部实现）
+	return internallock.NewRedisLockerWithClient(client, opts)
 }

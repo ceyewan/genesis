@@ -26,6 +26,10 @@ type RedisConfig struct {
 	WriteTimeout time.Duration // 写入超时（默认3s）
 }
 
+// Redis 的 DB 可以理解成类似于关系型数据库中的“数据库”或“Schema”，
+// 它用于在同一个 Redis 服务实例中，逻辑隔离不同应用或模块的数据。
+// Redis 默认提供多个编号的数据库，通常是 16 个，编号从 0 到 15。
+
 // redisEntry Redis客户端条目
 type redisEntry struct {
 	client    *redis.Client
