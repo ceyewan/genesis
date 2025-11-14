@@ -44,9 +44,8 @@ func New(config *Config, option *Option) (Locker, error) {
 }
 
 func newEtcdLocker(config *Config, option *Option) (Locker, error) {
-	// 转换到连接配置
-	connConfig := connector.ConnectionConfig{
-		Backend:   config.Backend,
+	// 转换到etcd连接配置（移除多余的Backend字段）
+	connConfig := connector.EtcdConfig{
 		Endpoints: config.Endpoints,
 		Username:  config.Username,
 		Password:  config.Password,
@@ -59,7 +58,7 @@ func newEtcdLocker(config *Config, option *Option) (Locker, error) {
 	}
 
 	// 使用连接管理器获取复用连接
-	manager := connector.GetManager()
+	manager := connector.GetEtcdManager()
 	client, err := manager.GetEtcdClient(connConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get etcd client: %w", err)

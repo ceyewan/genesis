@@ -18,25 +18,33 @@ type EtcdLocker struct {
 	session *concurrency.Session
 	options *lock.LockOptions
 	mu      sync.RWMutex
-	locks   map[string]*concurrency.Mutex // 维护已持有的锁
+	locks   map[string]*lockEntry // 维护已持有的锁
 }
 
-// NewEtcdLocker 创建 etcd 分布式锁实例（兼容现有API）
-func NewEtcdLocker(opts *lock.LockOptions) (*EtcdLocker, error) {
+// lockEntry 锁条目，包含所有相关资源
+type lockEntry struct {
+	mutex   *concurrency.Mutex
+	session *concurrency.Session
+	isTTL   bool // 标记是否为TTL锁
+}
+
+// NewEtcdLocker 创建 etcd 分布式锁实例（接收外部配置）
+func NewEtcdLocker(config *connector.EtcdConfig, opts *lock.LockOptions) (*EtcdLocker, error) {
 	if opts == nil {
 		opts = lock.DefaultLockOptions()
 	}
-
-	// 使用默认配置创建连接
-	connConfig := connector.ConnectionConfig{
-		Backend:   "etcd",
-		Endpoints: []string{"127.0.0.1:2379"},
-		Timeout:   5 * time.Second,
+	
+	// 使用外部配置或默认值
+	if config == nil {
+		config = &connector.EtcdConfig{
+			Endpoints: []string{"127.0.0.1:2379"},
+			Timeout:   5 * time.Second,
+		}
 	}
 
 	// 从连接管理器获取 etcd 客户端
-	manager := connector.GetManager()
-	client, err := manager.GetEtcdClient(connConfig)
+	manager := connector.GetEtcdManager()
+	client, err := manager.GetEtcdClient(*config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get etcd client: %w", err)
 	}
@@ -51,48 +59,59 @@ func NewEtcdLocker(opts *lock.LockOptions) (*EtcdLocker, error) {
 		client:  client,
 		session: session,
 		options: opts,
-		locks:   make(map[string]*concurrency.Mutex),
+		locks:   make(map[string]*lockEntry),
 	}, nil
 }
 
 // Lock 阻塞式加锁
 func (l *EtcdLocker) Lock(ctx context.Context, key string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	// 检查是否已经持有该锁
+	// 第一步：快速检查（无锁）
+	l.mu.RLock()
 	if _, exists := l.locks[key]; exists {
+		l.mu.RUnlock()
 		return fmt.Errorf("lock already held: %s", key)
 	}
+	l.mu.RUnlock()
 
-	// 创建互斥锁
+	// 第二步：获取 etcd 锁（不持有本地锁）
 	mutex := concurrency.NewMutex(l.session, key)
-
-	// 阻塞式获取锁
 	if err := mutex.Lock(ctx); err != nil {
 		return fmt.Errorf("failed to acquire lock: %w", err)
 	}
 
+	// 第三步：最终确认（持有本地锁）
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// 双重检查，避免并发重复创建
+	if _, exists := l.locks[key]; exists {
+		// 回滚：释放刚获取的 etcd 锁
+		mutex.Unlock(ctx)
+		return fmt.Errorf("lock already held: %s", key)
+	}
+
 	// 记录已持有的锁
-	l.locks[key] = mutex
+	l.locks[key] = &lockEntry{
+		mutex:   mutex,
+		session: l.session,
+		isTTL:   false,
+	}
 
 	return nil
 }
 
 // TryLock 非阻塞式加锁
 func (l *EtcdLocker) TryLock(ctx context.Context, key string) (bool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	// 检查是否已经持有该锁
+	// 第一步：快速检查（无锁）
+	l.mu.RLock()
 	if _, exists := l.locks[key]; exists {
+		l.mu.RUnlock()
 		return false, fmt.Errorf("lock already held: %s", key)
 	}
+	l.mu.RUnlock()
 
-	// 创建互斥锁
+	// 第二步：尝试获取 etcd 锁（不持有本地锁）
 	mutex := concurrency.NewMutex(l.session, key)
-
-	// 尝试获取锁
 	if err := mutex.TryLock(ctx); err != nil {
 		if err == concurrency.ErrLocked {
 			return false, nil
@@ -100,49 +119,67 @@ func (l *EtcdLocker) TryLock(ctx context.Context, key string) (bool, error) {
 		return false, fmt.Errorf("failed to try lock: %w", err)
 	}
 
+	// 第三步：最终确认（持有本地锁）
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// 双重检查
+	if _, exists := l.locks[key]; exists {
+		// 回滚：释放刚获取的 etcd 锁
+		mutex.Unlock(ctx)
+		return false, fmt.Errorf("lock already held: %s", key)
+	}
+
 	// 记录已持有的锁
-	l.locks[key] = mutex
+	l.locks[key] = &lockEntry{
+		mutex:   mutex,
+		session: l.session,
+		isTTL:   false,
+	}
 
 	return true, nil
 }
 
 // Unlock 释放锁
 func (l *EtcdLocker) Unlock(ctx context.Context, key string) error {
+	// 先获取锁条目，然后立即释放本地锁
 	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	// 检查是否持有该锁
-	mutex, exists := l.locks[key]
+	entry, exists := l.locks[key]
 	if !exists {
+		l.mu.Unlock()
 		return fmt.Errorf("lock not held: %s", key)
 	}
+	// 从映射中删除，避免重复解锁
+	delete(l.locks, key)
+	l.mu.Unlock()
 
-	// 释放锁
-	if err := mutex.Unlock(ctx); err != nil {
+	// 释放 etcd 锁（不持有本地锁）
+	if err := entry.mutex.Unlock(ctx); err != nil {
 		return fmt.Errorf("failed to unlock: %w", err)
 	}
 
-	// 从映射中删除
-	delete(l.locks, key)
+	// 如果是TTL锁且有独立session，关闭session
+	if entry.isTTL && entry.session != l.session {
+		entry.session.Close()
+	}
 
 	return nil
 }
 
 // LockWithTTL 带TTL的加锁
 func (l *EtcdLocker) LockWithTTL(ctx context.Context, key string, ttl time.Duration) error {
+	// 第一步：快速检查（无锁）
+	l.mu.RLock()
+	if _, exists := l.locks[key]; exists {
+		l.mu.RUnlock()
+		return fmt.Errorf("lock already held: %s", key)
+	}
+	l.mu.RUnlock()
+
 	// 创建临时 session，使用指定的 TTL
 	session, err := concurrency.NewSession(l.client, concurrency.WithTTL(int(ttl.Seconds())))
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	// 检查是否已经持有该锁
-	if _, exists := l.locks[key]; exists {
-		session.Close()
-		return fmt.Errorf("lock already held: %s", key)
 	}
 
 	// 创建互斥锁
@@ -154,53 +191,55 @@ func (l *EtcdLocker) LockWithTTL(ctx context.Context, key string, ttl time.Durat
 		return fmt.Errorf("failed to acquire lock: %w", err)
 	}
 
-	// 记录已持有的锁
-	l.locks[key] = mutex
+	// 最终确认（持有本地锁）
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-	// 如果启用自动续期，启动续期协程
-	if l.options.AutoRenew {
-		go l.keepAlive(ctx, key, session)
+	// 双重检查
+	if _, exists := l.locks[key]; exists {
+		// 回滚：释放刚获取的 etcd 锁和session
+		mutex.Unlock(ctx)
+		session.Close()
+		return fmt.Errorf("lock already held: %s", key)
+	}
+
+	// 记录已持有的锁
+	l.locks[key] = &lockEntry{
+		mutex:   mutex,
+		session: session,
+		isTTL:   true,
 	}
 
 	return nil
 }
 
-// keepAlive 自动续期
-func (l *EtcdLocker) keepAlive(ctx context.Context, key string, session *concurrency.Session) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-session.Done():
-			return
-		case <-time.After(l.options.TTL / 3): // 在 TTL 的 1/3 时续期
-			// 检查锁是否还在持有
-			l.mu.RLock()
-			_, exists := l.locks[key]
-			l.mu.RUnlock()
-			if !exists {
-				return
-			}
-		}
-	}
-}
+// 移除无效的 keepAlive 函数，直接依赖 etcd session 的内置续期机制
 
 // Close 关闭锁客户端
 func (l *EtcdLocker) Close() error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	entries := make([]*lockEntry, 0, len(l.locks))
+	for _, entry := range l.locks {
+		entries = append(entries, entry)
+	}
+	// 清空映射，避免重复操作
+	l.locks = make(map[string]*lockEntry)
+	l.mu.Unlock()
 
 	// 释放所有持有的锁
 	ctx := context.Background()
-	for key, mutex := range l.locks {
-		if err := mutex.Unlock(ctx); err != nil {
+	for _, entry := range entries {
+		if err := entry.mutex.Unlock(ctx); err != nil {
 			// 记录错误但继续
-			fmt.Printf("failed to unlock %s: %v\n", key, err)
+			fmt.Printf("failed to unlock: %v\n", err)
+		}
+		// 关闭独立session（TTL锁）
+		if entry.isTTL && entry.session != l.session {
+			entry.session.Close()
 		}
 	}
-	l.locks = make(map[string]*concurrency.Mutex)
 
-	// 关闭 session
+	// 关闭默认 session
 	if l.session != nil {
 		return l.session.Close()
 	}
@@ -224,6 +263,6 @@ func NewEtcdLockerWithClient(client *clientv3.Client, opts *lock.LockOptions) (*
 		client:  client,
 		session: session,
 		options: opts,
-		locks:   make(map[string]*concurrency.Mutex),
+		locks:   make(map[string]*lockEntry),
 	}, nil
 }

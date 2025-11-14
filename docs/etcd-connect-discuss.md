@@ -1,4 +1,98 @@
-// internal/connector/manager.go
+# EtcdManager 实现问题审查
+
+## 存在的问题
+
+### 1. **缺少连接健康检查机制** ⚠️
+
+**问题：**
+```go
+func (m *EtcdManager) GetEtcdClient(config EtcdConfig) (*clientv3.Client, error) {
+    if client, exists := m.clients[configHash]; exists {
+        return client, nil  // 直接返回，没有检查连接是否还有效
+    }
+}
+```
+
+**后果：**
+- 缓存的客户端可能已经断开连接或过期
+- 返回无效的客户端会导致后续操作失败
+- 没有自动重连机制
+
+### 2. **缺少连接生命周期管理** 💀
+
+**问题：**
+- 没有 `Close()` 方法来关闭所有连接
+- 程序退出时 etcd 连接不会被正确关闭
+- 可能导致 etcd 服务端资源泄漏
+
+### 3. **缺少连接引用计数** 📊
+
+**问题：**
+```go
+m.clients[configHash] = client  // 多个地方可能使用同一个客户端
+```
+
+**后果：**
+- 不知道有多少地方在使用某个客户端
+- 无法安全地关闭不再使用的连接
+- 可能过早关闭仍在使用的连接
+
+### 4. **配置哈希计算不够精确** 🔍
+
+**问题：**
+```go
+func (m *EtcdManager) hashConfig(config EtcdConfig) string {
+    for _, endpoint := range config.Endpoints {
+        h.Write([]byte(endpoint))  // 顺序不同会导致不同的哈希
+    }
+}
+```
+
+**后果：**
+- `["127.0.0.1:2379", "127.0.0.2:2379"]` 和 `["127.0.0.2:2379", "127.0.0.1:2379"]` 会产生不同哈希
+- 实际上这两个配置应该被视为相同（etcd 集群）
+- 导致不必要的连接创建
+
+### 5. **缺少错误处理和日志记录** 📝
+
+**问题：**
+- 创建客户端失败时没有日志记录
+- 无法追踪连接的创建和销毁
+- 调试困难
+
+### 6. **缺少连接池配置选项** ⚙️
+
+**问题：**
+- 没有最大连接数限制
+- 没有连接超时配置
+- 没有空闲连接清理机制
+
+### 7. **并发场景下的潜在问题** 🔒
+
+**问题：**
+```go
+m.mu.RLock()
+if client, exists := m.clients[configHash]; exists {
+    m.mu.RUnlock()
+    return client, nil  // 返回后，其他 goroutine 可能立即关闭这个客户端
+}
+```
+
+**后果：**
+- 如果添加了 `RemoveClient` 方法，可能出现竞态条件
+- 返回的客户端可能在使用前就被关闭
+
+### 8. **缺少连接测试功能** 🧪
+
+**问题：**
+- 创建客户端后没有验证连接是否真的可用
+- 可能返回一个配置正确但网络不通的客户端
+
+## 改进建议
+
+### 完整的修复版本：
+
+```go
 package connector
 
 import (
@@ -14,7 +108,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-// EtcdConfig etcd连接配置（增强版）
+// EtcdConfig etcd连接配置
 type EtcdConfig struct {
 	Endpoints        []string      // 连接地址
 	Username         string        // 认证用户（可选）
@@ -24,7 +118,7 @@ type EtcdConfig struct {
 	KeepAliveTimeout time.Duration // 心跳超时（可选，默认3s）
 }
 
-// clientEntry 客户端条目（包含引用计数和生命周期信息）
+// clientEntry 客户端条目
 type clientEntry struct {
 	client    *clientv3.Client
 	config    EtcdConfig
@@ -33,12 +127,12 @@ type clientEntry struct {
 	lastCheck time.Time // 最后健康检查时间
 }
 
-// EtcdManager etcd连接管理器（增强版，支持健康检查和引用计数）
+// EtcdManager etcd连接管理器
 type EtcdManager struct {
 	clients       map[string]*clientEntry // 配置哈希 -> 客户端条目
 	mu            sync.RWMutex
-	healthChecker *time.Ticker  // 健康检查定时器
-	stopChan      chan struct{} // 停止信号
+	healthChecker *time.Ticker // 健康检查定时器
+	stopChan      chan struct{}
 	maxClients    int           // 最大连接数
 	checkInterval time.Duration // 健康检查间隔
 }
@@ -54,7 +148,7 @@ type ManagerOptions struct {
 	CheckInterval time.Duration // 健康检查间隔，0表示不检查
 }
 
-// GetEtcdManager 获取全局etcd连接管理器（单例，带默认配置）
+// GetEtcdManager 获取全局etcd连接管理器（单例）
 func GetEtcdManager() *EtcdManager {
 	return GetEtcdManagerWithOptions(ManagerOptions{
 		MaxClients:    10,
@@ -80,7 +174,7 @@ func GetEtcdManagerWithOptions(opts ManagerOptions) *EtcdManager {
 	return globalEtcdManager
 }
 
-// GetEtcdClient 根据配置获取etcd客户端（增强版，支持健康检查和引用计数）
+// GetEtcdClient 根据配置获取etcd客户端（自动复用）
 func (m *EtcdManager) GetEtcdClient(config EtcdConfig) (*clientv3.Client, error) {
 	// 应用默认值
 	m.applyDefaults(&config)
@@ -269,7 +363,7 @@ func (m *EtcdManager) hashConfig(config EtcdConfig) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// createEtcdClient 创建etcd客户端（增强版，支持心跳配置）
+// createEtcdClient 创建etcd客户端
 func (m *EtcdManager) createEtcdClient(config EtcdConfig) (*clientv3.Client, error) {
 	clientConfig := clientv3.Config{
 		Endpoints:            config.Endpoints,
@@ -288,7 +382,7 @@ func (m *EtcdManager) createEtcdClient(config EtcdConfig) (*clientv3.Client, err
 	return client, nil
 }
 
-// Close 关闭所有连接（生命周期管理）
+// Close 关闭所有连接
 func (m *EtcdManager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -336,3 +430,15 @@ func (m *EtcdManager) GetStats() map[string]interface{} {
 
 	return stats
 }
+```
+
+## 关键改进点总结
+
+1. ✅ **添加健康检查机制**：定期检查连接状态，自动重建不健康的连接
+2. ✅ **引用计数管理**：跟踪每个客户端的使用情况，支持安全释放
+3. ✅ **生命周期管理**：提供 `Close()` 方法正确关闭所有连接
+4. ✅ **配置哈希优化**：对 endpoints 排序，避免顺序导致的重复连接
+5. ✅ **连接验证**：创建后立即测试连接可用性
+6. ✅ **日志记录**：完整的操作日志，便于调试
+7. ✅ **连接数限制**：防止连接数过多
+8. ✅ **统计信息**：提供 `GetStats()` 方法查看管理器状态
