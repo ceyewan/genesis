@@ -1,0 +1,136 @@
+# ====================================================================================
+# ETCD 单机版配置文件
+# ====================================================================================
+# 描述: 用于开发和测试环境的单节点ETCD服务
+# 网络: 使用 genesis-net 网络，与基础设施服务通信
+# 存储: 使用Docker卷进行数据持久化
+# 访问: 仅暴露客户端端口2379到宿主机，限制为127.0.0.1访问
+# 用途: 为应用程序提供轻量级的键值存储服务
+# ====================================================================================
+
+services:
+  # ===== ETCD 单节点服务 =====
+  etcd-single:
+    # 使用官方ETCD镜像，版本3.5.12，经过充分测试的稳定版本
+    image: quay.io/coreos/etcd:v3.5.12
+    
+    # 容器名称，便于识别和管理
+    container_name: genesis-etcd-single
+    
+    # 主机名，用于集群内部通信和服务发现
+    hostname: etcd-single
+    
+    # 重启策略：除非手动停止，否则总是自动重启
+    restart: unless-stopped
+    
+    # 环境变量配置
+    environment:
+      # 使用ETCD API版本3，推荐的新版本API
+      ETCDCTL_API: 3
+      
+      # 节点名称，在集群中唯一标识
+      ETCD_NAME: etcd-single
+      
+      # 数据存储配额，1GB大小限制，防止磁盘空间耗尽
+      ETCD_QUOTA_BACKEND_BYTES: 1073741824
+      
+      # 自动压缩保留期，1小时，定期清理旧数据
+      ETCD_AUTO_COMPACTION_RETENTION: "1"
+      
+      # 快照计数，每5000次写操作触发一次快照
+      ETCD_SNAPSHOT_COUNT: 5000
+      
+      # 监听客户端请求地址，允许所有IP访问（在容器网络内）
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      
+      # 广告客户端地址，告知其他服务如何访问本节点
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd-single:2379
+      
+      # 禁用peer通信，单机模式不需要集群通信
+      ETCD_LISTEN_PEER_URLS: ""
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: ""
+      ETCD_INITIAL_CLUSTER: ""
+    
+    # 数据卷配置
+    volumes:
+      # 数据持久化存储，使用Docker卷便于备份和迁移
+      - etcd-single-data:/etcd-data
+    
+    # 端口映射：仅暴露客户端端口，限制为本地访问
+    ports:
+      - "127.0.0.1:2379:2379"
+    
+    # 网络配置：加入基础设施网络
+    networks:
+      - genesis-net
+    
+    # 资源限制：防止资源耗尽影响宿主机
+    deploy:
+      resources:
+        limits:
+          memory: 192M  # 最大内存限制
+        reservations:
+          memory: 96M   # 最小内存预留
+    
+    # 健康检查：定期检查服务状态
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s     # 每10秒检查一次
+      timeout: 3s       # 超时时间3秒
+      retries: 3        # 失败重试3次
+      start_period: 10s # 启动等待时间
+    
+    # 日志配置：限制日志大小，防止磁盘空间耗尽
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"  # 单个日志文件最大5MB
+        max-file: "2"   # 保留2个日志文件
+
+# ====================================================================================
+# 网络和存储配置
+# ====================================================================================
+
+# 网络定义：使用外部已创建的genesis-net网络
+networks:
+  genesis-net:
+    external: true
+    # 说明：genesis-net是基础设施网络，所有基础服务都在此网络中
+    # 创建命令：docker network create genesis-net
+
+# 存储卷定义：数据持久化存储
+volumes:
+  etcd-single-data:
+    # 说明：ETCD数据卷，存储所有键值数据
+    # 优点：与宿主机解耦，便于备份和容器迁移
+    # 管理：docker volume ls / docker volume inspect etcd-single-data
+
+# ====================================================================================
+# 使用说明
+# ====================================================================================
+# 启动服务:
+#   docker compose -f etcd-single.yml up -d
+#
+# 查看状态:
+#   docker compose -f etcd-single.yml ps
+#
+# 查看日志:
+#   docker compose -f etcd-single.yml logs -f
+#
+# 执行命令:
+#   docker exec -it genesis-etcd-single etcdctl member list
+#   docker exec -it genesis-etcd-single etcdctl endpoint health
+#   docker exec -it genesis-etcd-single etcdctl put mykey "my value"
+#   docker exec -it genesis-etcd-single etcdctl get mykey
+#
+# 停止服务:
+#   docker compose -f etcd-single.yml down
+#
+# 数据备份:
+#   docker exec -it genesis-etcd-single etcdctl snapshot save /etcd-data/backup.db
+#   docker cp genesis-etcd-single:/etcd-data/backup.db ./backup.db
+#
+# 数据恢复:
+#   docker cp ./backup.db genesis-etcd-single:/etcd-data/backup.db
+#   docker exec -it genesis-etcd-single etcdctl snapshot restore /etcd-data/backup.db
+# ====================================================================================

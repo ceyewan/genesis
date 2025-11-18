@@ -20,7 +20,6 @@
 genesis/
 ├── pkg/
 │   └── clog/                    # 公开API入口
-|.      
 │       └── types/              # 类型定义（接口、结构体、字段）
 ├── internal/
 │   └── clog/                   # 内部实现
