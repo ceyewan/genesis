@@ -68,10 +68,11 @@ func New(config *Config, option *Option) (Logger, error) {
 // Default 创建一个默认配置的Logger
 func Default() Logger {
 	logger, _ := New(&Config{
-		Level:     "info",
-		Format:    "json",
-		Output:    "stdout",
-		AddSource: true, // 默认启用caller信息
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,  // 默认启用caller信息
+		EnableColor: false, // 默认不启用颜色
 	}, &Option{})
 	return logger
 }

@@ -192,12 +192,21 @@ func Any(k string, v any) Field
 |---|---|
 | `err_msg` | 错误消息 (Error()) |
 | `err_type` | 错误类型 (fmt.Sprintf("%T", err)) |
-| `err_stack` | 错误堆栈（如果可用） |
+| `err_stack` | 错误堆栈（包含文件名、行号、函数名） |
 | `err_code` | 可选的业务错误码 |
 
 ```go
 func Error(err error) Field
 func ErrorWithCode(err error, code string) Field
+```
+
+错误堆栈信息示例：
+```json
+{
+  "err_msg": "database connection failed",
+  "err_type": "*errors.errorString",
+  "err_stack": "/Users/ceyewan/CodeField/genesis/internal/clog/logger.go:52 github.com/ceyewan/genesis/internal/clog.(*loggerImpl).Error\n/Users/ceyewan/CodeField/genesis/examples/clog-basic/main.go:189 main.basicErrorExample\n..."
+}
 ```
 
 ### 5.3. 常用语义字段
@@ -330,3 +339,149 @@ func (d *DistributedLock) Lock(key string) error {
 - **性能：** 利用 `slog` 的高性能特性和延迟计算
 - **扩展性：** 通过 `internal/clog/slog/` 包封装，便于未来切换底层实现
 - **内存管理：** 复用 `LogBuilder` 对象，减少内存分配
+
+## 12. 最佳实践建议
+
+### 12.1. 环境配置建议
+
+根据不同的部署环境，建议使用不同的日志配置：
+
+#### 开发环境
+```go
+logger := clog.New(&clog.Config{
+    Level:       "debug",           // 显示所有日志级别
+    Format:      "console",         // 便于阅读的格式
+    Output:      "stdout",          // 输出到控制台
+    EnableColor: true,              // 启用颜色支持
+    AddSource:   true,              // 显示源码位置
+}, nil)
+```
+
+#### 测试环境
+```go
+logger := clog.New(&clog.Config{
+    Level:       "info",            // 显示info及以上级别
+    Format:      "json",            // 便于机器解析的格式
+    Output:      "stdout",          // 输出到控制台
+    EnableColor: false,             // 禁用颜色
+    AddSource:   true,              // 显示源码位置
+}, nil)
+```
+
+#### 生产环境
+```go
+logger := clog.New(&clog.Config{
+    Level:       "warn",            // 只显示warn及以上级别
+    Format:      "json",            // 便于机器解析的格式
+    Output:      "stdout",          // 输出到标准输出（由日志收集器处理）
+    EnableColor: false,             // 禁用颜色
+    AddSource:   true,              // 显示源码位置
+    SourceRoot:  "genesis",         // 裁剪路径，从genesis开始显示
+}, nil)
+```
+
+### 12.2. 命名空间 vs 组件使用规范
+
+明确区分 `namespace` 和 `component` 的使用场景：
+
+#### Namespace（业务逻辑层级）
+- **用途：** 表示代码的业务逻辑层级和调用链
+- **示例：** `user-service.handler.auth`
+- **场景：** 微服务架构中的服务分层
+
+```go
+// 主服务
+mainLogger := clog.New(config, &clog.Option{
+    NamespaceParts: []string{"user-service"},
+})
+
+// Handler层
+handlerLogger := mainLogger.WithNamespace("handler")
+authLogger := handlerLogger.WithNamespace("auth") // namespace="user-service.handler.auth"
+```
+
+#### Component（技术组件）
+- **用途：** 标识使用的具体技术组件
+- **示例：** `database`, `redis`, `message-queue`
+- **场景：** 技术架构中的组件标识
+
+```go
+logger.Info("querying user data",
+    clog.Component("database"),    // 技术组件
+    clog.String("table", "users"),
+    clog.String("operation", "SELECT"))
+```
+
+### 12.3. 错误处理最佳实践
+
+使用结构化的错误字段，包含完整的错误信息：
+
+```go
+// 简单错误
+err := errors.New("database connection failed")
+logger.Error("operation failed", clog.Error(err))
+// 输出: {"err_msg":"database connection failed","err_type":"*errors.errorString","err_stack":"..."}
+
+// 带错误码的业务错误
+logger.Error("business logic error",
+    clog.ErrorWithCode(err, "DB_CONN_001"),
+    clog.String("operation", "user_query"))
+// 输出: {"err_msg":"...","err_type":"...","err_code":"DB_CONN_001","err_stack":"..."}
+```
+
+### 12.4. Context 字段使用规范
+
+使用 Context 传递请求级别的元数据：
+
+```go
+// 配置Context字段提取
+logger := clog.New(config, &clog.Option{
+    ContextFields: []clog.ContextField{
+        {Key: "request_id", FieldName: "request_id", Required: false},
+        {Key: "user_id", FieldName: "user_id", Required: false},
+        {Key: "trace_id", FieldName: "trace_id", Required: false},
+    },
+    ContextPrefix: "ctx.",
+})
+
+// 在请求开始时设置Context值
+ctx := context.WithValue(context.Background(), "request_id", "req-12345")
+ctx = context.WithValue(ctx, "user_id", "user-67890")
+
+// 使用Context方法自动提取字段
+logger.InfoContext(ctx, "user login successful",
+    clog.String("method", "password"))
+// 输出: {"ctx.request_id":"req-12345","ctx.user_id":"user-67890","method":"password"}
+```
+
+### 12.5. 时间戳格式统一
+
+所有日志统一使用 ISO8601 格式（RFC3339）：
+- 格式：`2006-01-02T15:04:05.000Z`
+- 示例：`2025-11-18T18:40:38+08:00`
+- 优势：国际化、机器可读、包含时区信息
+
+### 12.6. 日志级别控制
+
+确保日志级别过滤正确工作：
+- **默认级别：** INFO（不输出DEBUG日志）
+- **级别映射：** 正确映射自定义级别到slog级别
+- **动态调整：** 支持运行时调整日志级别
+
+### 12.7. 路径显示规范
+
+根据环境需要选择合适的路径显示方式：
+
+```go
+// 开发环境：显示完整绝对路径
+{"caller":"/Users/ceyewan/CodeField/genesis/examples/clog-basic/main.go:64"}
+
+// 生产环境：显示相对路径（从genesis开始）
+{"caller":"genesis/examples/clog-basic/main.go:64"}
+```
+
+### 12.8. 性能考虑
+
+- **延迟计算：** 利用slog的延迟计算特性
+- **对象复用：** 复用LogBuilder对象，减少内存分配
+- **级别过滤：** 在底层进行级别过滤，避免不必要的字段处理

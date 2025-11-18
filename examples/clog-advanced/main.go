@@ -31,7 +31,7 @@ func (e ValidationError) Error() string {
 }
 
 func main() {
-	fmt.Println("=== Advanced clog Examples ===\n")
+	fmt.Println("=== Advanced clog Examples ===")
 
 	// 高级示例1: 完整微服务配置
 	advancedMicroserviceExample()

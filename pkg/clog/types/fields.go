@@ -2,6 +2,8 @@ package types
 
 import (
 	"fmt"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -66,7 +68,31 @@ func Any(k string, v any) Field {
 
 // 错误处理标准化 (设计文档 5.2)
 
-// Error 将错误结构化为 err_msg 和 err_type 字段。
+// getStackTrace 获取当前调用栈信息
+func getStackTrace(skip int) string {
+	var pcs [32]uintptr
+	n := runtime.Callers(skip, pcs[:])
+	if n == 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+	frames := runtime.CallersFrames(pcs[:n])
+
+	for i := 0; i < n; i++ {
+		frame, more := frames.Next()
+		if i > 0 { // 跳过第一个调用（当前函数）
+			builder.WriteString(fmt.Sprintf("%s:%d %s\n", frame.File, frame.Line, frame.Function))
+		}
+		if !more {
+			break
+		}
+	}
+
+	return builder.String()
+}
+
+// Error 将错误结构化为 err_msg、err_type 和 err_stack 字段。
 func Error(err error) Field {
 	return func(b *LogBuilder) {
 		if err == nil {
@@ -74,11 +100,15 @@ func Error(err error) Field {
 		}
 		b.Data["err_msg"] = err.Error()
 		b.Data["err_type"] = fmt.Sprintf("%T", err)
-		// TODO: 错误堆栈（如果可用）
+		// 添加错误堆栈信息 - 跳过当前函数和Error函数
+		stack := getStackTrace(3)
+		if stack != "" {
+			b.Data["err_stack"] = stack
+		}
 	}
 }
 
-// ErrorWithCode 包含可选的业务错误码。
+// ErrorWithCode 包含可选的业务错误码和堆栈信息。
 func ErrorWithCode(err error, code string) Field {
 	return func(b *LogBuilder) {
 		if err == nil {
@@ -87,7 +117,11 @@ func ErrorWithCode(err error, code string) Field {
 		b.Data["err_msg"] = err.Error()
 		b.Data["err_type"] = fmt.Sprintf("%T", err)
 		b.Data["err_code"] = code
-		// TODO: 错误堆栈（如果可用）
+		// 添加错误堆栈信息 - 跳过当前函数和ErrorWithCode函数
+		stack := getStackTrace(3)
+		if stack != "" {
+			b.Data["err_stack"] = stack
+		}
 	}
 }
 

@@ -136,9 +136,32 @@ func (l *loggerImpl) log(ctx context.Context, level types.Level, msg string, fie
 	attrs := l.convertToAttrs(builder)
 	attrs = append(l.baseAttrs, attrs...)
 
+	// 将 types.Level 映射为 slog.Level，避免直接按数字转换导致不一致
+	var slogLevel slog.Level
+	switch level {
+	case types.DebugLevel:
+		slogLevel = slog.LevelDebug
+	case types.InfoLevel:
+		slogLevel = slog.LevelInfo
+	case types.WarnLevel:
+		slogLevel = slog.LevelWarn
+	case types.ErrorLevel:
+		slogLevel = slog.LevelError
+	case types.FatalLevel:
+		// Fatal 在 slog 中没有显式常量，使用 Error 的更高值
+		slogLevel = slog.LevelError + 4
+	default:
+		slogLevel = slog.LevelInfo
+	}
+
 	// 设置正确的调用者跳过级别 - 跳过当前函数调用栈
-	record := slog.NewRecord(time.Now(), slog.Level(level), msg, 1)
+	record := slog.NewRecord(time.Now(), slogLevel, msg, 1)
 	record.AddAttrs(attrs...)
+
+	// 使用 handler.Enabled 进行级别检查，避免直接调用 Handle 绕过过滤逻辑
+	if enabled := l.handler.Enabled(ctx, slogLevel); !enabled {
+		return
+	}
 
 	l.handler.Handle(ctx, record)
 
