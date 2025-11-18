@@ -56,6 +56,9 @@ func main() {
 
 	// 高级示例8: 复杂命名空间场景
 	advancedNamespaceExample()
+
+	// 高级示例9: SourceRoot 路径裁剪功能
+	advancedSourceRootExample()
 }
 
 func advancedMicroserviceExample() {
@@ -565,6 +568,80 @@ func advancedNamespaceExample() {
 		clog.Component("metrics"),
 		clog.Duration("total_processing_time", 250*time.Millisecond),
 		clog.Int("downstream_calls", 3))
+
+	fmt.Println()
+}
+
+func advancedSourceRootExample() {
+	fmt.Println("--- Advanced Example 9: SourceRoot Path Trimming ---")
+
+	// 示例1: 默认行为（绝对路径）
+	fmt.Println("--- Default Behavior (Absolute Path) ---")
+	defaultLogger := clog.Must(&clog.Config{
+		Level:     "info",
+		Format:    "json",
+		Output:    "stdout",
+		AddSource: true,
+	}, &clog.Option{
+		NamespaceParts: []string{"source-root-test"},
+	})
+
+	defaultLogger.Info("default behavior shows absolute path")
+	defaultLogger.Info("useful for development and debugging",
+		clog.String("environment", "development"))
+
+	fmt.Println()
+
+	// 示例2: 使用 genesis 进行路径裁剪
+	fmt.Println("--- SourceRoot = \"genesis\" (Path Trimming) ---")
+	genesisLogger := clog.Must(&clog.Config{
+		Level:      "info",
+		Format:     "console",
+		Output:     "stdout",
+		AddSource:  true,
+		SourceRoot: "genesis", // 从 genesis 开始裁剪路径
+	}, &clog.Option{
+		NamespaceParts: []string{"source-root-test"},
+	})
+
+	genesisLogger.Info("genesis SourceRoot trims the path")
+	genesisLogger.Info("clean and concise path display",
+		clog.String("feature", "path-trimming"),
+		clog.String("benefit", "cleaner-logs"))
+
+	fmt.Println()
+
+	// 示例3: 在微服务环境中使用 SourceRoot
+	fmt.Println("--- Microservice Environment with SourceRoot ---")
+	microserviceLogger := clog.Must(&clog.Config{
+		Level:      "info",
+		Format:     "json",
+		Output:     "stdout",
+		AddSource:  true,
+		SourceRoot: "genesis", // 适用于容器化环境
+	}, &clog.Option{
+		NamespaceParts: []string{"user-service", "api"},
+		ContextFields: []clog.ContextField{
+			{Key: "request_id", FieldName: "request_id", Required: false},
+			{Key: "user_id", FieldName: "user_id", Required: false},
+		},
+		ContextPrefix: "ctx.",
+	})
+
+	// 模拟微服务请求处理
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, "request_id", "req-abc123")
+	ctx = context.WithValue(ctx, "user_id", "user-456")
+
+	microserviceLogger.InfoContext(ctx, "processing API request with trimmed paths",
+		clog.Component("api-gateway"),
+		clog.String("endpoint", "/api/v1/users/profile"),
+		clog.String("method", "GET"))
+
+	microserviceLogger.InfoContext(ctx, "database query executed",
+		clog.Component("database"),
+		clog.String("table", "users"),
+		clog.Duration("query_time", 15*time.Millisecond))
 
 	fmt.Println()
 }

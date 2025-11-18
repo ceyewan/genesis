@@ -130,13 +130,14 @@ func (l *loggerImpl) log(ctx context.Context, level types.Level, msg string, fie
 
 	// 提取Context字段、处理命名空间等
 	extractContextFields(ctx, l.option, builder)
-	addNamespaceFields(l.option, builder)
+	addNamespaceFields(l.option, builder) // 只在log方法中添加一次
 
 	// 转换为slog并记录
 	attrs := l.convertToAttrs(builder)
 	attrs = append(l.baseAttrs, attrs...)
 
-	record := slog.NewRecord(time.Now(), slog.Level(level), msg, 0)
+	// 设置正确的调用者跳过级别 - 跳过当前函数调用栈
+	record := slog.NewRecord(time.Now(), slog.Level(level), msg, 1)
 	record.AddAttrs(attrs...)
 
 	l.handler.Handle(ctx, record)
@@ -167,7 +168,8 @@ func (l *loggerImpl) setupBaseAttrs() {
 	builder := &types.LogBuilder{
 		Data: make(map[string]any),
 	}
-	addNamespaceFields(l.option, builder)
+	// 不再在这里添加命名空间，避免重复
+	// addNamespaceFields(l.option, builder)
 
 	l.baseAttrs = l.convertToAttrs(builder)
 }
