@@ -9,10 +9,10 @@ const TimeFormat = "2006-01-02T15:04:05.000Z07:00"
 
 // Config 是全局配置 (设计文档 4.1)
 type Config struct {
-	Level       string `json:"level" yaml:"level"`   // debug|info|warn|error|fatal
-	Format      string `json:"format" yaml:"format"` // json|console
-	Output      string `json:"output" yaml:"output"` // stdout|stderr|<file path>
-	EnableColor bool   `json:"enableColor" yaml:"enableColor"`
+	Level       string `json:"level" yaml:"level"`             // debug|info|warn|error|fatal
+	Format      string `json:"format" yaml:"format"`           // json|console
+	Output      string `json:"output" yaml:"output"`           // stdout|stderr|<file path>
+	EnableColor bool   `json:"enableColor" yaml:"enableColor"` // 仅在 console 格式下有效，未实现
 	AddSource   bool   `json:"addSource" yaml:"addSource"`
 	SourceRoot  string `json:"sourceRoot" yaml:"sourceRoot"` // 用于裁剪文件路径
 }

@@ -1,0 +1,161 @@
+# ====================================================================================
+# Redis 7.2 配置文件
+# ====================================================================================
+# 描述: 用于开发和测试环境的Redis内存数据库服务
+# 网络: 使用 genesis-net 网络，与基础设施服务通信
+# 存储: 使用Docker卷进行数据持久化，支持AOF持久化
+# 访问: 仅暴露客户端端口6379到宿主机，限制为127.0.0.1访问
+# 特点: 内存优化配置，密码认证，LRU淘汰策略，AOF持久化
+# 用途: 为应用程序提供高性能的内存数据存储和缓存服务
+# ====================================================================================
+
+services:
+  # ===== Redis 内存数据库服务 =====
+  redis:
+    # 使用官方Redis 7.2-alpine镜像，轻量级且稳定
+    image: redis:7.2-alpine
+    
+    # 容器名称，便于识别和管理
+    container_name: genesis-redis
+    
+    # 主机名，用于网络内部通信和服务发现
+    hostname: redis
+    
+    # 重启策略：除非手动停止，否则总是自动重启
+    restart: unless-stopped
+    
+    # 启动命令：Redis服务器启动参数优化
+    command:
+      # Redis服务器可执行文件
+      - redis-server
+      
+      # 密码认证：要求客户端提供密码，从环境变量读取
+      # 确保Redis访问安全性，防止未授权访问
+      - --requirepass
+      - ${REDIS_PASSWORD}  # 从 .env 文件读取，确保安全性
+      
+      # 最大内存限制：设置为320MB，防止内存耗尽
+      # 超过此限制时根据淘汰策略清理数据
+      - --maxmemory
+      - 320mb
+      
+      # 内存淘汰策略：使用allkeys-lru，内存不足时淘汰最近最少使用的键
+      # 适用于缓存场景，确保新数据可以写入
+      - --maxmemory-policy
+      - allkeys-lru
+      
+      # AOF持久化：启用追加文件持久化，确保数据安全
+      # 每个写操作都会追加到文件，服务重启时可以恢复数据
+      - --appendonly
+      - yes
+    
+    # 数据卷配置：数据持久化存储
+    volumes:
+      # 使用Docker卷便于备份和迁移，与宿主机解耦
+      # 存储Redis数据文件、AOF文件等
+      - redis-data:/data
+    
+    # 网络配置：加入基础设施网络
+    networks:
+      - genesis-net
+    
+    # 资源限制：防止资源耗尽影响宿主机
+    deploy:
+      resources:
+        limits:
+          memory: 384M  # 最大内存限制，比maxmemory稍大，留有余量
+        reservations:
+          memory: 192M  # 最小内存预留，确保基本运行
+    
+    # 健康检查：定期检查服务状态
+    healthcheck:
+      # 使用redis-cli连接并执行ping命令，验证服务可用性
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s     # 每10秒检查一次
+      timeout: 3s       # 超时时间3秒
+      retries: 3        # 失败重试3次
+      start_period: 10s # 启动等待时间，给服务充分启动时间
+    
+    # 日志配置：限制日志大小，防止磁盘空间耗尽
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"  # 单个日志文件最大5MB
+        max-file: "2"   # 保留2个日志文件，循环使用
+    
+    # 端口映射：仅暴露客户端端口，限制为本地访问
+    ports:
+      - "127.0.0.1:6379:6379"  # 仅本地访问，提高安全性
+
+# ====================================================================================
+# 网络和存储配置
+# ====================================================================================
+
+# 网络定义：使用外部已创建的genesis-net网络
+networks:
+  genesis-net:
+    external: true
+    # 说明：genesis-net是基础设施网络，所有基础服务都在此网络中
+    # 用途：为Redis与其他服务（如new-api）通信提供网络
+    # 创建命令：docker network create genesis-net
+
+# 存储卷定义：数据持久化存储
+volumes:
+  redis-data:
+    # 说明：Redis数据卷，存储所有数据文件和AOF持久化文件
+    # 优点：与宿主机解耦，便于备份和容器迁移
+    # 管理：docker volume ls / docker volume inspect redis-data
+    # 注意：包含所有缓存数据和持久化数据，重要数据请定期备份
+
+# ====================================================================================
+# 使用说明和运维指南
+# ====================================================================================
+# 启动服务:
+#   docker compose -f redis.yml up -d
+#
+# 查看状态:
+#   docker compose -f redis.yml ps
+#
+# 查看日志:
+#   docker compose -f redis.yml logs -f
+#
+# 连接Redis:
+#   docker exec -it genesis-redis redis-cli -a ${REDIS_PASSWORD}
+#   # 输入REDIS_PASSWORD环境变量中的密码
+#
+# 测试连接:
+#   docker exec genesis-redis redis-cli -a ${REDIS_PASSWORD} ping
+#   # 应该返回 PONG
+#
+# 查看信息:
+#   docker exec genesis-redis redis-cli -a ${REDIS_PASSWORD} info
+#   docker exec genesis-redis redis-cli -a ${REDIS_PASSWORD} info memory
+#   docker exec genesis-redis redis-cli -a ${REDIS_PASSWORD} info stats
+#
+# 数据操作测试:
+#   docker exec -it genesis-redis redis-cli -a ${REDIS_PASSWORD}
+#   # 在Redis客户端中执行:
+#   SET testkey "Hello Redis"
+#   GET testkey
+#   DEL testkey
+#
+# 查看内存使用:
+#   docker exec genesis-redis redis-cli -a ${REDIS_PASSWORD} info memory | grep used_memory_human
+#
+# 查看客户端连接:
+#   docker exec genesis-redis redis-cli -a ${REDIS_PASSWORD} client list
+#
+# 停止服务:
+#   docker compose -f redis.yml down
+#
+# 数据备份:
+#   # Redis数据存储在卷中，可以通过卷备份
+#   docker run --rm -v redis-data:/data -v $(pwd):/backup alpine tar czf /backup/redis-data-backup.tar.gz /data
+#
+# 性能调优建议:
+#   - 根据缓存数据量调整maxmemory设置（建议为总内存的50-70%）
+#   - 监控内存使用情况，避免频繁淘汰影响性能
+#   - 根据业务场景选择合适的淘汰策略（allkeys-lru, volatile-lru等）
+#   - 定期备份AOF文件，确保数据安全
+#   - 生产环境建议启用TLS加密和更复杂的认证方式
+# ====================================================================================

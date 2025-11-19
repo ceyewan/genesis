@@ -1,338 +1,221 @@
-// internal/connector/manager.go
+// internal/connector/etcd.go
 package connector
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"log"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/ceyewan/genesis/pkg/clog"
+	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-// EtcdConfig etcd连接配置（增强版）
-type EtcdConfig struct {
-	Endpoints        []string      // 连接地址
-	Username         string        // 认证用户（可选）
-	Password         string        // 认证密码（可选）
-	Timeout          time.Duration // 连接超时（可选，默认5s）
-	KeepAliveTime    time.Duration // 心跳间隔（可选，默认10s）
-	KeepAliveTimeout time.Duration // 心跳超时（可选，默认3s）
+// etcdConnector Etcd连接器实现
+type etcdConnector struct {
+	name    string
+	config  pkgconnector.EtcdConfig
+	client  *clientv3.Client
+	healthy bool
+	mu      sync.RWMutex
+	phase   int
+	logger  clog.Logger
 }
 
-// clientEntry 客户端条目（包含引用计数和生命周期信息）
-type clientEntry struct {
-	client    *clientv3.Client
-	config    EtcdConfig
-	refCount  int       // 引用计数
-	createdAt time.Time // 创建时间
-	lastCheck time.Time // 最后健康检查时间
-}
-
-// EtcdManager etcd连接管理器（增强版，支持健康检查和引用计数）
-type EtcdManager struct {
-	clients       map[string]*clientEntry // 配置哈希 -> 客户端条目
-	mu            sync.RWMutex
-	healthChecker *time.Ticker  // 健康检查定时器
-	stopChan      chan struct{} // 停止信号
-	maxClients    int           // 最大连接数
-	checkInterval time.Duration // 健康检查间隔
-}
-
-var (
-	globalEtcdManager *EtcdManager
-	etcdManagerOnce   sync.Once
-)
-
-// ManagerOptions 管理器配置选项
-type ManagerOptions struct {
-	MaxClients    int           // 最大连接数，0表示无限制
-	CheckInterval time.Duration // 健康检查间隔，0表示不检查
-}
-
-// GetEtcdManager 获取全局etcd连接管理器（单例，带默认配置）
-func GetEtcdManager() *EtcdManager {
-	return GetEtcdManagerWithOptions(ManagerOptions{
-		MaxClients:    10,
-		CheckInterval: 30 * time.Second,
-	})
-}
-
-// GetEtcdManagerWithOptions 使用自定义选项获取管理器
-func GetEtcdManagerWithOptions(opts ManagerOptions) *EtcdManager {
-	etcdManagerOnce.Do(func() {
-		globalEtcdManager = &EtcdManager{
-			clients:       make(map[string]*clientEntry),
-			stopChan:      make(chan struct{}),
-			maxClients:    opts.MaxClients,
-			checkInterval: opts.CheckInterval,
-		}
-
-		// 启动健康检查
-		if opts.CheckInterval > 0 {
-			globalEtcdManager.startHealthCheck()
-		}
-	})
-	return globalEtcdManager
-}
-
-// GetEtcdClient 根据配置获取etcd客户端（增强版，支持健康检查和引用计数）
-func (m *EtcdManager) GetEtcdClient(config EtcdConfig) (*clientv3.Client, error) {
-	// 应用默认值
-	m.applyDefaults(&config)
-
-	// 计算配置哈希
-	configHash := m.hashConfig(config)
-
-	// 检查是否已有相同配置的客户端
-	m.mu.RLock()
-	if entry, exists := m.clients[configHash]; exists {
-		// 检查客户端健康状态
-		if m.isClientHealthy(entry.client) {
-			entry.refCount++
-			m.mu.RUnlock()
-			log.Printf("[EtcdManager] Reusing existing client, hash=%s, refCount=%d", configHash[:8], entry.refCount)
-			return entry.client, nil
-		}
-		// 客户端不健康，需要重建
-		log.Printf("[EtcdManager] Client unhealthy, will recreate, hash=%s", configHash[:8])
+// NewEtcdConnector 创建新的Etcd连接器
+func NewEtcdConnector(name string, config pkgconnector.EtcdConfig, logger clog.Logger) pkgconnector.EtcdConnector {
+	return &etcdConnector{
+		name:    name,
+		config:  config,
+		healthy: false,
+		phase:   10, // 连接器阶段
+		logger:  logger,
 	}
-	m.mu.RUnlock()
-
-	// 创建新客户端
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 双重检查
-	if entry, exists := m.clients[configHash]; exists {
-		if m.isClientHealthy(entry.client) {
-			entry.refCount++
-			return entry.client, nil
-		}
-		// 清理不健康的客户端
-		m.closeClientUnsafe(configHash)
-	}
-
-	// 检查连接数限制
-	if m.maxClients > 0 && len(m.clients) >= m.maxClients {
-		return nil, fmt.Errorf("max clients limit reached: %d", m.maxClients)
-	}
-
-	// 创建新客户端
-	client, err := m.createEtcdClient(config)
-	if err != nil {
-		return nil, err
-	}
-
-	// 测试连接
-	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
-	defer cancel()
-	if _, err := client.Status(ctx, config.Endpoints[0]); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("failed to verify connection: %w", err)
-	}
-
-	// 缓存客户端
-	m.clients[configHash] = &clientEntry{
-		client:    client,
-		config:    config,
-		refCount:  1,
-		createdAt: time.Now(),
-		lastCheck: time.Now(),
-	}
-
-	log.Printf("[EtcdManager] Created new client, hash=%s, endpoints=%v", configHash[:8], config.Endpoints)
-	return client, nil
 }
 
-// ReleaseClient 释放客户端引用
-func (m *EtcdManager) ReleaseClient(client *clientv3.Client) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// Connect 建立连接
+func (c *etcdConnector) Connect(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	// 查找客户端
-	for hash, entry := range m.clients {
-		if entry.client == client {
-			entry.refCount--
-			log.Printf("[EtcdManager] Released client, hash=%s, refCount=%d", hash[:8], entry.refCount)
-
-			// 如果引用计数为0，可以选择立即关闭或延迟关闭
-			if entry.refCount <= 0 {
-				return m.closeClientUnsafe(hash)
-			}
-			return nil
-		}
-	}
-
-	return fmt.Errorf("client not found in manager")
-}
-
-// closeClientUnsafe 关闭客户端（不加锁，内部使用）
-func (m *EtcdManager) closeClientUnsafe(hash string) error {
-	entry, exists := m.clients[hash]
-	if !exists {
+	// 如果已经连接且健康，直接返回
+	if c.client != nil && c.healthy {
 		return nil
 	}
 
-	log.Printf("[EtcdManager] Closing client, hash=%s", hash[:8])
-	err := entry.client.Close()
-	delete(m.clients, hash)
-	return err
-}
+	c.logger.InfoContext(ctx, "正在建立Etcd连接", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)))
 
-// isClientHealthy 检查客户端健康状态
-func (m *EtcdManager) isClientHealthy(client *clientv3.Client) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	// 尝试获取集群状态
-	_, err := client.Status(ctx, client.Endpoints()[0])
-	return err == nil
-}
-
-// startHealthCheck 启动健康检查
-func (m *EtcdManager) startHealthCheck() {
-	m.healthChecker = time.NewTicker(m.checkInterval)
-	go func() {
-		for {
-			select {
-			case <-m.healthChecker.C:
-				m.performHealthCheck()
-			case <-m.stopChan:
-				return
-			}
-		}
-	}()
-}
-
-// performHealthCheck 执行健康检查
-func (m *EtcdManager) performHealthCheck() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	now := time.Now()
-	for hash, entry := range m.clients {
-		// 跳过最近检查过的
-		if now.Sub(entry.lastCheck) < m.checkInterval {
-			continue
-		}
-
-		if !m.isClientHealthy(entry.client) {
-			log.Printf("[EtcdManager] Health check failed, hash=%s, will recreate on next use", hash[:8])
-			// 标记为不健康，下次使用时会重建
-			entry.lastCheck = time.Time{} // 设置为零值表示不健康
-		} else {
-			entry.lastCheck = now
-		}
+	// 验证配置
+	if err := c.Validate(); err != nil {
+		c.logger.ErrorContext(ctx, "Etcd配置验证失败", clog.String("name", c.name), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConfig, err, false)
 	}
-}
 
-// applyDefaults 应用默认配置
-func (m *EtcdManager) applyDefaults(config *EtcdConfig) {
-	if len(config.Endpoints) == 0 {
-		config.Endpoints = []string{"127.0.0.1:2379"}
-	}
-	if config.Timeout == 0 {
-		config.Timeout = 5 * time.Second
-	}
-	if config.KeepAliveTime == 0 {
-		config.KeepAliveTime = 10 * time.Second
-	}
-	if config.KeepAliveTimeout == 0 {
-		config.KeepAliveTimeout = 3 * time.Second
-	}
-}
-
-// hashConfig 计算配置哈希（用于连接复用判断）
-func (m *EtcdManager) hashConfig(config EtcdConfig) string {
-	h := sha256.New()
-
-	// 对 endpoints 排序后再哈希，确保顺序不影响结果
-	sortedEndpoints := make([]string, len(config.Endpoints))
-	copy(sortedEndpoints, config.Endpoints)
-	sort.Strings(sortedEndpoints)
-
-	for _, endpoint := range sortedEndpoints {
-		h.Write([]byte(endpoint))
-		h.Write([]byte("|")) // 分隔符
-	}
-	h.Write([]byte(config.Username))
-	h.Write([]byte("|"))
-	h.Write([]byte(config.Password))
-	h.Write([]byte("|"))
-	h.Write([]byte(config.Timeout.String()))
-
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// createEtcdClient 创建etcd客户端（增强版，支持心跳配置）
-func (m *EtcdManager) createEtcdClient(config EtcdConfig) (*clientv3.Client, error) {
+	// 创建Etcd客户端配置
 	clientConfig := clientv3.Config{
-		Endpoints:            config.Endpoints,
-		Username:             config.Username,
-		Password:             config.Password,
-		DialTimeout:          config.Timeout,
-		DialKeepAliveTime:    config.KeepAliveTime,
-		DialKeepAliveTimeout: config.KeepAliveTimeout,
+		Endpoints:            c.config.Endpoints,
+		Username:             c.config.Username,
+		Password:             c.config.Password,
+		DialTimeout:          c.config.Timeout,
+		DialKeepAliveTime:    c.config.KeepAliveTime,
+		DialKeepAliveTimeout: c.config.KeepAliveTimeout,
 	}
 
+	// 创建客户端
 	client, err := clientv3.New(clientConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create etcd client: %w", err)
+		c.logger.ErrorContext(ctx, "Etcd客户端创建失败", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConnection, err, true)
 	}
 
-	return client, nil
+	// 测试连接
+	ctx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+	defer cancel()
+
+	if _, err := client.Status(ctx, c.config.Endpoints[0]); err != nil {
+		client.Close()
+		c.logger.ErrorContext(ctx, "Etcd连接测试失败", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConnection, err, true)
+	}
+
+	c.client = client
+	c.healthy = true
+
+	c.logger.InfoContext(ctx, "Etcd连接成功", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)))
+	return nil
 }
 
-// Close 关闭所有连接（生命周期管理）
-func (m *EtcdManager) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// Close 关闭连接
+func (c *etcdConnector) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	// 停止健康检查
-	if m.healthChecker != nil {
-		m.healthChecker.Stop()
-		close(m.stopChan)
+	if c.client == nil {
+		return nil
 	}
 
-	var lastErr error
-	for hash, entry := range m.clients {
-		log.Printf("[EtcdManager] Closing client on shutdown, hash=%s, refCount=%d", hash[:8], entry.refCount)
-		if err := entry.client.Close(); err != nil {
-			lastErr = err
-			log.Printf("[EtcdManager] Error closing client: %v", err)
-		}
+	c.logger.Info("正在关闭Etcd连接", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)))
+
+	if err := c.client.Close(); err != nil {
+		c.logger.Error("关闭Etcd连接失败", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)), clog.Error(err))
+		return err
 	}
 
-	m.clients = make(map[string]*clientEntry)
-	return lastErr
+	c.client = nil
+	c.healthy = false
+
+	c.logger.Info("Etcd连接已关闭", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)))
+	return nil
 }
 
-// GetStats 获取管理器统计信息
-func (m *EtcdManager) GetStats() map[string]interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+// HealthCheck 检查连接健康状态
+func (c *etcdConnector) HealthCheck(ctx context.Context) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
-	stats := map[string]interface{}{
-		"total_clients": len(m.clients),
-		"max_clients":   m.maxClients,
-		"clients":       []map[string]interface{}{},
+	if c.client == nil {
+		c.logger.WarnContext(ctx, "Etcd健康检查失败：连接已关闭", clog.String("name", c.name))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrClosed, fmt.Errorf("连接已关闭"), false)
 	}
 
-	for hash, entry := range m.clients {
-		clientInfo := map[string]interface{}{
-			"hash":       hash[:8],
-			"endpoints":  entry.config.Endpoints,
-			"ref_count":  entry.refCount,
-			"created_at": entry.createdAt,
-			"last_check": entry.lastCheck,
-		}
-		stats["clients"] = append(stats["clients"].([]map[string]interface{}), clientInfo)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if _, err := c.client.Status(ctx, c.config.Endpoints[0]); err != nil {
+		c.healthy = false
+		c.logger.ErrorContext(ctx, "Etcd健康检查失败：Status失败", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrHealthCheck, err, true)
 	}
 
-	return stats
+	c.healthy = true
+	return nil
+}
+
+// IsHealthy 返回健康状态
+func (c *etcdConnector) IsHealthy() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.healthy
+}
+
+// Name 返回连接器名称
+func (c *etcdConnector) Name() string {
+	return c.name
+}
+
+// GetClient 获取类型安全的客户端
+func (c *etcdConnector) GetClient() *clientv3.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.client
+}
+
+// Validate 验证配置
+func (c *etcdConnector) Validate() error {
+	return c.config.Validate()
+}
+
+// Reload 重载配置（可选实现）
+func (c *etcdConnector) Reload(ctx context.Context, newConfig pkgconnector.Configurable) error {
+	// 验证新配置
+	if err := newConfig.Validate(); err != nil {
+		return err
+	}
+
+	// 类型断言
+	newEtcdConfig, ok := newConfig.(pkgconnector.EtcdConfig)
+	if !ok {
+		return fmt.Errorf("配置类型不匹配，期望 EtcdConfig")
+	}
+
+	c.logger.InfoContext(ctx, "正在重载Etcd配置", clog.String("name", c.name))
+
+	// 关闭现有连接
+	if err := c.Close(); err != nil {
+		c.logger.ErrorContext(ctx, "重载Etcd配置时关闭连接失败", clog.String("name", c.name), clog.Error(err))
+		return err
+	}
+
+	// 更新配置
+	c.mu.Lock()
+	c.config = newEtcdConfig
+	c.mu.Unlock()
+
+	c.logger.InfoContext(ctx, "Etcd配置已重载，正在重新连接", clog.String("name", c.name))
+
+	// 重新连接
+	return c.Connect(ctx)
+}
+
+// GetEndpoints 获取端点列表（排序后）
+func (c *etcdConnector) GetEndpoints() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	endpoints := make([]string, len(c.config.Endpoints))
+	copy(endpoints, c.config.Endpoints)
+	sort.Strings(endpoints)
+	return endpoints
+}
+
+// GetLogger 获取日志器
+func (c *etcdConnector) GetLogger() clog.Logger {
+	return c.logger
+}
+
+// Start 实现 Lifecycle 接口 - 启动连接器
+func (c *etcdConnector) Start(ctx context.Context) error {
+	return c.Connect(ctx)
+}
+
+// Stop 实现 Lifecycle 接口 - 停止连接器
+func (c *etcdConnector) Stop(ctx context.Context) error {
+	return c.Close()
+}
+
+// Phase 返回启动阶段
+func (c *etcdConnector) Phase() int {
+	return c.phase
 }
