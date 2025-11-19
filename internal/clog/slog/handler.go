@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/ceyewan/genesis/pkg/clog/types"
 )
@@ -37,24 +38,22 @@ func NewHandler(config *types.Config, option *types.Option) (slog.Handler, error
 	}
 
 	levelVar := new(slog.LevelVar)
-	level, err := types.ParseLevel(config.Level)
-	if err != nil {
-		return nil, fmt.Errorf("parse level failed: %w", err)
-	}
-
-	// 正确设置slog级别 - slog的级别常量与我们的定义不同
+	
+	// 解析配置的级别字符串，直接映射到slog级别
 	var slogLevel slog.Level
-	switch level {
-	case types.DebugLevel:
+	switch strings.ToLower(config.Level) {
+	case "debug":
 		slogLevel = slog.LevelDebug
-	case types.InfoLevel:
+	case "info":
 		slogLevel = slog.LevelInfo
-	case types.WarnLevel:
+	case "warn":
 		slogLevel = slog.LevelWarn
-	case types.ErrorLevel:
+	case "error":
 		slogLevel = slog.LevelError
-	case types.FatalLevel:
-		slogLevel = slog.LevelError + 1 // Fatal比Error更高
+	case "fatal":
+		slogLevel = slog.LevelError + 4 // Fatal比Error更高
+	default:
+		slogLevel = slog.LevelInfo // 默认info级别
 	}
 
 	levelVar.Set(slogLevel)
@@ -63,29 +62,29 @@ func NewHandler(config *types.Config, option *types.Option) (slog.Handler, error
 		AddSource: config.AddSource,
 		Level:     levelVar,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			// 修复级别显示 - 将数字级别映射为正确的级别名称
+			// 修复级别显示 - 正确映射slog级别到字符串
 			if a.Key == slog.LevelKey {
 				level := a.Value.Any().(slog.Level)
 				var levelStr string
 				switch {
-				case level == -4: // DebugLevel
+				case level <= slog.LevelDebug:
 					levelStr = "DEBUG"
-				case level == -3: // InfoLevel
+				case level <= slog.LevelInfo:
 					levelStr = "INFO"
-				case level == -2: // WarnLevel
+				case level <= slog.LevelWarn:
 					levelStr = "WARN"
-				case level == -1: // ErrorLevel
+				case level <= slog.LevelError:
 					levelStr = "ERROR"
 				default:
-					levelStr = fmt.Sprintf("LEVEL_%d", level)
+					levelStr = "FATAL"
 				}
 				a.Value = slog.StringValue(levelStr)
 			}
 
-			// 确保时间戳格式化 - 简化时间格式，去掉时区信息
+			// 统一时间戳格式为 ISO8601
 			if a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
-				// 使用简洁的时间格式：YYYY-MM-DD HH:MM:SS
-				a.Value = slog.StringValue(a.Value.Time().Format("2006-01-02 15:04:05"))
+				// 使用 ISO8601 格式：2006-01-02T15:04:05.000Z
+				a.Value = slog.StringValue(a.Value.Time().Format(time.RFC3339))
 			}
 
 			// 路径裁剪和调用信息处理 - 显示为caller字段
@@ -160,7 +159,7 @@ func NewHandler(config *types.Config, option *types.Option) (slog.Handler, error
 
 // SetLevel 动态调整日志级别
 func (h *clogHandler) SetLevel(level types.Level) error {
-	// 正确设置slog级别 - slog的级别常量与我们的定义不同
+	// 根据types.Level映射到slog.Level
 	var slogLevel slog.Level
 	switch level {
 	case types.DebugLevel:
@@ -172,7 +171,7 @@ func (h *clogHandler) SetLevel(level types.Level) error {
 	case types.ErrorLevel:
 		slogLevel = slog.LevelError
 	case types.FatalLevel:
-		slogLevel = slog.LevelError + 1 // Fatal比Error更高
+		slogLevel = slog.LevelError + 4
 	}
 
 	h.levelVar.Set(slogLevel)

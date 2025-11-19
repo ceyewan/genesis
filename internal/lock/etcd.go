@@ -33,7 +33,7 @@ func NewEtcdLocker(config *connector.EtcdConfig, opts *lock.LockOptions) (*EtcdL
 	if opts == nil {
 		opts = lock.DefaultLockOptions()
 	}
-	
+
 	// 使用外部配置或默认值
 	if config == nil {
 		config = &connector.EtcdConfig{

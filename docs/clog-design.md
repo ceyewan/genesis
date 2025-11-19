@@ -5,41 +5,37 @@
 `clog` 旨在提供一个基于 `slog` 的、简洁、易用且高度抽象的日志库，用于替代现有直接暴露底层实现的日志方案。
 
 **设计原则：**
+
 1. **抽象接口：** 永不暴露底层日志库的类型。
 2. **简洁 API：** 统一使用 `Config + Option` 进行配置。
 3. **标准化：** 统一错误字段、Context 字段和命名空间结构。
-4. **去冗余：** 默认不内置文件轮转逻辑，鼓励使用外部收集器（如 K8s/Loki/Fluentd）。
+4. **去冗余：** 默认不内置文件轮转逻辑，鼓励使用外部收集器。
 5. **层级命名空间：** 支持递归扩展命名空间，便于微服务架构中的组件标识。
 
 ## 2. 项目结构
 
-遵循 Go 标准项目布局：
+遵循 Go 标准项目布局，核心实现与 API 分离：
 
-```
+```text
 genesis/
 ├── pkg/
 │   └── clog/                    # 公开API入口
-│       ├── clog.go             # 工厂函数和便利函数
-│       └── types/              # 类型定义（接口、结构体）
-│           ├── logger.go       # Logger接口定义
-│           ├── config.go       # Config和Option结构体
-│           ├── fields.go       # Field类型和构造函数
-│           └── level.go        # 日志级别
+│       └── types/              # 类型定义（接口、结构体、字段）
 ├── internal/
 │   └── clog/                   # 内部实现
 │       ├── logger.go           # Logger接口实现
-│       ├── builder.go          # LogBuilder实现
 │       ├── context.go          # Context字段提取
 │       ├── namespace.go        # 命名空间处理
 │       └── slog/               # slog适配器
-│           ├── handler.go      
-│           └── formatter.go    
+│           └── handler.go      
 ├── examples/
 └── ...
 ```
 
 依赖关系图：
-```用户代码
+
+```text
+用户代码
     ↓ import
 pkg/clog (工厂函数 + 重新导出)
     ↓ import
@@ -52,34 +48,22 @@ internal/clog/slog (slog适配器)
 
 ## 3. 核心 API 设计
 
-核心 API 位于 `pkg/clog/` 包中。
+核心 API 位于 `pkg/clog/types/` 包中，通过 `Field` 抽象和 `Logger` 接口实现。
 
-### 3.1. 字段抽象
+### 3.1. 字段抽象 (Field)
 
 使用 `Field` 抽象函数来构建日志字段，避免直接暴露底层类型。
 
 ```go
-// pkg/clog/api.go
-package clog
-
-import "context"
-
 // Field 是用于构建日志字段的抽象类型。
 type Field func(*LogBuilder)
-
-// LogBuilder 用于在日志记录前收集和处理所有字段。
-type LogBuilder struct {
-    // 内部数据结构，用于收集键值对
-    data map[string]any 
-}
 ```
 
 ### 3.2. Logger 接口
 
-`Logger` 接口定义了所有日志操作，包括带 Context 和不带 Context 的方法，以及链式操作。
+`Logger` 接口定义了所有日志操作，支持基础日志、带 Context 的日志和链式操作。
 
 ```go
-// pkg/clog/api.go
 type Logger interface {
     // 基础日志级别方法
     Debug(msg string, fields ...Field)
@@ -109,29 +93,15 @@ type Logger interface {
 }
 ```
 
-### 3.3. 日志级别
-
-```go
-// pkg/clog/level.go
-type Level int
-
-const (
-    DebugLevel Level = iota - 4
-    InfoLevel
-    WarnLevel
-    ErrorLevel
-    FatalLevel
-)
-```
-
 ## 4. 配置与选项设计
 
 配置分为全局配置 `Config` 和实例选项 `Option`。
 
 ### 4.1. Config (全局配置)
 
+用于控制日志的级别、格式、输出目标、是否启用颜色和源码信息。
+
 ```go
-// pkg/clog/config.go
 type Config struct {
     Level       string `json:"level" yaml:"level"`         // debug|info|warn|error|fatal
     Format      string `json:"format" yaml:"format"`       // json|console
@@ -140,16 +110,13 @@ type Config struct {
     AddSource   bool   `json:"addSource" yaml:"addSource"`
     SourceRoot  string `json:"sourceRoot" yaml:"sourceRoot"` // 用于裁剪文件路径
 }
-
-func (c *Config) Validate() error { /* ... */ }
 ```
 
 ### 4.2. Option (实例选项)
 
-`Option` 主要用于配置命名空间和 Context 字段提取规则。
+主要用于配置命名空间和 Context 字段提取规则。
 
 ```go
-// pkg/clog/config.go
 type ContextField struct {
     Key         any         // Context 中存储的键
     FieldName   string      // 输出的最终字段名，如 "ctx.trace_id"
@@ -167,7 +134,7 @@ type Option struct {
 
 ## 5. 字段构造函数标准化
 
-所有字段构造函数位于 `pkg/clog/fields.go`。
+所有字段构造函数位于 `pkg/clog/types/fields.go`。
 
 ### 5.1. 基础类型
 
@@ -176,12 +143,7 @@ type Option struct {
 ```go
 func String(k, v string) Field
 func Int(k string, v int) Field
-func Int64(k string, v int64) Field
-func Float64(k string, v float64) Field
-func Bool(k string, v bool) Field
-func Duration(k string, v time.Duration) Field
-func Time(k string, v time.Time) Field
-func Any(k string, v any) Field
+// ... 更多基础类型，如 Int64, Float64, Bool, Duration, Time, Any
 ```
 
 ### 5.2. 错误处理标准化
@@ -191,8 +153,8 @@ func Any(k string, v any) Field
 | 字段名 | 描述 |
 |---|---|
 | `err_msg` | 错误消息 (Error()) |
-| `err_type` | 错误类型 (fmt.Sprintf("%T", err)) |
-| `err_stack` | 错误堆栈（如果可用） |
+| `err_type` | 错误类型 |
+| `err_stack` | 错误堆栈（包含文件名、行号、函数名） |
 | `err_code` | 可选的业务错误码 |
 
 ```go
@@ -213,16 +175,9 @@ func Component(name string) Field        // 映射到 component
 
 ## 6. 命名空间设计
 
-### 6.1. 层级命名空间
+支持递归扩展命名空间，适用于微服务架构。
 
-支持递归扩展命名空间，适用于微服务架构：
-
-- **输入：** `Option.NamespaceParts` (e.g., `["user-service", "repo"]`)
-- **扩展：** `logger.WithNamespace("cache")` 
-- **输出：**
-    - `namespace`: 拼接后的字符串 (e.g., `"user-service.repo.cache"`)
-
-### 6.2. 使用示例
+### 6.1. 使用示例
 
 ```go
 // 主服务创建 logger
@@ -239,94 +194,56 @@ redisLockLogger := lockLogger.WithNamespace("redis")
 // 输出: namespace="user-service.lock.redis"
 ```
 
-## 7. Context 集成
+## 7. 如何使用 (用户指南)
 
-- **前缀隔离：** 所有自动提取的 Context 字段默认添加 `ctx.` 前缀，避免与业务字段冲突。
-- **配置化提取：** 通过 `Option.ContextFields` 定义提取规则，支持自定义 Key 和提取函数。
+### 7.1. 初始化 Logger
 
-## 8. Source 路径裁剪
-
-- **SourceRoot：** 配置一个根路径，用于从文件路径中裁剪掉公共前缀，使控制台输出更简洁。
-- **简化实现：** 仅支持基于 `SourceRoot` 的简单路径裁剪。
-
-## 9. 工厂函数
-
-工厂函数位于 `pkg/clog/factory.go`，负责初始化底层 `slog` 库。
+使用 `clog.New` 或 `clog.Default` 初始化日志实例。
 
 ```go
-// pkg/clog/factory.go
-package clog
+// 生产环境配置示例：JSON格式，WARN级别，显示相对路径
+logger := clog.New(&clog.Config{
+    Level:       "warn",
+    Format:      "json",
+    Output:      "stdout",
+    AddSource:   true,
+    SourceRoot:  "genesis",
+}, nil)
 
-func New(config *Config, option *Option) (Logger, error) {
-    // 1. 验证配置
-    // 2. 初始化底层 slog handler
-    // 3. 封装成 clog.Logger 接口实现
-}
-
-func Default() Logger {
-    // 返回默认配置的Logger
-}
+logger.Info("service starting", 
+    clog.String("version", "v1.0.0"),
+    clog.Int("port", 8080))
 ```
 
-## 10. 完整使用示例
+### 7.2. Context 字段提取 (简洁说明)
 
-### 10.1. 基础使用
+`clog` 支持从 `context.Context` 中自动提取预配置的字段（如 `request_id`, `trace_id`），并默认添加 `ctx.` 前缀以避免冲突。
 
 ```go
-package main
-
-import "github.com/genesis/pkg/clog"
-
-func main() {
-    logger := clog.New(&clog.Config{
-        Level:  "info",
-        Format: "json",
-        Output: "stdout",
-    }, &clog.Option{
-        NamespaceParts: []string{"user-service"},
-    })
-    
-    logger.Info("service starting", 
-        clog.String("version", "v1.0.0"),
-        clog.Int("port", 8080))
-}
+// 假设 ctx 包含 request_id
+logger.InfoContext(ctx, "user login successful",
+    clog.String("method", "password"))
+// 输出: {"ctx.request_id":"req-12345", "method":"password"}
 ```
 
-### 10.2. 微服务架构使用
+### 7.3. 错误处理最佳实践
+
+使用结构化的错误字段，包含完整的错误信息和堆栈。
 
 ```go
-// main.go - 主服务
-func main() {
-    logger := clog.New(config, &clog.Option{
-        NamespaceParts: []string{"user-service"},
-    })
-    
-    // 传给各组件，自动继承并扩展命名空间
-    lockService := NewDistributedLock(logger.WithNamespace("lock"))
-    userRepo := NewUserRepo(logger.WithNamespace("repo", "user"))
-}
-
-// lock.go - 分布式锁组件
-func NewDistributedLock(logger clog.Logger) *DistributedLock {
-    return &DistributedLock{logger: logger}
-}
-
-func (d *DistributedLock) Lock(key string) error {
-    // 日志输出: namespace="user-service.lock"
-    d.logger.Info("attempting to acquire lock", clog.String("key", key))
-    
-    // 进一步扩展命名空间
-    redisLogger := d.logger.WithNamespace("redis")
-    // 日志输出: namespace="user-service.lock.redis"
-    redisLogger.Debug("sending redis command", clog.String("cmd", "SET"))
-    
-    return nil
-}
+err := errors.New("database connection failed")
+logger.Error("operation failed", clog.Error(err))
+// 输出: {"err_msg":"database connection failed","err_type":"*errors.errorString","err_stack":"..."}
 ```
 
-## 11. 技术实现细节
+## 8. 技术实现与扩展性
 
-- **底层库：** 基于 Go 标准库 `log/slog`
-- **性能：** 利用 `slog` 的高性能特性和延迟计算
-- **扩展性：** 通过 `internal/clog/slog/` 包封装，便于未来切换底层实现
-- **内存管理：** 复用 `LogBuilder` 对象，减少内存分配
+- **底层库：** 基于 Go 标准库 `log/slog`。
+- **性能：** 利用 `slog` 的高性能特性和延迟计算，并通过复用 `LogBuilder` 对象减少内存分配。
+- **扩展性：** 通过 `internal/clog/slog/handler.go` 封装，便于未来切换底层实现。
+
+## 9. TODO 列表
+
+- [ ] **控制台颜色输出优化：** 确保在 `console` 格式下，日志级别和字段能够正确显示颜色，以提高开发环境的可读性。
+- [ ] **Context 提取性能：** 优化 Context 字段提取逻辑，减少不必要的反射或类型断言开销。
+- [ ] **文档示例完善：** 补充 `clog.Default()` 的使用示例。

@@ -1,0 +1,165 @@
+# ====================================================================================
+# NATS 单机版配置文件
+# ====================================================================================
+# 描述: 用于开发和测试环境的单节点NATS服务
+# 网络: 同时连接 genesis-net (基础设施) 和 caddy (反向代理) 网络
+# 存储: 使用Docker卷进行数据持久化，支持JetStream流处理
+# 访问:
+#   - 客户端端口4222：限制为127.0.0.1访问，供应用程序使用
+#   - 监控端口8222：通过Caddy反向代理提供Web访问
+# 特点: 集成JetStream，支持流处理，资源限制优化
+# 用途: 为应用程序提供轻量级的消息队列和流处理服务
+# ====================================================================================
+
+services:
+  # ===== NATS 单节点服务 =====
+  nats:
+    # 使用官方NATS镜像，2.10-alpine版本，轻量级且稳定
+    image: nats:2.10-alpine
+    
+    # 容器名称，便于识别和管理
+    container_name: genesis-nats
+    
+    # 主机名，用于网络内部通信
+    hostname: nats
+    
+    # 重启策略：除非手动停止，否则总是自动重启
+    restart: unless-stopped
+    
+    # 启动命令：配置NATS服务器参数
+    command:
+      # 节点名称，在集群中唯一标识（虽然是单机，但保持一致性）
+      - "--name=genesis-nats"
+      
+      # HTTP监控端口：提供Web界面和REST API
+      - "--http_port=8222"
+      
+      # 启用JetStream：NATS的流处理功能，支持持久化消息
+      - "--js"
+      
+      # 存储目录：JetStream数据存储路径
+      - "--sd=/data"
+    
+    # 数据卷配置：数据持久化存储
+    volumes:
+      # JetStream数据存储：使用Docker卷进行持久化
+      - nats-single-data:/data
+    
+    # 网络配置：连接两个网络
+    networks:
+      # genesis-net：基础设施网络，与其他基础服务通信
+      - genesis-net
+      
+      # caddy：反向代理网络，通过Caddy提供Web访问
+      # - caddy
+    
+    # 资源限制：防止资源耗尽影响宿主机
+    deploy:
+      resources:
+        limits:
+          memory: 256M  # 最大内存限制，防止内存泄漏
+        reservations:
+          memory: 128M  # 最小内存预留，确保基本运行
+    
+    # # 标签配置：Caddy反向代理设置
+    # labels:
+    #   # Caddy域名配置：通过nats.ceyewan.xyz访问监控界面
+    #   caddy: nats.ceyewan.xyz
+    #   # Caddy反向代理配置：将域名请求转发到容器的8222端口
+    #   # {{upstreams 8222}} 是Caddy Docker Proxy的模板语法
+    #   caddy.reverse_proxy: "{{upstreams 8222}}"
+    
+    # 端口映射：仅暴露客户端端口，限制为本地访问
+    ports:
+      - "127.0.0.1:4222:4222"  # 客户端端口，仅本地访问提高安全性
+    # 注意：监控端口8222不直接暴露，通过Caddy反向代理访问
+    
+    # 健康检查：定期检查服务状态
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 15s     # 每15秒检查一次
+      timeout: 5s       # 超时时间5秒
+      retries: 3        # 失败重试3次
+      start_period: 10s # 启动等待时间
+    
+    # 日志配置：限制日志大小，防止磁盘空间耗尽
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"  # 单个日志文件最大5MB
+        max-file: "2"   # 保留2个日志文件，循环使用
+
+# ====================================================================================
+# 网络和存储配置
+# ====================================================================================
+
+# 网络定义：使用外部已创建的网络
+networks:
+  genesis-net:
+    external: true
+    # 说明：genesis-net是基础设施网络，所有基础服务都在此网络中
+    # 用途：为NATS与MySQL、Redis等服务通信提供网络
+    # 创建命令：docker network create genesis-net
+  
+  caddy:
+    external: true
+    # 说明：caddy是反向代理网络，用于Web服务暴露
+    # 用途：通过Caddy反向代理提供NATS监控界面的Web访问
+    # 创建命令：docker network create caddy
+
+# 存储卷定义：数据持久化存储
+volumes:
+  nats-single-data:
+    # 说明：NATS数据卷，存储JetStream流数据和配置信息
+    # 优点：与宿主机解耦，便于备份和容器迁移
+    # 管理：docker volume ls / docker volume inspect nats-single-data
+    # 注意：包含所有持久化消息数据，重要数据请定期备份
+
+# ====================================================================================
+# 使用说明和运维指南
+# ====================================================================================
+# 启动服务:
+#   docker compose -f nats-single.yml up -d
+#
+# 查看状态:
+#   docker compose -f nats-single.yml ps
+#
+# 查看日志:
+#   docker compose -f nats-single.yml logs -f
+#
+# 访问监控界面:
+#   - 通过Caddy代理: https://nats.ceyewan.xyz
+#   - 直接访问: http://localhost:8222 (需要先暴露端口)
+#
+# 发布测试消息:
+#   docker run --rm --network genesis-net -it natsio/nats-box
+#   # 在容器内执行:
+#   nats pub test.subject "Hello NATS"
+#
+# 订阅测试消息:
+#   docker run --rm --network genesis-net -it natsio/nats-box
+#   # 在容器内执行:
+#   nats sub test.subject
+#
+# 查看服务器信息:
+#   curl http://localhost:8222/varz
+#
+# 查看连接信息:
+#   curl http://localhost:8222/connz
+#
+# 查看JetStream信息:
+#   curl http://localhost:8222/jsz
+#
+# 停止服务:
+#   docker compose -f nats-single.yml down
+#
+# 数据备份:
+#   # NATS JetStream数据存储在卷中，可以通过卷备份
+#   docker run --rm -v nats-single-data:/data -v $(pwd):/backup alpine tar czf /backup/nats-data-backup.tar.gz /data
+#
+# 性能调优:
+#   - 根据消息量调整内存限制
+#   - 监控JetStream存储使用情况
+#   - 考虑调整--max_memory_store和--max_file_store参数
+#   - 生产环境建议启用TLS加密
+# ====================================================================================

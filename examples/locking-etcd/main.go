@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/ceyewan/genesis/pkg/lock/simple"
@@ -37,7 +36,8 @@ func demoDefaultConfig() {
 	// 最简单的使用方式：New(nil, nil)
 	locker, err := simple.New(nil, nil)
 	if err != nil {
-		log.Fatalf("创建锁失败: %v", err)
+		fmt.Printf("创建锁失败: %v\n", err)
+		return
 	}
 	defer locker.Close()
 
@@ -47,7 +47,7 @@ func demoDefaultConfig() {
 	fmt.Println("  ✓ 创建锁成功（默认配置）")
 
 	if err := locker.Lock(ctx, key); err != nil {
-		log.Printf("  ✗ 加锁失败: %v", err)
+		fmt.Printf("  ✗ 加锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 加锁成功")
@@ -56,7 +56,7 @@ func demoDefaultConfig() {
 	fmt.Println("  ✓ 执行业务逻辑...")
 
 	if err := locker.Unlock(ctx, key); err != nil {
-		log.Printf("  ✗ 解锁失败: %v", err)
+		fmt.Printf("  ✗ 解锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 解锁成功")
@@ -72,7 +72,8 @@ func demoCustomConfig() {
 
 	locker, err := simple.New(config, nil)
 	if err != nil {
-		log.Fatalf("创建锁失败: %v", err)
+		fmt.Printf("创建锁失败: %v\n", err)
+		return
 	}
 	defer locker.Close()
 
@@ -84,7 +85,7 @@ func demoCustomConfig() {
 	// 测试TryLock
 	success, err := locker.TryLock(ctx, key)
 	if err != nil {
-		log.Printf("  ✗ TryLock失败: %v", err)
+		fmt.Printf("  ✗ TryLock失败: %v\n", err)
 		return
 	}
 
@@ -109,7 +110,8 @@ func demoCustomOption() {
 
 	locker, err := simple.New(nil, option)
 	if err != nil {
-		log.Fatalf("创建锁失败: %v", err)
+		fmt.Printf("创建锁失败: %v\n", err)
+		return
 	}
 	defer locker.Close()
 
@@ -120,7 +122,7 @@ func demoCustomOption() {
 
 	// 测试带TTL的锁
 	if err := locker.LockWithTTL(ctx, key, 3*time.Second); err != nil {
-		log.Printf("  ✗ TTL加锁失败: %v", err)
+		fmt.Printf("  ✗ TTL加锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ TTL加锁成功")
@@ -129,7 +131,7 @@ func demoCustomOption() {
 	fmt.Println("  ✓ 执行业务逻辑...")
 
 	if err := locker.Unlock(ctx, key); err != nil {
-		log.Printf("  ✗ 解锁失败: %v", err)
+		fmt.Printf("  ✗ 解锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 解锁成功")
@@ -154,7 +156,8 @@ func demoFullCustom() {
 
 	locker, err := simple.New(config, option)
 	if err != nil {
-		log.Fatalf("创建锁失败: %v", err)
+		fmt.Printf("创建锁失败: %v\n", err)
+		return
 	}
 	defer locker.Close()
 
@@ -164,7 +167,7 @@ func demoFullCustom() {
 	fmt.Println("  ✓ 创建锁成功（完全自定义配置）")
 
 	if err := locker.Lock(ctx, key); err != nil {
-		log.Printf("  ✗ 加锁失败: %v", err)
+		fmt.Printf("  ✗ 加锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 加锁成功")
@@ -173,7 +176,7 @@ func demoFullCustom() {
 	fmt.Println("  ✓ 执行业务逻辑...")
 
 	if err := locker.Unlock(ctx, key); err != nil {
-		log.Printf("  ✗ 解锁失败: %v", err)
+		fmt.Printf("  ✗ 解锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 解锁成功")
@@ -184,7 +187,8 @@ func demoConnectionReuse() {
 	fmt.Println("  创建第一个锁...")
 	locker1, err := simple.New(nil, nil)
 	if err != nil {
-		log.Fatalf("创建锁1失败: %v", err)
+		fmt.Printf("创建锁1失败: %v\n", err)
+		return
 	}
 	defer locker1.Close()
 
@@ -193,7 +197,8 @@ func demoConnectionReuse() {
 	fmt.Println("  创建第二个锁（相同配置）...")
 	locker2, err := simple.New(nil, nil)
 	if err != nil {
-		log.Fatalf("创建锁2失败: %v", err)
+		fmt.Printf("创建锁2失败: %v\n", err)
+		return
 	}
 	defer locker2.Close()
 
@@ -205,13 +210,13 @@ func demoConnectionReuse() {
 	key2 := "/demo/reuse-resource-2"
 
 	if err := locker1.Lock(ctx, key1); err != nil {
-		log.Printf("  ✗ 锁1加锁失败: %v", err)
+		fmt.Printf("  ✗ 锁1加锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 锁1加锁成功")
 
 	if err := locker2.Lock(ctx, key2); err != nil {
-		log.Printf("  ✗ 锁2加锁失败: %v", err)
+		fmt.Printf("  ✗ 锁2加锁失败: %v\n", err)
 		locker1.Unlock(ctx, key1)
 		return
 	}
