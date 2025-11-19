@@ -40,7 +40,7 @@
 
 3. **容器 (Container):**
     * **职责:** 应用的**“心脏”，负责组装、管理所有依赖**。
-    * **位置:** `internal/core/container/`。
+    * **位置:** `pkg/container/`。
     * **核心:** 在应用启动时，通过依赖注入（DI）初始化所有连接器和组件，并编排它们的生命周期。
     * **目标:** 简化应用初始化，清晰化依赖关系，实现资源的有序启动和优雅关闭。
 
@@ -50,7 +50,7 @@
 
 ```mermaid
 graph TD
-    A[业务逻辑层<br>Business Logic] --> B{核心容器<br>Core Container};
+    A[业务逻辑层<br>Business Logic] --> B{核心容器<br>pkg/container};
     B --> C["组件层 (API)<br>pkg/component, pkg/db"];
     C --> D["连接器接口层 (API)<br>pkg/connector"];
     E[连接器实现层<br>internal/connector] -- 实现 --> D;
@@ -72,14 +72,16 @@ genesis/
 │   │   ├── manager.go      # 通用连接管理器 (复用、生命周期)
 │   │   ├── mysql/
 │   │   └── redis/
-│   └── core/
-│       └── container/      # 核心 DI 容器与生命周期编排
 └── pkg/
     ├── component/          # 通用功能组件
     │   └── locking/
     ├── connector/          # 连接器抽象层 (定义接口)
     │   ├── interface.go
+    │   ├── config.go       # 连接器配置定义
     │   └── errors.go       # 统一错误定义
+    ├── container/          # 核心 DI 容器与生命周期编排
+    │   ├── container.go
+    │   └── lifecycle.go
     ├── db/                 # DB 领域组件
     └── clog/               # 日志组件 (基础核心组件)
 ```
@@ -214,12 +216,12 @@ func (m *Manager[T]) Release(config any) error {
 
 容器是整个应用的粘合剂和启动器。
 
-### 5.1. 生命周期接口 (`internal/core/container`)
+### 5.1. 生命周期接口 (`pkg/container`)
 
 定义一个所有可管理对象（连接器、需要启动/关闭的组件）都必须实现的接口。
 
 ````go
-// internal/core/container/lifecycle.go
+// pkg/container/lifecycle.go
 package container
 
 import "context"
@@ -238,12 +240,12 @@ type Lifecycle interface {
 }
 ````
 
-### 5.2. 容器实现 (`internal/core/container`)
+### 5.2. 容器实现 (`pkg/container`)
 
 容器负责依据 `Phase` 顺序，有序地启动和关闭所有 `Lifecycle` 对象。
 
 ```go
-// internal/core/container/container.go (示意代码)
+// pkg/container/container.go (示意代码)
 package container
 
 // Container 聚合了所有组件，是应用的统一访问入口
