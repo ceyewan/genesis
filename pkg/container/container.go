@@ -14,6 +14,7 @@ import (
 	pkgdb "github.com/ceyewan/genesis/pkg/db"
 	"github.com/ceyewan/genesis/pkg/dlock"
 	dlocktypes "github.com/ceyewan/genesis/pkg/dlock/types"
+	"github.com/ceyewan/genesis/pkg/mq"
 )
 
 // Config 容器配置
@@ -32,6 +33,8 @@ type Config struct {
 	DB *pkgdb.Config
 	// DLock 组件配置
 	DLock *dlock.Config
+	// MQ 组件配置
+	MQ *mq.Config
 }
 
 // Container 应用容器，管理所有组件和连接器
@@ -45,7 +48,7 @@ type Container struct {
 	// 分布式锁组件
 	DLock dlock.Locker
 	// 消息队列组件
-	MQ MQ
+	MQ mq.Client
 
 	// 配置
 	config *Config
@@ -280,6 +283,40 @@ func (c *Container) initComponents(cfg *Config) error {
 		return fmt.Errorf("初始化分布式锁组件失败: %w", err)
 	}
 
+	// 初始化消息队列组件
+	if err := c.initMQ(cfg); err != nil {
+		return fmt.Errorf("初始化消息队列组件失败: %w", err)
+	}
+
+	return nil
+}
+
+// initMQ 初始化消息队列组件
+func (c *Container) initMQ(cfg *Config) error {
+	if cfg.MQ == nil {
+		return nil
+	}
+
+	if cfg.NATS == nil {
+		return fmt.Errorf("mq component requires nats config")
+	}
+
+	// 获取 NATS 连接器
+	natsConn, err := c.GetNATSConnector(*cfg.NATS)
+	if err != nil {
+		return fmt.Errorf("failed to get nats connector: %w", err)
+	}
+
+	// 派生 mq 专用的 Logger
+	mqLogger := c.Log.WithNamespace("mq")
+
+	// 创建 MQ 客户端
+	client, err := mq.New(natsConn, cfg.MQ, mqLogger)
+	if err != nil {
+		return fmt.Errorf("failed to create mq client: %w", err)
+	}
+
+	c.MQ = client
 	return nil
 }
 
@@ -374,5 +411,3 @@ func (c *Container) GetNATSConnector(config pkgconnector.NATSConfig) (pkgconnect
 }
 
 type Cache interface{}
-
-type MQ interface{}
