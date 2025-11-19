@@ -48,7 +48,7 @@ graph TD
             DB[db 分库分表]
             DLock[dlock 分布式锁]
             Cache["缓存 (Planned)"]
-            MQ["消息队列 (Planned)"]
+            MQ[mq 消息队列]
         end
         
         subgraph "连接器"
@@ -76,7 +76,7 @@ graph TD
 * **MySQL:** 基于 GORM 的连接管理。
 * **Redis:** 基于 go-redis 的连接管理。
 * **Etcd:** 基于 clientv3 的连接管理。
-* **NATS:** (Planned) 消息中间件连接。
+* **NATS:** 基于 nats.go 的连接管理。
 
 ### 4.3. 业务组件 (Components)
 
@@ -84,6 +84,7 @@ graph TD
 
 * **db:** 集成 `gorm` 和 `sharding` 插件，支持透明的分库分表和统一事务管理。
 * **dlock:** 统一接口的分布式锁，支持 Redis 和 Etcd 后端，内置看门狗（自动续期）。
+* **mq:** 统一接口的消息队列，支持 NATS Core (即时) 和 JetStream (持久化) 模式。
 
 ## 5. 演进路线 (Roadmap)
 
@@ -100,7 +101,7 @@ Genesis 将按照"在精不在多"的原则逐步演进：
 ### Phase 2: 中间件集成 (Next)
 
 * [ ] **Cache:** 多级缓存接口与实现 (Local + Redis)
-* [ ] **MQ:** 消息队列封装 (基于 NATS/Kafka)
+* [x] **MQ:** 消息队列封装 (基于 NATS/Kafka)
 * [ ] **ID Gen:** 分布式 ID 生成器 (Snowflake)
 * [ ] **Metrics:** 统一监控指标 (Prometheus)
 
@@ -121,12 +122,33 @@ genesis/
 │   ├── connector/      # 连接器接口
 │   ├── container/      # 容器接口
 │   ├── db/             # 数据库组件
-│   └── dlock/          # 分布式锁组件
+│   ├── dlock/          # 分布式锁组件
+│   └── mq/             # 消息队列组件
 ├── internal/           # 内部实现细节 (不对外暴露)
 │   ├── clog/
 │   ├── connector/
 │   ├── db/
-│   └── dlock/
+│   ├── dlock/
+│   └── mq/
 ├── deploy/             # 部署依赖 (Docker Compose 等)
 ├── docs/               # 设计文档
 └── examples/           # 使用示例
+
+## 7. 代码组织规范 (Code Organization)
+
+为了解决 Go 语言中常见的循环依赖问题，同时保持 API 的整洁，Genesis 推荐以下组件代码组织结构：
+
+```text
+pkg/component/
+├── component.go        # 统一入口：包含工厂方法 (New) 和类型别名导出
+└── types/              # 类型定义：包含接口 (Interface) 和配置结构体 (Config)
+    ├── config.go
+    └── interface.go
+internal/component/
+├── component.go        # 核心逻辑实现
+└── ...
+```
+
+* **`pkg/component/types`**: 定义接口和配置，不依赖其他包，作为最底层依赖。
+* **`internal/component`**: 引用 `pkg/component/types` 实现具体逻辑。
+* **`pkg/component`**: 引用 `internal/component` 暴露工厂方法，引用 `pkg/component/types` 导出类型别名，作为用户使用的统一入口。
