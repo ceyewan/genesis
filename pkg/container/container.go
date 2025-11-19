@@ -8,8 +8,10 @@ import (
 
 	"github.com/ceyewan/genesis/internal/connector"
 	"github.com/ceyewan/genesis/internal/connector/manager"
+	internaldb "github.com/ceyewan/genesis/internal/db"
 	"github.com/ceyewan/genesis/pkg/clog"
 	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
+	pkgdb "github.com/ceyewan/genesis/pkg/db"
 )
 
 // Config 容器配置
@@ -24,6 +26,8 @@ type Config struct {
 	Etcd *pkgconnector.EtcdConfig
 	// NATS 配置
 	NATS *pkgconnector.NATSConfig
+	// DB 组件配置
+	DB *pkgdb.Config
 }
 
 // Container 应用容器，管理所有组件和连接器
@@ -31,7 +35,7 @@ type Container struct {
 	// 日志组件
 	Log clog.Logger
 	// 数据库组件
-	DB DB
+	DB pkgdb.DB
 	// 缓存组件
 	Cache Cache
 	// 分布式锁组件
@@ -248,8 +252,24 @@ func (c *Container) initConnectors(cfg *Config) error {
 
 // initComponents 初始化组件
 func (c *Container) initComponents(cfg *Config) error {
-	// 这里可以根据需要初始化各种组件
-	// 例如：数据库组件、缓存组件、分布式锁组件等
+	// 初始化数据库组件
+	if cfg.DB != nil && cfg.MySQL != nil {
+		// 获取 MySQL 连接器
+		// 注意：这里假设 DB 组件使用主 MySQL 配置
+		// 在更复杂的场景中，可能需要专门的 DB 连接配置
+		mysqlConnector, err := c.mysqlManager.Get(*cfg.MySQL)
+		if err != nil {
+			return fmt.Errorf("获取MySQL连接器失败: %w", err)
+		}
+
+		database, err := internaldb.New(mysqlConnector, cfg.DB)
+		if err != nil {
+			return fmt.Errorf("创建数据库组件失败: %w", err)
+		}
+		c.DB = database
+		// 注册到生命周期管理（如果 DB 组件实现了 Lifecycle 接口）
+		// 目前 DB 组件没有显式实现 Lifecycle，因为 GORM 连接由 Connector 管理
+	}
 
 	return nil
 }
@@ -296,8 +316,6 @@ func (c *Container) GetEtcdConnector(config pkgconnector.EtcdConfig) (pkgconnect
 func (c *Container) GetNATSConnector(config pkgconnector.NATSConfig) (pkgconnector.NATSConnector, error) {
 	return c.natsManager.Get(config)
 }
-
-type DB interface{}
 
 type Cache interface{}
 

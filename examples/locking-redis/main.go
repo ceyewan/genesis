@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/ceyewan/genesis/pkg/lock"
@@ -48,7 +47,7 @@ func testSimpleAPI() {
 		AutoRenew:     true,
 	})
 	if err != nil {
-		log.Printf("  ✗ 创建锁失败: %v", err)
+		fmt.Printf("  ✗ 创建锁失败: %v\n", err)
 		return
 	}
 	defer locker.Close()
@@ -58,7 +57,7 @@ func testSimpleAPI() {
 	// 测试加锁
 	ctx := context.Background()
 	if err := locker.Lock(ctx, "/test/resource1"); err != nil {
-		log.Printf("  ✗ 加锁失败: %v", err)
+		fmt.Printf("  ✗ 加锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 加锁成功")
@@ -69,7 +68,7 @@ func testSimpleAPI() {
 
 	// 解锁
 	if err := locker.Unlock(ctx, "/test/resource1"); err != nil {
-		log.Printf("  ✗ 解锁失败: %v", err)
+		fmt.Printf("  ✗ 解锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 解锁成功")
@@ -91,7 +90,7 @@ func testDedicatedRedisAPI() {
 		AutoRenew:     true,
 	})
 	if err != nil {
-		log.Printf("  ✗ 创建锁失败: %v", err)
+		fmt.Printf("  ✗ 创建锁失败: %v\n", err)
 		return
 	}
 	defer locker.Close()
@@ -103,7 +102,7 @@ func testDedicatedRedisAPI() {
 	// 测试TryLock
 	success, err := locker.TryLock(ctx, "/test/resource2")
 	if err != nil {
-		log.Printf("  ✗ TryLock失败: %v", err)
+		fmt.Printf("  ✗ TryLock失败: %v\n", err)
 		return
 	}
 	if !success {
@@ -114,21 +113,21 @@ func testDedicatedRedisAPI() {
 
 	// 解锁
 	if err := locker.Unlock(ctx, "/test/resource2"); err != nil {
-		log.Printf("  ✗ 解锁失败: %v", err)
+		fmt.Printf("  ✗ 解锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 解锁成功")
 
 	// 测试LockWithTTL
 	if err := locker.LockWithTTL(ctx, "/test/resource3", 20*time.Second); err != nil {
-		log.Printf("  ✗ LockWithTTL失败: %v", err)
+		fmt.Printf("  ✗ LockWithTTL失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ LockWithTTL成功（20秒TTL）")
 
 	// 解锁
 	if err := locker.Unlock(ctx, "/test/resource3"); err != nil {
-		log.Printf("  ✗ 解锁失败: %v", err)
+		fmt.Printf("  ✗ 解锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 解锁成功")
@@ -143,7 +142,7 @@ func testConnectionReuse() {
 		Password:  "genesis_redis_2024", // Redis密码
 	}, nil)
 	if err != nil {
-		log.Printf("  ✗ 锁1创建失败: %v", err)
+		fmt.Printf("  ✗ 锁1创建失败: %v\n", err)
 		return
 	}
 	defer locker1.Close()
@@ -156,7 +155,7 @@ func testConnectionReuse() {
 		Password:  "genesis_redis_2024", // Redis密码
 	}, nil)
 	if err != nil {
-		log.Printf("  ✗ 锁2创建失败: %v", err)
+		fmt.Printf("  ✗ 锁2创建失败: %v\n", err)
 		return
 	}
 	defer locker2.Close()
@@ -166,13 +165,13 @@ func testConnectionReuse() {
 
 	// 测试两个锁都能正常工作
 	if err := locker1.Lock(ctx, "/test/conn1"); err != nil {
-		log.Printf("  ✗ 锁1加锁失败: %v", err)
+		fmt.Printf("  ✗ 锁1加锁失败: %v\n", err)
 		return
 	}
 	fmt.Println("  ✓ 锁1加锁成功")
 
 	if err := locker2.Lock(ctx, "/test/conn2"); err != nil {
-		log.Printf("  ✗ 锁2加锁失败: %v", err)
+		fmt.Printf("  ✗ 锁2加锁失败: %v\n", err)
 		locker1.Unlock(ctx, "/test/conn1")
 		return
 	}
@@ -180,10 +179,10 @@ func testConnectionReuse() {
 
 	// 解锁
 	if err := locker1.Unlock(ctx, "/test/conn1"); err != nil {
-		log.Printf("  ✗ 锁1解锁失败: %v", err)
+		fmt.Printf("  ✗ 锁1解锁失败: %v\n", err)
 	}
 	if err := locker2.Unlock(ctx, "/test/conn2"); err != nil {
-		log.Printf("  ✗ 锁2解锁失败: %v", err)
+		fmt.Printf("  ✗ 锁2解锁失败: %v\n", err)
 	}
 
 	fmt.Println("  ✓ 两个锁都解锁成功（连接复用验证通过）")
