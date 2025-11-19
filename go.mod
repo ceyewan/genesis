@@ -3,8 +3,12 @@ module github.com/ceyewan/genesis
 go 1.25.1
 
 require (
+	github.com/nats-io/nats.go v1.47.0
 	github.com/redis/go-redis/v9 v9.16.0
 	go.etcd.io/etcd/client/v3 v3.6.6
+	gorm.io/driver/mysql v1.6.0
+	gorm.io/gorm v1.31.1
+	gorm.io/sharding v0.6.2
 )
 
 require (
@@ -22,7 +26,6 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/longbridgeapp/sqlparser v0.3.1 // indirect
-	github.com/nats-io/nats.go v1.47.0 // indirect
 	github.com/nats-io/nkeys v0.4.11 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	go.etcd.io/etcd/api/v3 v3.6.6 // indirect
@@ -38,7 +41,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250303144028-a0af3efb3deb // indirect
 	google.golang.org/grpc v1.71.1 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
-	gorm.io/driver/mysql v1.6.0 // indirect
-	gorm.io/gorm v1.31.1 // indirect
-	gorm.io/sharding v0.6.2 // indirect
 )

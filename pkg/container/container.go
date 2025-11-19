@@ -12,6 +12,8 @@ import (
 	"github.com/ceyewan/genesis/pkg/clog"
 	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
 	pkgdb "github.com/ceyewan/genesis/pkg/db"
+	"github.com/ceyewan/genesis/pkg/dlock"
+	dlocktypes "github.com/ceyewan/genesis/pkg/dlock/types"
 )
 
 // Config 容器配置
@@ -28,6 +30,8 @@ type Config struct {
 	NATS *pkgconnector.NATSConfig
 	// DB 组件配置
 	DB *pkgdb.Config
+	// DLock 组件配置
+	DLock *dlock.Config
 }
 
 // Container 应用容器，管理所有组件和连接器
@@ -39,7 +43,7 @@ type Container struct {
 	// 缓存组件
 	Cache Cache
 	// 分布式锁组件
-	Locker Locker
+	DLock dlock.Locker
 	// 消息队列组件
 	MQ MQ
 
@@ -271,6 +275,58 @@ func (c *Container) initComponents(cfg *Config) error {
 		// 目前 DB 组件没有显式实现 Lifecycle，因为 GORM 连接由 Connector 管理
 	}
 
+	// 初始化分布式锁组件
+	if err := c.initDLock(cfg); err != nil {
+		return fmt.Errorf("初始化分布式锁组件失败: %w", err)
+	}
+
+	return nil
+}
+
+// initDLock 初始化分布式锁组件
+func (c *Container) initDLock(cfg *Config) error {
+	if cfg.DLock == nil {
+		return nil
+	}
+
+	// 派生 dlock 专用的 Logger
+	dlockLogger := c.Log.WithNamespace("dlock")
+
+	switch cfg.DLock.Backend {
+	case dlocktypes.BackendRedis:
+		if cfg.Redis == nil {
+			return fmt.Errorf("redis backend requires redis config")
+		}
+		// 获取 Redis 连接器
+		redisConn, err := c.GetRedisConnector(*cfg.Redis)
+		if err != nil {
+			return fmt.Errorf("failed to get redis connector: %w", err)
+		}
+		// 创建 dlock
+		locker, err := dlock.NewRedis(redisConn, cfg.DLock, dlockLogger)
+		if err != nil {
+			return fmt.Errorf("failed to create redis locker: %w", err)
+		}
+		c.DLock = locker
+	case dlocktypes.BackendEtcd:
+		if cfg.Etcd == nil {
+			return fmt.Errorf("etcd backend requires etcd config")
+		}
+		// 获取 Etcd 连接器
+		etcdConn, err := c.GetEtcdConnector(*cfg.Etcd)
+		if err != nil {
+			return fmt.Errorf("failed to get etcd connector: %w", err)
+		}
+		// 创建 dlock
+		locker, err := dlock.NewEtcd(etcdConn, cfg.DLock, dlockLogger)
+		if err != nil {
+			return fmt.Errorf("failed to create etcd locker: %w", err)
+		}
+		c.DLock = locker
+	default:
+		return fmt.Errorf("unsupported dlock backend: %s", cfg.DLock.Backend)
+	}
+
 	return nil
 }
 
@@ -318,7 +374,5 @@ func (c *Container) GetNATSConnector(config pkgconnector.NATSConfig) (pkgconnect
 }
 
 type Cache interface{}
-
-type Locker interface{}
 
 type MQ interface{}
