@@ -133,6 +133,7 @@ genesis/
 ├── deploy/             # 部署依赖 (Docker Compose 等)
 ├── docs/               # 设计文档
 └── examples/           # 使用示例
+```
 
 ## 7. 代码组织规范 (Code Organization)
 
