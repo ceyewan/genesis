@@ -1,4 +1,4 @@
-// examples/connector-basic/main.go
+// examples/connector/main.go
 package main
 
 import (
