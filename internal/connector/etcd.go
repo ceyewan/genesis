@@ -1,4 +1,4 @@
-// internal/connector/etcd_new.go
+// internal/connector/etcd.go
 package connector
 
 import (
@@ -8,27 +8,30 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/connector"
+	"github.com/ceyewan/genesis/pkg/clog"
+	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 // etcdConnector Etcd连接器实现
 type etcdConnector struct {
 	name    string
-	config  connector.EtcdConfig
+	config  pkgconnector.EtcdConfig
 	client  *clientv3.Client
 	healthy bool
 	mu      sync.RWMutex
 	phase   int
+	logger  clog.Logger
 }
 
 // NewEtcdConnector 创建新的Etcd连接器
-func NewEtcdConnector(name string, config connector.EtcdConfig) connector.EtcdConnector {
+func NewEtcdConnector(name string, config pkgconnector.EtcdConfig, logger clog.Logger) pkgconnector.EtcdConnector {
 	return &etcdConnector{
 		name:    name,
 		config:  config,
 		healthy: false,
 		phase:   10, // 连接器阶段
+		logger:  logger,
 	}
 }
 
@@ -42,9 +45,12 @@ func (c *etcdConnector) Connect(ctx context.Context) error {
 		return nil
 	}
 
+	c.logger.InfoContext(ctx, "正在建立Etcd连接", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)))
+
 	// 验证配置
 	if err := c.Validate(); err != nil {
-		return connector.NewError(c.name, connector.ErrConfig, err, false)
+		c.logger.ErrorContext(ctx, "Etcd配置验证失败", clog.String("name", c.name), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConfig, err, false)
 	}
 
 	// 创建Etcd客户端配置
@@ -60,7 +66,8 @@ func (c *etcdConnector) Connect(ctx context.Context) error {
 	// 创建客户端
 	client, err := clientv3.New(clientConfig)
 	if err != nil {
-		return connector.NewError(c.name, connector.ErrConnection, err, true)
+		c.logger.ErrorContext(ctx, "Etcd客户端创建失败", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConnection, err, true)
 	}
 
 	// 测试连接
@@ -69,12 +76,14 @@ func (c *etcdConnector) Connect(ctx context.Context) error {
 
 	if _, err := client.Status(ctx, c.config.Endpoints[0]); err != nil {
 		client.Close()
-		return connector.NewError(c.name, connector.ErrConnection, err, true)
+		c.logger.ErrorContext(ctx, "Etcd连接测试失败", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConnection, err, true)
 	}
 
 	c.client = client
 	c.healthy = true
 
+	c.logger.InfoContext(ctx, "Etcd连接成功", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)))
 	return nil
 }
 
@@ -87,13 +96,17 @@ func (c *etcdConnector) Close() error {
 		return nil
 	}
 
+	c.logger.Info("正在关闭Etcd连接", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)))
+
 	if err := c.client.Close(); err != nil {
+		c.logger.Error("关闭Etcd连接失败", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)), clog.Error(err))
 		return err
 	}
 
 	c.client = nil
 	c.healthy = false
 
+	c.logger.Info("Etcd连接已关闭", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)))
 	return nil
 }
 
@@ -103,7 +116,8 @@ func (c *etcdConnector) HealthCheck(ctx context.Context) error {
 	defer c.mu.RUnlock()
 
 	if c.client == nil {
-		return connector.NewError(c.name, connector.ErrClosed, fmt.Errorf("连接已关闭"), false)
+		c.logger.WarnContext(ctx, "Etcd健康检查失败：连接已关闭", clog.String("name", c.name))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrClosed, fmt.Errorf("连接已关闭"), false)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -111,7 +125,8 @@ func (c *etcdConnector) HealthCheck(ctx context.Context) error {
 
 	if _, err := c.client.Status(ctx, c.config.Endpoints[0]); err != nil {
 		c.healthy = false
-		return connector.NewError(c.name, connector.ErrHealthCheck, err, true)
+		c.logger.ErrorContext(ctx, "Etcd健康检查失败：Status失败", clog.String("name", c.name), clog.String("endpoints", fmt.Sprintf("%v", c.config.Endpoints)), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrHealthCheck, err, true)
 	}
 
 	c.healthy = true
@@ -143,20 +158,23 @@ func (c *etcdConnector) Validate() error {
 }
 
 // Reload 重载配置（可选实现）
-func (c *etcdConnector) Reload(ctx context.Context, newConfig connector.Configurable) error {
+func (c *etcdConnector) Reload(ctx context.Context, newConfig pkgconnector.Configurable) error {
 	// 验证新配置
 	if err := newConfig.Validate(); err != nil {
 		return err
 	}
 
 	// 类型断言
-	newEtcdConfig, ok := newConfig.(connector.EtcdConfig)
+	newEtcdConfig, ok := newConfig.(pkgconnector.EtcdConfig)
 	if !ok {
 		return fmt.Errorf("配置类型不匹配，期望 EtcdConfig")
 	}
 
+	c.logger.InfoContext(ctx, "正在重载Etcd配置", clog.String("name", c.name))
+
 	// 关闭现有连接
 	if err := c.Close(); err != nil {
+		c.logger.ErrorContext(ctx, "重载Etcd配置时关闭连接失败", clog.String("name", c.name), clog.Error(err))
 		return err
 	}
 
@@ -164,6 +182,8 @@ func (c *etcdConnector) Reload(ctx context.Context, newConfig connector.Configur
 	c.mu.Lock()
 	c.config = newEtcdConfig
 	c.mu.Unlock()
+
+	c.logger.InfoContext(ctx, "Etcd配置已重载，正在重新连接", clog.String("name", c.name))
 
 	// 重新连接
 	return c.Connect(ctx)
@@ -178,6 +198,11 @@ func (c *etcdConnector) GetEndpoints() []string {
 	copy(endpoints, c.config.Endpoints)
 	sort.Strings(endpoints)
 	return endpoints
+}
+
+// GetLogger 获取日志器
+func (c *etcdConnector) GetLogger() clog.Logger {
+	return c.logger
 }
 
 // Start 实现 Lifecycle 接口 - 启动连接器

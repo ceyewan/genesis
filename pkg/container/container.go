@@ -125,7 +125,13 @@ func (c *Container) initManagers() error {
 			if !ok {
 				return nil, fmt.Errorf("配置类型不匹配")
 			}
-			return connector.NewMySQLConnector("mysql", cfg), nil
+			// 使用配置的命名空间，如果没有则使用默认的 "mysql"
+			namespace := cfg.LogNamespace
+			if namespace == "" {
+				namespace = "mysql"
+			}
+			logger := c.Log.WithNamespace(namespace)
+			return connector.NewMySQLConnector("mysql", cfg, logger), nil
 		},
 		manager.ManagerOptions{
 			CheckInterval: 30 * time.Second,
@@ -140,7 +146,13 @@ func (c *Container) initManagers() error {
 			if !ok {
 				return nil, fmt.Errorf("配置类型不匹配")
 			}
-			return connector.NewRedisConnector("redis", cfg), nil
+			// 使用配置的命名空间，如果没有则使用默认的 "redis"
+			namespace := cfg.LogNamespace
+			if namespace == "" {
+				namespace = "redis"
+			}
+			logger := c.Log.WithNamespace(namespace)
+			return connector.NewRedisConnector("redis", cfg, logger), nil
 		},
 		manager.ManagerOptions{
 			CheckInterval: 30 * time.Second,
@@ -155,7 +167,13 @@ func (c *Container) initManagers() error {
 			if !ok {
 				return nil, fmt.Errorf("配置类型不匹配")
 			}
-			return connector.NewEtcdConnector("etcd", cfg), nil
+			// 使用配置的命名空间，如果没有则使用默认的 "etcd"
+			namespace := cfg.LogNamespace
+			if namespace == "" {
+				namespace = "etcd"
+			}
+			logger := c.Log.WithNamespace(namespace)
+			return connector.NewEtcdConnector("etcd", cfg, logger), nil
 		},
 		manager.ManagerOptions{
 			CheckInterval: 30 * time.Second,
@@ -170,7 +188,13 @@ func (c *Container) initManagers() error {
 			if !ok {
 				return nil, fmt.Errorf("配置类型不匹配")
 			}
-			return connector.NewNATSConnector("nats", cfg), nil
+			// 使用配置的命名空间，如果没有则使用默认的 "nats"
+			namespace := cfg.LogNamespace
+			if namespace == "" {
+				namespace = "nats"
+			}
+			logger := c.Log.WithNamespace(namespace)
+			return connector.NewNATSConnector("nats", cfg, logger), nil
 		},
 		manager.ManagerOptions{
 			CheckInterval: 30 * time.Second,

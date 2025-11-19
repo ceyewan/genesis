@@ -7,28 +7,33 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/connector"
+	"github.com/ceyewan/genesis/internal/connector/adapter"
+	"github.com/ceyewan/genesis/pkg/clog"
+	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // mysqlConnector MySQL连接器实现
 type mysqlConnector struct {
 	name    string
-	config  connector.MySQLConfig
+	config  pkgconnector.MySQLConfig
 	client  *gorm.DB
 	healthy bool
 	mu      sync.RWMutex
 	phase   int
+	logger  clog.Logger
 }
 
 // NewMySQLConnector 创建新的MySQL连接器
-func NewMySQLConnector(name string, config connector.MySQLConfig) connector.MySQLConnector {
+func NewMySQLConnector(name string, config pkgconnector.MySQLConfig, logger clog.Logger) pkgconnector.MySQLConnector {
 	return &mysqlConnector{
 		name:    name,
 		config:  config,
 		healthy: false,
 		phase:   10, // 连接器阶段
+		logger:  logger,
 	}
 }
 
@@ -42,9 +47,12 @@ func (c *mysqlConnector) Connect(ctx context.Context) error {
 		return nil
 	}
 
+	c.logger.InfoContext(ctx, "正在建立MySQL连接", clog.String("name", c.name))
+
 	// 验证配置
 	if err := c.Validate(); err != nil {
-		return connector.NewError(c.name, connector.ErrConfig, err, false)
+		c.logger.ErrorContext(ctx, "MySQL配置验证失败", clog.String("name", c.name), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConfig, err, false)
 	}
 
 	// 构建DSN
@@ -58,16 +66,23 @@ func (c *mysqlConnector) Connect(ctx context.Context) error {
 		c.config.Timeout,
 	)
 
+	// 创建 GORM 日志适配器
+	gormLogger := adapter.NewGormLogger(c.logger, logger.Info)
+
 	// 创建数据库连接
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+		Logger: gormLogger,
+	})
 	if err != nil {
-		return connector.NewError(c.name, connector.ErrConnection, err, true)
+		c.logger.ErrorContext(ctx, "MySQL连接失败", clog.String("name", c.name), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConnection, err, true)
 	}
 
 	// 获取底层数据库连接
 	sqlDB, err := db.DB()
 	if err != nil {
-		return connector.NewError(c.name, connector.ErrConnection, err, false)
+		c.logger.ErrorContext(ctx, "获取MySQL底层连接失败", clog.String("name", c.name), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConnection, err, false)
 	}
 
 	// 设置连接池参数
@@ -87,12 +102,14 @@ func (c *mysqlConnector) Connect(ctx context.Context) error {
 
 	if err := sqlDB.PingContext(ctx); err != nil {
 		sqlDB.Close()
-		return connector.NewError(c.name, connector.ErrConnection, err, true)
+		c.logger.ErrorContext(ctx, "MySQL连接测试失败", clog.String("name", c.name), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConnection, err, true)
 	}
 
 	c.client = db
 	c.healthy = true
 
+	c.logger.InfoContext(ctx, "MySQL连接成功", clog.String("name", c.name))
 	return nil
 }
 
@@ -105,18 +122,23 @@ func (c *mysqlConnector) Close() error {
 		return nil
 	}
 
+	c.logger.Info("正在关闭MySQL连接", clog.String("name", c.name))
+
 	sqlDB, err := c.client.DB()
 	if err != nil {
+		c.logger.Error("关闭MySQL连接时获取底层连接失败", clog.String("name", c.name), clog.Error(err))
 		return err
 	}
 
 	if err := sqlDB.Close(); err != nil {
+		c.logger.Error("关闭MySQL连接失败", clog.String("name", c.name), clog.Error(err))
 		return err
 	}
 
 	c.client = nil
 	c.healthy = false
 
+	c.logger.Info("MySQL连接已关闭", clog.String("name", c.name))
 	return nil
 }
 
@@ -126,13 +148,15 @@ func (c *mysqlConnector) HealthCheck(ctx context.Context) error {
 	defer c.mu.RUnlock()
 
 	if c.client == nil {
-		return connector.NewError(c.name, connector.ErrClosed, fmt.Errorf("连接已关闭"), false)
+		c.logger.WarnContext(ctx, "MySQL健康检查失败：连接已关闭", clog.String("name", c.name))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrClosed, fmt.Errorf("连接已关闭"), false)
 	}
 
 	sqlDB, err := c.client.DB()
 	if err != nil {
 		c.healthy = false
-		return connector.NewError(c.name, connector.ErrHealthCheck, err, true)
+		c.logger.ErrorContext(ctx, "MySQL健康检查失败：获取底层连接失败", clog.String("name", c.name), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrHealthCheck, err, true)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -140,7 +164,8 @@ func (c *mysqlConnector) HealthCheck(ctx context.Context) error {
 
 	if err := sqlDB.PingContext(ctx); err != nil {
 		c.healthy = false
-		return connector.NewError(c.name, connector.ErrHealthCheck, err, true)
+		c.logger.ErrorContext(ctx, "MySQL健康检查失败：Ping失败", clog.String("name", c.name), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrHealthCheck, err, true)
 	}
 
 	c.healthy = true
@@ -164,6 +189,11 @@ func (c *mysqlConnector) GetClient() *gorm.DB {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.client
+}
+
+// GetLogger 获取日志器
+func (c *mysqlConnector) GetLogger() clog.Logger {
+	return c.logger
 }
 
 // Validate 验证配置
@@ -200,20 +230,23 @@ func (c *mysqlConnector) Validate() error {
 }
 
 // Reload 重载配置（可选实现）
-func (c *mysqlConnector) Reload(ctx context.Context, newConfig connector.Configurable) error {
+func (c *mysqlConnector) Reload(ctx context.Context, newConfig pkgconnector.Configurable) error {
 	// 验证新配置
 	if err := newConfig.Validate(); err != nil {
 		return err
 	}
 
 	// 类型断言
-	newMySQLConfig, ok := newConfig.(connector.MySQLConfig)
+	newMySQLConfig, ok := newConfig.(pkgconnector.MySQLConfig)
 	if !ok {
 		return fmt.Errorf("配置类型不匹配，期望 MySQLConfig")
 	}
 
+	c.logger.InfoContext(ctx, "正在重载MySQL配置", clog.String("name", c.name))
+
 	// 关闭现有连接
 	if err := c.Close(); err != nil {
+		c.logger.ErrorContext(ctx, "重载MySQL配置时关闭连接失败", clog.String("name", c.name), clog.Error(err))
 		return err
 	}
 
@@ -221,6 +254,8 @@ func (c *mysqlConnector) Reload(ctx context.Context, newConfig connector.Configu
 	c.mu.Lock()
 	c.config = newMySQLConfig
 	c.mu.Unlock()
+
+	c.logger.InfoContext(ctx, "MySQL配置已重载，正在重新连接", clog.String("name", c.name))
 
 	// 重新连接
 	return c.Connect(ctx)

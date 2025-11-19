@@ -1,4 +1,4 @@
-// internal/connector/redis_new.go
+// internal/connector/redis.go
 package connector
 
 import (
@@ -7,27 +7,30 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/connector"
+	"github.com/ceyewan/genesis/pkg/clog"
+	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
 	"github.com/redis/go-redis/v9"
 )
 
 // redisConnector Redis连接器实现
 type redisConnector struct {
 	name    string
-	config  connector.RedisConfig
+	config  pkgconnector.RedisConfig
 	client  *redis.Client
 	healthy bool
 	mu      sync.RWMutex
 	phase   int
+	logger  clog.Logger
 }
 
 // NewRedisConnector 创建新的Redis连接器
-func NewRedisConnector(name string, config connector.RedisConfig) connector.RedisConnector {
+func NewRedisConnector(name string, config pkgconnector.RedisConfig, logger clog.Logger) pkgconnector.RedisConnector {
 	return &redisConnector{
 		name:    name,
 		config:  config,
 		healthy: false,
 		phase:   10, // 连接器阶段
+		logger:  logger,
 	}
 }
 
@@ -41,9 +44,12 @@ func (c *redisConnector) Connect(ctx context.Context) error {
 		return nil
 	}
 
+	c.logger.InfoContext(ctx, "正在建立Redis连接", clog.String("name", c.name), clog.String("addr", c.config.Addr))
+
 	// 验证配置
 	if err := c.Validate(); err != nil {
-		return connector.NewError(c.name, connector.ErrConfig, err, false)
+		c.logger.ErrorContext(ctx, "Redis配置验证失败", clog.String("name", c.name), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConfig, err, false)
 	}
 
 	// 创建Redis客户端
@@ -67,12 +73,14 @@ func (c *redisConnector) Connect(ctx context.Context) error {
 
 	if err := client.Ping(ctx).Err(); err != nil {
 		client.Close()
-		return connector.NewError(c.name, connector.ErrConnection, err, true)
+		c.logger.ErrorContext(ctx, "Redis连接测试失败", clog.String("name", c.name), clog.String("addr", c.config.Addr), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrConnection, err, true)
 	}
 
 	c.client = client
 	c.healthy = true
 
+	c.logger.InfoContext(ctx, "Redis连接成功", clog.String("name", c.name), clog.String("addr", c.config.Addr))
 	return nil
 }
 
@@ -85,13 +93,17 @@ func (c *redisConnector) Close() error {
 		return nil
 	}
 
+	c.logger.Info("正在关闭Redis连接", clog.String("name", c.name), clog.String("addr", c.config.Addr))
+
 	if err := c.client.Close(); err != nil {
+		c.logger.Error("关闭Redis连接失败", clog.String("name", c.name), clog.String("addr", c.config.Addr), clog.Error(err))
 		return err
 	}
 
 	c.client = nil
 	c.healthy = false
 
+	c.logger.Info("Redis连接已关闭", clog.String("name", c.name), clog.String("addr", c.config.Addr))
 	return nil
 }
 
@@ -101,7 +113,8 @@ func (c *redisConnector) HealthCheck(ctx context.Context) error {
 	defer c.mu.RUnlock()
 
 	if c.client == nil {
-		return connector.NewError(c.name, connector.ErrClosed, fmt.Errorf("连接已关闭"), false)
+		c.logger.WarnContext(ctx, "Redis健康检查失败：连接已关闭", clog.String("name", c.name))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrClosed, fmt.Errorf("连接已关闭"), false)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -109,7 +122,8 @@ func (c *redisConnector) HealthCheck(ctx context.Context) error {
 
 	if err := c.client.Ping(ctx).Err(); err != nil {
 		c.healthy = false
-		return connector.NewError(c.name, connector.ErrHealthCheck, err, true)
+		c.logger.ErrorContext(ctx, "Redis健康检查失败：Ping失败", clog.String("name", c.name), clog.Error(err))
+		return pkgconnector.NewError(c.name, pkgconnector.ErrHealthCheck, err, true)
 	}
 
 	c.healthy = true
@@ -140,21 +154,29 @@ func (c *redisConnector) Validate() error {
 	return c.config.Validate()
 }
 
+// GetLogger 获取日志器
+func (c *redisConnector) GetLogger() clog.Logger {
+	return c.logger
+}
+
 // Reload 重载配置（可选实现）
-func (c *redisConnector) Reload(ctx context.Context, newConfig connector.Configurable) error {
+func (c *redisConnector) Reload(ctx context.Context, newConfig pkgconnector.Configurable) error {
 	// 验证新配置
 	if err := newConfig.Validate(); err != nil {
 		return err
 	}
 
 	// 类型断言
-	newRedisConfig, ok := newConfig.(connector.RedisConfig)
+	newRedisConfig, ok := newConfig.(pkgconnector.RedisConfig)
 	if !ok {
 		return fmt.Errorf("配置类型不匹配，期望 RedisConfig")
 	}
 
+	c.logger.InfoContext(ctx, "正在重载Redis配置", clog.String("name", c.name))
+
 	// 关闭现有连接
 	if err := c.Close(); err != nil {
+		c.logger.ErrorContext(ctx, "重载Redis配置时关闭连接失败", clog.String("name", c.name), clog.Error(err))
 		return err
 	}
 
@@ -162,6 +184,8 @@ func (c *redisConnector) Reload(ctx context.Context, newConfig connector.Configu
 	c.mu.Lock()
 	c.config = newRedisConfig
 	c.mu.Unlock()
+
+	c.logger.InfoContext(ctx, "Redis配置已重载，正在重新连接", clog.String("name", c.name))
 
 	// 重新连接
 	return c.Connect(ctx)

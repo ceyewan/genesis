@@ -18,6 +18,7 @@ type MySQLConfig struct {
 	MaxIdleConns int           // 最大空闲连接数
 	MaxOpenConns int           // 最大打开连接数
 	MaxLifetime  time.Duration // 连接最大生命周期
+	LogNamespace string        // 日志命名空间，如 "user-service.db"
 }
 
 // Validate 实现 Configurable 接口
@@ -48,6 +49,7 @@ type RedisConfig struct {
 	DialTimeout  time.Duration // 连接超时（默认5s）
 	ReadTimeout  time.Duration // 读取超时（默认3s）
 	WriteTimeout time.Duration // 写入超时（默认3s）
+	LogNamespace string        // 日志命名空间，如 "user-service.cache"
 }
 
 // Validate 实现 Configurable 接口
@@ -87,6 +89,7 @@ type EtcdConfig struct {
 	Timeout          time.Duration // 连接超时（默认5s）
 	KeepAliveTime    time.Duration // 心跳间隔（默认10s）
 	KeepAliveTimeout time.Duration // 心跳超时（默认3s）
+	LogNamespace     string        // 日志命名空间，如 "user-service.etcd"
 }
 
 // Validate 实现 Configurable 接口
@@ -118,6 +121,7 @@ type NATSConfig struct {
 	PingInterval  time.Duration // ping间隔（默认2m）
 	MaxPingsOut   int           // 最大未响应ping数（默认2）
 	Timeout       time.Duration // 连接超时（默认5s）
+	LogNamespace  string        // 日志命名空间，如 "user-service.mq"
 }
 
 // Validate 实现 Configurable 接口
