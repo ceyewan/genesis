@@ -102,13 +102,13 @@ Genesis 将按照"在精不在多"的原则逐步演进：
 
 * [ ] **Cache:** 多级缓存接口与实现 (Local + Redis)
 * [x] **MQ:** 消息队列封装 (基于 NATS/Kafka)
-* [ ] **ID Gen:** 分布式 ID 生成器 (Snowflake)
+* [x] **ID Gen:** 分布式 ID 生成器 (Snowflake)
 * [ ] **Metrics:** 统一监控指标 (Prometheus)
 
 ### Phase 3: 微服务治理 (Future)
 
 * [ ] **Rate Limit:** 分布式限流
-* [ ] **Idempotency:** 幂等性控制组件
+* [x] **Idempotency:** 幂等性控制组件
 * [ ] **Registry:** 服务注册与发现
 * [ ] **Config:** 动态配置中心
 * [ ] **Circuit Breaker:** 熔断与降级
