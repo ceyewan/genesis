@@ -49,3 +49,6 @@ Thumbs.db
 # Build output directories
 dist/
 build/
+
+*.zip
+*.tar.gz
