@@ -10,10 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/config/types"
 	"github.com/fsnotify/fsnotify"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
+
+	"github.com/ceyewan/genesis/pkg/config/types"
 )
 
 // viperManager 实现 config.Manager 接口
@@ -270,7 +271,7 @@ func (m *viperManager) Start(ctx context.Context) error {
 }
 
 // notifyWatches 通知所有已注册的监听者配置变更
-func (m *viperManager) notifyWatches(e fsnotify.Event) {
+func (m *viperManager) notifyWatches(_ fsnotify.Event) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
