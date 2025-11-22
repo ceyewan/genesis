@@ -74,11 +74,16 @@ genesis/
 │   │   └── redis/
 └── pkg/
     ├── component/          # 通用功能组件
-    │   └── locking/
+    │   ├── component.go
+    │   └── types/
+    │       ├── interface.go
+    │       └── config.go
     ├── connector/          # 连接器抽象层 (定义接口)
-    │   ├── interface.go
-    │   ├── config.go       # 连接器配置定义
-    │   └── errors.go       # 统一错误定义
+    │   ├── connector.go    # 别名导出
+    │   └── types/
+    │       ├── interface.go
+    │       ├── config.go   # 连接器配置定义
+    │       └── errors.go   # 统一错误定义
     ├── container/          # 核心 DI 容器与生命周期编排
     │   ├── container.go
     │   └── lifecycle.go
@@ -93,8 +98,8 @@ genesis/
 通过定义一组标准接口，确保所有连接器行为一致。
 
 ````go
-// pkg/connector/interface.go
-package connector
+// pkg/connector/types/interface.go
+package types
 
 import "context"
 
@@ -111,6 +116,9 @@ type Connector interface {
     // Name 返回此连接实例的唯一名称（如：mysql.primary）
     Name() string
 }
+
+// Factory 定义了连接器的创建接口
+type Factory[C any] func(cfg C, logger clog.Logger) (Connector, error)
 
 // TypedConnector 是一个泛型接口，用于提供类型安全的客户端访问
 type TypedConnector[T any] interface {
@@ -146,8 +154,8 @@ type RedisConnector interface {
 定义标准的错误类型，便于上层进行统一的错误处理和判断。
 
 ````go
-// pkg/connector/errors.go
-package connector
+// pkg/connector/types/errors.go
+package types
 
 type ErrorType int
 
@@ -190,7 +198,7 @@ package manager
 type Manager[T connector.Connector] struct {
     mu         sync.RWMutex
     instances  map[string]*managedInstance[T] // key 为配置的 hash
-    factory    func(config any) (T, error)    // 创建具体连接器的工厂函数
+    factory    func(config any, logger clog.Logger) (T, error)    // 创建具体连接器的工厂函数
 }
 
 type managedInstance[T connector.Connector] struct {
@@ -198,7 +206,7 @@ type managedInstance[T connector.Connector] struct {
     refCount int32
 }
 
-func (m *Manager[T]) Get(config any) (T, error) {
+func (m *Manager[T]) Get(config any, logger clog.Logger) (T, error) {
     // 1. 计算 config 的 hash
     // 2. 加锁检查 instance 是否已存在
     // 3. 如果存在，增加引用计数并返回
@@ -253,18 +261,28 @@ type Container struct {
     Log       clog.Logger
     DB        db.DB
     Cache     cache.Cache
+    Idgen     idgen.Generator
+    Idem      idem.Idempotent
+    Limit     limit.Limiter
     // ... 其他组件
 
-    lifecycles []Lifecycle // 存储所有需要管理生命周きの对象
+    lifecycles []Lifecycle // 存储所有需要管理生命周期的对象
 }
 
-func New(cfg *Config) (*Container, error) {
-    // 1. 初始化所有 Connectors 和 Components，并将它们注册到 lifecycles 数组中
-    //    - e.g., redisConn, err := redisManager.Get(cfg.Redis)
-    //    - e.g., cacheComponent := cache.New(redisConn)
+func New(cfg *config.AppConfig) (*Container, error) {
+    // 1. 初始化 Logger
+    c.Log = clog.New(cfg.Log)
+
+    // 2. 初始化所有 Connectors (注入 Logger)
+    //    - e.g., redisConn, err := redisManager.Get(cfg.Connectors.Redis["default"], c.Log.WithNamespace("connector.redis.default"))
+
+    // 3. 初始化所有 Components (注入 Logger, Metrics, Connectors)
+    //    - e.g., cacheComponent := cache.New(redisConn, cfg.Components.Cache, cache.WithLogger(c.Log))
+    
+    // 4. 注册到 lifecycles 数组中
     //    - c.lifecycles = append(c.lifecycles, redisConn, cacheComponent)
 
-    // 2. 启动所有生命周期对象
+    // 5. 启动所有生命周期对象
     if err := c.startAll(); err != nil {
         // 如果启动失败，尝试优雅回滚
         c.stopAll()

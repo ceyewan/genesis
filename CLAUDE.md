@@ -82,6 +82,7 @@ internal/               # 具体实现层 - 可替换扩展
 ### 已实现组件
 
 **日志组件 (pkg/log/ + internal/log/zap/)**
+
 - 支持结构化日志 (JSON/Console 格式)
 - 层次化命名空间 (`logger.Namespace("module")`)
 - 上下文感知 (`log.WithContext(ctx)`)
@@ -90,11 +91,13 @@ internal/               # 具体实现层 - 可替换扩展
 - 开发/生产环境配置 (`log.GetDefaultConfig("development")`)
 
 ### 依赖注入模式
+
 - 使用 `go.uber.org/fx` 进行依赖管理
 - 组件通过构造函数接受依赖
 - 生命周期统一管理
 
 ### 配置驱动
+
 - 统一的配置接口 (`config.Provider`)
 - 支持热重载 (`Watch()` 方法)
 - 环境差异化配置 (`GetDefaultConfig(env)`)
@@ -102,6 +105,7 @@ internal/               # 具体实现层 - 可替换扩展
 ## 工作流程
 
 ### 新增组件开发流程
+
 1. **接口定义**: 在 `pkg/component/` 中定义接口
 2. **默认实现**: 在 `internal/component/provider/` 中实现
 3. **单元测试**: 编写核心逻辑测试用例
@@ -110,6 +114,7 @@ internal/               # 具体实现层 - 可替换扩展
 6. **示例代码**: 提供 `*_example_test.go`
 
 ### 日志组件使用示例
+
 ```go
 // 初始化
 config := log.GetDefaultConfig("development")
@@ -127,21 +132,25 @@ userLogger.Error("authentication failed", log.Err(err))
 ## 代码守则
 
 ### 接口设计原则
+
 - 所有接口方法接受 `context.Context` 作为第一个参数
 - 错误处理使用 `fmt.Errorf("...: %w", err)` 包装错误
 - 接口保持最小化，避免过度抽象
 
 ### 实现层约束
+
 - `internal/` 包不能被 `pkg/` 导入
 - 实现不应泄漏第三方依赖到接口层
 - 提供降级方案，避免单点故障
 
 ### 配置管理
+
 - 组件配置通过结构体定义，支持 JSON/YAML 标签
 - 必须提供 `Validate()` 方法检查配置有效性
 - 支持环境变量覆盖
 
 ## 绝对禁止
+
 - 直接向仓库提交明文密钥或凭证
 - 擅自改动用户未交待的历史文件，除非修复因本次改动引发的问题
 - 使用英文与用户或日志交互（除代码与 Go 保留字外）
@@ -150,7 +159,9 @@ userLogger.Error("authentication failed", log.Err(err))
 ## 分布式锁组件设计经验（etcd-lock-optimization）
 
 ### 项目阶段认知
+
 当前处于开发阶段，**不需要考虑API向后兼容性**，优先保证：
+
 - 易用性：一行初始化，简洁API
 - 简单性：避免用户困扰
 - 架构清晰：防止循环依赖
@@ -158,6 +169,7 @@ userLogger.Error("authentication failed", log.Err(err))
 ### 核心设计成果
 
 **新的简单API**：
+
 ```go
 // 一行初始化，全部默认
 locker, err := simple.New(nil, nil)
@@ -176,6 +188,7 @@ locker, err := simple.New(nil, &simple.Option{
 ```
 
 **架构层次（无循环依赖）**：
+
 ```
 pkg/lock/simple/          (新API层)
   ↓
@@ -196,12 +209,14 @@ internal/connector/       (连接管理层)
 ### 避免循环依赖的方法
 
 **验证命令**：
+
 ```bash
 go build ./...                    # 确保编译成功
 go list -json ./pkg/lock/simple   # 检查依赖关系，确认无循环
 ```
 
 **设计要点**：
+
 - 保持单向依赖层次
 - 接口定义在最上层（pkg/lock）
 - 实现层不依赖具体API层
@@ -210,12 +225,14 @@ go list -json ./pkg/lock/simple   # 检查依赖关系，确认无循环
 ### 配置分离策略
 
 **Config（连接相关）**：
+
 - Backend：后端类型
 - Endpoints：连接地址
 - Username/Password：认证信息
 - Timeout：连接超时
 
 **Option（行为相关）**：
+
 - TTL：锁超时时间
 - RetryInterval：重试间隔
 - AutoRenew：自动续期
@@ -224,6 +241,7 @@ go list -json ./pkg/lock/simple   # 检查依赖关系，确认无循环
 ### 性能优化
 
 **连接复用机制**：
+
 - SHA256配置哈希作为连接池key
 - 读写锁优化并发性能
 - 双重检查避免重复创建

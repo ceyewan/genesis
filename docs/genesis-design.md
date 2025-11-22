@@ -31,17 +31,23 @@ Genesis 的设计遵循以下核心原则：
 
 ```mermaid
 graph TD
-    App[应用层 Application] --> Container[核心容器 Container]
+    ConfigFile[配置文件] -->|Load| Config[配置组件]
+    Config -->|AppConfig| Container[核心容器]
+    
+    App[应用层 Application] --> Container
     
     subgraph "Genesis Framework"
-        Container --> Components[组件层 Components]
-        Container --> Connectors[连接器层 Connectors]
+        Container -->|Inject| Components[组件层 Components]
+        Container -->|Inject| Connectors[连接器层 Connectors]
+        Container -->|Inject| Observability[可观测性 Observability]
         
         Components --> Connectors
+        Components --> Observability
         
         subgraph "基础组件"
             Log[clog 日志]
-            Config[配置管理]
+            Config
+            Metrics[Metrics 指标]
         end
         
         subgraph "业务组件"
@@ -107,8 +113,8 @@ Genesis 将按照"在精不在多"的原则逐步演进：
 
 ### Phase 3: 微服务治理 (Future)
 
-* [ ] **Rate Limit:** 分布式限流
-* [x] **Idempotency:** 幂等性控制组件
+* [ ] **Limit:** 分布式限流 (Rate Limit)
+* [x] **Idem:** 幂等性控制组件
 * [ ] **Registry:** 服务注册与发现
 * [ ] **Config:** 动态配置中心
 * [ ] **Circuit Breaker:** 熔断与降级
@@ -135,21 +141,40 @@ genesis/
 └── examples/           # 使用示例
 ```
 
-## 7. 代码组织规范 (Code Organization)
+## 7. 组件开发规范 (Component Specification)
 
-为了解决 Go 语言中常见的循环依赖问题，同时保持 API 的整洁，Genesis 推荐以下组件代码组织结构：
+为了确保框架的一致性和可维护性，所有组件必须遵循 [Component Specification](specs/component-spec.md)。
+
+### 7.1. 初始化模式 (Initialization)
+
+Genesis 采用 **"双模式支持，容器优先"** 的策略：
+
+1.  **容器模式 (Container Mode) - 生产环境推荐:**
+    *   应用通过 `Container` 统一初始化。
+    *   `Container` 负责加载配置、创建连接器、注入依赖（Logger, Metrics）并管理生命周期。
+    *   业务代码只从 `Container` 获取已就绪的组件接口。
+
+2.  **独立模式 (Standalone Mode) - 测试/脚本:**
+    *   组件提供标准的 `New(Config, ...Option)` 工厂函数。
+    *   允许在单元测试或简单工具脚本中独立实例化，不依赖 `Container`。
+
+### 7.2. 依赖注入与可观测性
+
+*   **强制注入:** 组件不得在内部创建 Logger 或 Connector，必须通过构造函数注入。
+*   **日志命名空间:** 组件接收 Logger 后，必须自动派生子命名空间 (e.g., `user-service` -> `user-service.dlock`)。
+*   **配置分离:** 组件只定义配置结构体，不直接读取配置文件。
+
+### 7.3. 代码组织结构
 
 ```text
 pkg/component/
-├── component.go        # 统一入口：包含工厂方法 (New) 和类型别名导出
-└── types/              # 类型定义：包含接口 (Interface) 和配置结构体 (Config)
-    ├── config.go
-    └── interface.go
+├── component.go        # 统一入口：工厂函数 (New) 和类型别名导出
+├── options.go          # Option 定义 (WithLogger, WithMetrics)
+└── types/              # 类型定义
+    ├── config.go       # 配置结构体
+    ├── interface.go    # 核心接口
+    └── errors.go       # 错误定义
 internal/component/
-├── component.go        # 核心逻辑实现
+├── impl.go             # 核心实现
 └── ...
 ```
-
-* **`pkg/component/types`**: 定义接口和配置，不依赖其他包，作为最底层依赖。
-* **`internal/component`**: 引用 `pkg/component/types` 实现具体逻辑。
-* **`pkg/component`**: 引用 `internal/component` 暴露工厂方法，引用 `pkg/component/types` 导出类型别名，作为用户使用的统一入口。
