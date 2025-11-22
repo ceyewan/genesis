@@ -1,0 +1,80 @@
+# Genesis Framework Configuration
+app:
+  name:        "genesis"
+  version:     "1.0.0"
+  environment: "development"
+  debug:       true
+
+# MySQL Configuration
+mysql:
+  host:          "localhost"
+  port:          3306
+  username:      "root"
+  password:      "your_mysql_password"
+  database:      "genesis_db"
+  charset:       "utf8mb4"
+  timeout:       "10s"
+  max_open_conns: 100
+  max_idle_conns: 10
+  max_lifetime:   "1h"
+
+# Redis Configuration
+redis:
+  addr:           "localhost:6379"
+  password:       "your_redis_password"
+  db:             0
+  max_retries:    3
+  pool_size:      100
+  min_idle_conns: 10
+  dial_timeout:   "5s"
+  read_timeout:   "3s"
+  write_timeout:  "3s"
+
+# Cache Configuration - 包含 Redis 配置和缓存特有配置
+cache:
+  # 继承 Redis 配置
+  redis:
+    addr:           "localhost:6379"
+    password:       "your_redis_password"
+    db:             1  # 缓存使用不同的 DB
+    max_retries:    3
+    pool_size:      50  # 缓存使用较小的连接池
+    min_idle_conns: 5
+    dial_timeout:   "5s"
+    read_timeout:   "3s"
+    write_timeout:  "3s"
+  
+  # 缓存特有配置
+  prefix:         "genesis:cache:"     # 缓存键前缀
+  serializer:     "msgpack"            # 序列化方式: json, msgpack, protobuf
+  default_ttl:    "1h"                 # 默认过期时间
+  max_key_length: 250                  # 最大键长度
+  compression:    true                 # 是否启用压缩
+  compression_threshold: 1024          # 压缩阈值（字节）
+
+nats:
+  urls:            ["nats://localhost:4222"]
+  name:           "genesis-mq"
+  reconnect_wait: "2s"
+  max_reconnects: 60
+  ping_interval:  "2m"
+  max_pings_out:  2
+  timeout:        "5s"
+
+# Etcd Configuration
+etcd:
+  endpoints:          ["localhost:2379"]
+  username:           ""
+  password:           ""
+  timeout:            "5s"
+  keep_alive_time:    "10s"
+  keep_alive_timeout: "3s"
+
+# Logging Configuration
+clog:
+  level:       "info"
+  format:      "console"
+  output:      "stdout"
+  enable_color: false
+  add_source:  true
+  source_root: "genesis"
