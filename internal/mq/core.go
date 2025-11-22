@@ -4,10 +4,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/mq/types"
-	"github.com/nats-io/nats.go"
 )
 
 // coreClient NATS Core 模式实现

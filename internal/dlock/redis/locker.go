@@ -8,10 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/dlock/types"
-	"github.com/redis/go-redis/v9"
 )
 
 type RedisLocker struct {

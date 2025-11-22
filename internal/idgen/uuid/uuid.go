@@ -3,8 +3,9 @@ package uuid
 import (
 	"fmt"
 
-	"github.com/ceyewan/genesis/pkg/idgen/types"
 	"github.com/google/uuid"
+
+	"github.com/ceyewan/genesis/pkg/idgen/types"
 )
 
 // Generator UUID 生成器实现

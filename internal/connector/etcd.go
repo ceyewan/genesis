@@ -8,9 +8,10 @@ import (
 	"sync"
 	"time"
 
+	clientv3 "go.etcd.io/etcd/client/v3"
+
 	"github.com/ceyewan/genesis/pkg/clog"
 	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
-	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 // etcdConnector Etcd连接器实现
@@ -165,9 +166,9 @@ func (c *etcdConnector) Reload(ctx context.Context, newConfig pkgconnector.Confi
 	}
 
 	// 类型断言
-	newEtcdConfig, ok := newConfig.(pkgconnector.EtcdConfig)
+	newEtcdConfig, ok := newConfig.(*pkgconnector.EtcdConfig)
 	if !ok {
-		return fmt.Errorf("配置类型不匹配，期望 EtcdConfig")
+		return fmt.Errorf("配置类型不匹配，期望 *EtcdConfig")
 	}
 
 	c.logger.InfoContext(ctx, "正在重载Etcd配置", clog.String("name", c.name))
@@ -180,7 +181,7 @@ func (c *etcdConnector) Reload(ctx context.Context, newConfig pkgconnector.Confi
 
 	// 更新配置
 	c.mu.Lock()
-	c.config = newEtcdConfig
+	c.config = *newEtcdConfig
 	c.mu.Unlock()
 
 	c.logger.InfoContext(ctx, "Etcd配置已重载，正在重新连接", clog.String("name", c.name))

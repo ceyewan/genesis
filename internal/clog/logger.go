@@ -163,7 +163,11 @@ func (l *loggerImpl) log(ctx context.Context, level types.Level, msg string, fie
 		return
 	}
 
-	l.handler.Handle(ctx, record)
+	err := l.handler.Handle(ctx, record)
+	if err != nil {
+		// 处理日志处理错误（可选）
+		return
+	}
 
 	if level == types.FatalLevel {
 		os.Exit(1)

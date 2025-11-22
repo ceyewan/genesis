@@ -183,54 +183,12 @@ func (m *viperManager) Watch(ctx context.Context, key string) (<-chan Event, err
 ### Phase 1: 本地文件 + 环境变量 (Current)
 
 * [x] 定义 `pkg/config` 接口。
-* [ ] 实现基于 Viper 的文件加载与环境变量覆盖。
-* [ ] 实现 `Watch` 机制 (Channel based)。
-* [ ] 集成到 `pkg/container`。
+* [x] 实现基于 Viper 的文件加载与环境变量覆盖。
+* [x] 实现 `Watch` 机制 (Channel based)。
+* [x] 集成到 `pkg/container`。
 
 ### Phase 2: 远程配置中心 (Future)
 
 * [ ] 集成 Viper Remote Provider (Etcd)。
 * [ ] 实现配置版本管理。
 * [ ] 实现配置回滚。
-
-## 5. 使用示例
-
-```go
-func main() {
-    ctx := context.Background()
-
-    // 1. 初始化配置管理器
-    cfgMgr, err := config.New(
-        config.WithConfigName("config"),
-        config.WithConfigPath("./config"),
-        config.WithEnvPrefix("GENESIS"),
-    )
-    
-    // 2. 加载配置 (Bootstrap)
-    if err := cfgMgr.Load(ctx); err != nil {
-        panic(err)
-    }
-
-    // 3. 解析配置
-    var appCfg container.Config
-    if err := cfgMgr.Unmarshal(&appCfg); err != nil {
-        panic(err)
-    }
-
-    // 4. 启动配置管理器 (开启 Watch)
-    if err := cfgMgr.Start(ctx); err != nil {
-        panic(err)
-    }
-    defer cfgMgr.Stop(ctx)
-
-    // 5. 监听变化示例
-    events, _ := cfgMgr.Watch(ctx, "log.level")
-    go func() {
-        for e := range events {
-            fmt.Printf("Log level changed: %v\n", e.Value)
-        }
-    }()
-
-    // 6. 启动容器
-    // app, err := container.New(&appCfg) ...
-}

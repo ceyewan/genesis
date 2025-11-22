@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/mq/types"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 // jetStreamClient NATS JetStream 模式实现
@@ -81,7 +82,7 @@ func (c *jetStreamClient) QueueSubscribe(ctx context.Context, subject string, qu
 	return c.consume(ctx, consumer, handler)
 }
 
-func (c *jetStreamClient) consume(ctx context.Context, consumer jetstream.Consumer, handler types.Handler) (types.Subscription, error) {
+func (c *jetStreamClient) consume(_ context.Context, consumer jetstream.Consumer, handler types.Handler) (types.Subscription, error) {
 	cons, err := consumer.Consume(func(msg jetstream.Msg) {
 		m := &jetStreamMessage{msg: msg}
 
