@@ -5,7 +5,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/idgen"
@@ -42,7 +41,7 @@ func snowflakeStaticExample() {
 	}
 
 	// Static 模式不需要连接器
-	gen, err := idgen.NewSnowflake(cfg, nil, nil)
+	gen, err := idgen.NewSnowflake(cfg, nil, nil) // 使用默认 Logger
 	if err != nil {
 		log.Printf("Failed to create static snowflake: %v\n", err)
 		return
@@ -79,7 +78,6 @@ func snowflakeRedisExample() {
 	// 1. 使用 Container 初始化 Redis 连接器
 	// 这是获取连接器的标准方式，避免直接依赖 internal 包
 	containerCfg := &container.Config{
-		Log: &clog.Config{Level: "info", Format: "console", Output: "stdout"}, // 减少日志干扰
 		Redis: &connector.RedisConfig{
 			Addr:        "127.0.0.1:6379",
 			Password:    "your_redis_password",
@@ -130,7 +128,6 @@ func snowflakeEtcdExample() {
 
 	// 1. 使用 Container 初始化 Etcd 连接器
 	containerCfg := &container.Config{
-		Log: &clog.Config{Level: "info", Format: "console", Output: "stdout"},
 		Etcd: &connector.EtcdConfig{
 			Endpoints: []string{"127.0.0.1:2379"},
 			Timeout:   2 * time.Second,

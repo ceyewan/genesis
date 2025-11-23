@@ -8,19 +8,20 @@ import (
 
 	"github.com/ceyewan/genesis/internal/connector"
 	"github.com/ceyewan/genesis/internal/connector/manager"
-	internaldb "github.com/ceyewan/genesis/internal/db"
+	"github.com/ceyewan/genesis/pkg/cache"
+	cachetypes "github.com/ceyewan/genesis/pkg/cache/types"
 	"github.com/ceyewan/genesis/pkg/clog"
 	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
 	pkgdb "github.com/ceyewan/genesis/pkg/db"
 	"github.com/ceyewan/genesis/pkg/dlock"
 	dlocktypes "github.com/ceyewan/genesis/pkg/dlock/types"
 	"github.com/ceyewan/genesis/pkg/mq"
+	"github.com/ceyewan/genesis/pkg/telemetry"
+	"github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 // Config 容器配置
 type Config struct {
-	// 日志配置
-	Log *clog.Config `json:"log" yaml:"log"`
 	// MySQL 配置
 	MySQL *pkgconnector.MySQLConfig
 	// Redis 配置
@@ -31,10 +32,14 @@ type Config struct {
 	NATS *pkgconnector.NATSConfig
 	// DB 组件配置
 	DB *pkgdb.Config
+	// Cache 组件配置
+	Cache *cachetypes.Config
 	// DLock 组件配置
 	DLock *dlock.Config
 	// MQ 组件配置
 	MQ *mq.Config
+	// Telemetry 配置
+	Telemetry *telemetry.Config
 }
 
 // Container 应用容器，管理所有组件和连接器
@@ -44,11 +49,17 @@ type Container struct {
 	// 数据库组件
 	DB pkgdb.DB
 	// 缓存组件
-	Cache Cache
+	Cache cachetypes.Cache
 	// 分布式锁组件
 	DLock dlock.Locker
 	// 消息队列组件
 	MQ mq.Client
+	// Telemetry 组件
+	Telemetry telemetry.Telemetry
+	// Meter 指标接口
+	Meter types.Meter
+	// Tracer 链路追踪接口
+	Tracer types.Tracer
 
 	// 配置
 	config *Config
@@ -63,16 +74,54 @@ type Container struct {
 	lifecycleManager *LifecycleManager
 }
 
+// Option 容器选项函数
+type Option func(*Container)
+
+// WithLogger 注入外部 Logger
+func WithLogger(logger clog.Logger) Option {
+	return func(c *Container) {
+		c.Log = logger
+	}
+}
+
+// WithTracer 注入外部 Tracer
+func WithTracer(tracer types.Tracer) Option {
+	return func(c *Container) {
+		c.Tracer = tracer
+	}
+}
+
+// WithMeter 注入外部 Meter
+func WithMeter(meter types.Meter) Option {
+	return func(c *Container) {
+		c.Meter = meter
+	}
+}
+
 // New 创建新的容器实例
-func New(cfg *Config) (*Container, error) {
+// cfg: 容器配置，包含各组件和连接器的配置
+// opts: 可选参数，用于注入 Logger、Tracer、Meter 等
+func New(cfg *Config, opts ...Option) (*Container, error) {
 	c := &Container{
 		config:           cfg,
 		lifecycleManager: NewLifecycleManager(),
 	}
 
-	// 初始化日志
-	if err := c.initLogger(); err != nil {
-		return nil, fmt.Errorf("初始化日志失败: %w", err)
+	// 应用选项
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	// 初始化日志 (如果未通过 Option 注入)
+	if c.Log == nil {
+		if err := c.initLogger(); err != nil {
+			return nil, fmt.Errorf("初始化日志失败: %w", err)
+		}
+	}
+
+	// 初始化 Telemetry (如果配置了且未通过 Option 注入)
+	if err := c.initTelemetry(); err != nil {
+		return nil, fmt.Errorf("初始化 Telemetry 失败: %w", err)
 	}
 
 	// 初始化连接器管理器
@@ -101,19 +150,13 @@ func New(cfg *Config) (*Container, error) {
 
 // initLogger 初始化日志
 func (c *Container) initLogger() error {
-	// 使用clog系统初始化日志
-	var logConfig *clog.Config
-	if c.config != nil && c.config.Log != nil {
-		logConfig = c.config.Log
-	} else {
-		// 默认配置
-		logConfig = &clog.Config{
-			Level:       "info",
-			Format:      "console",
-			Output:      "stdout",
-			AddSource:   true,
-			EnableColor: false,
-		}
+	// 使用默认配置创建日志
+	logConfig := &clog.Config{
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,
+		EnableColor: false,
 	}
 
 	logger, err := clog.New(logConfig, &clog.Option{
@@ -125,6 +168,59 @@ func (c *Container) initLogger() error {
 
 	c.Log = logger
 	return nil
+}
+
+// initTelemetry 初始化 Telemetry (如果配置了且未通过 Option 注入)
+func (c *Container) initTelemetry() error {
+	// 如果已经通过 Option 注入了 Meter 和 Tracer，则跳过
+	if c.Meter != nil && c.Tracer != nil {
+		return nil
+	}
+
+	// 如果没有配置 Telemetry，则跳过
+	if c.config.Telemetry == nil {
+		return nil
+	}
+
+	// 创建 Telemetry 实例
+	tel, err := telemetry.New(c.config.Telemetry)
+	if err != nil {
+		return fmt.Errorf("创建 Telemetry 失败: %w", err)
+	}
+
+	c.Telemetry = tel
+	c.Meter = tel.Meter()
+	c.Tracer = tel.Tracer()
+
+	// 注册 Telemetry 到生命周期管理 (Phase 0，最先启动)
+	c.lifecycleManager.Register("telemetry", &telemetryLifecycle{
+		tel:   tel,
+		phase: PhaseLogger, // Phase 0
+	})
+
+	return nil
+}
+
+// telemetryLifecycle 包装 Telemetry 以实现 Lifecycle 接口
+type telemetryLifecycle struct {
+	tel   telemetry.Telemetry
+	phase int
+}
+
+func (t *telemetryLifecycle) Start(ctx context.Context) error {
+	// Telemetry 在 New 时已经初始化，无需额外启动
+	return nil
+}
+
+func (t *telemetryLifecycle) Stop(ctx context.Context) error {
+	if t.tel != nil {
+		return t.tel.Shutdown(ctx)
+	}
+	return nil
+}
+
+func (t *telemetryLifecycle) Phase() int {
+	return t.phase
 }
 
 // initManagers 初始化连接器管理器
@@ -260,22 +356,13 @@ func (c *Container) initConnectors(cfg *Config) error {
 // initComponents 初始化组件
 func (c *Container) initComponents(cfg *Config) error {
 	// 初始化数据库组件
-	if cfg.DB != nil && cfg.MySQL != nil {
-		// 获取 MySQL 连接器
-		// 注意：这里假设 DB 组件使用主 MySQL 配置
-		// 在更复杂的场景中，可能需要专门的 DB 连接配置
-		mysqlConnector, err := c.mysqlManager.Get(*cfg.MySQL)
-		if err != nil {
-			return fmt.Errorf("获取MySQL连接器失败: %w", err)
-		}
+	if err := c.initDB(cfg); err != nil {
+		return fmt.Errorf("初始化数据库组件失败: %w", err)
+	}
 
-		database, err := internaldb.New(mysqlConnector, cfg.DB)
-		if err != nil {
-			return fmt.Errorf("创建数据库组件失败: %w", err)
-		}
-		c.DB = database
-		// 注册到生命周期管理（如果 DB 组件实现了 Lifecycle 接口）
-		// 目前 DB 组件没有显式实现 Lifecycle，因为 GORM 连接由 Connector 管理
+	// 初始化缓存组件
+	if err := c.initCache(cfg); err != nil {
+		return fmt.Errorf("初始化缓存组件失败: %w", err)
 	}
 
 	// 初始化分布式锁组件
@@ -291,6 +378,36 @@ func (c *Container) initComponents(cfg *Config) error {
 	return nil
 }
 
+// initDB 初始化数据库组件
+func (c *Container) initDB(cfg *Config) error {
+	if cfg.DB == nil {
+		return nil
+	}
+
+	if cfg.MySQL == nil {
+		return fmt.Errorf("db 组件需要 MySQL 配置")
+	}
+
+	// 获取 MySQL 连接器
+	mysqlConnector, err := c.mysqlManager.Get(*cfg.MySQL)
+	if err != nil {
+		return fmt.Errorf("获取 MySQL 连接器失败: %w", err)
+	}
+
+	// 创建 DB 实例 (使用 Option 模式)
+	database, err := pkgdb.New(mysqlConnector, cfg.DB,
+		pkgdb.WithLogger(c.Log),
+		pkgdb.WithMeter(c.Meter),
+		pkgdb.WithTracer(c.Tracer),
+	)
+	if err != nil {
+		return fmt.Errorf("创建数据库组件失败: %w", err)
+	}
+
+	c.DB = database
+	return nil
+}
+
 // initMQ 初始化消息队列组件
 func (c *Container) initMQ(cfg *Config) error {
 	if cfg.MQ == nil {
@@ -298,22 +415,23 @@ func (c *Container) initMQ(cfg *Config) error {
 	}
 
 	if cfg.NATS == nil {
-		return fmt.Errorf("mq component requires nats config")
+		return fmt.Errorf("mq 组件需要 NATS 配置")
 	}
 
 	// 获取 NATS 连接器
 	natsConn, err := c.GetNATSConnector(*cfg.NATS)
 	if err != nil {
-		return fmt.Errorf("failed to get nats connector: %w", err)
+		return fmt.Errorf("获取 NATS 连接器失败: %w", err)
 	}
 
-	// 派生 mq 专用的 Logger
-	mqLogger := c.Log.WithNamespace("mq")
-
-	// 创建 MQ 客户端
-	client, err := mq.New(natsConn, cfg.MQ, mqLogger)
+	// 创建 MQ 客户端 (使用 Option 模式)
+	client, err := mq.New(natsConn, cfg.MQ,
+		mq.WithLogger(c.Log),
+		mq.WithMeter(c.Meter),
+		mq.WithTracer(c.Tracer),
+	)
 	if err != nil {
-		return fmt.Errorf("failed to create mq client: %w", err)
+		return fmt.Errorf("创建 MQ 客户端失败: %w", err)
 	}
 
 	c.MQ = client
@@ -326,44 +444,89 @@ func (c *Container) initDLock(cfg *Config) error {
 		return nil
 	}
 
-	// 派生 dlock 专用的 Logger
-	dlockLogger := c.Log.WithNamespace("dlock")
-
 	switch cfg.DLock.Backend {
 	case dlocktypes.BackendRedis:
 		if cfg.Redis == nil {
-			return fmt.Errorf("redis backend requires redis config")
+			return fmt.Errorf("dlock redis 后端需要 Redis 配置")
 		}
 		// 获取 Redis 连接器
 		redisConn, err := c.GetRedisConnector(*cfg.Redis)
 		if err != nil {
-			return fmt.Errorf("failed to get redis connector: %w", err)
+			return fmt.Errorf("获取 Redis 连接器失败: %w", err)
 		}
-		// 创建 dlock
-		locker, err := dlock.NewRedis(redisConn, cfg.DLock, dlockLogger)
+		// 创建 DLock 实例 (使用 Option 模式)
+		locker, err := dlock.NewRedis(redisConn, cfg.DLock,
+			dlock.WithLogger(c.Log),
+			dlock.WithMeter(c.Meter),
+			dlock.WithTracer(c.Tracer),
+		)
 		if err != nil {
-			return fmt.Errorf("failed to create redis locker: %w", err)
+			return fmt.Errorf("创建 Redis DLock 失败: %w", err)
 		}
 		c.DLock = locker
 	case dlocktypes.BackendEtcd:
 		if cfg.Etcd == nil {
-			return fmt.Errorf("etcd backend requires etcd config")
+			return fmt.Errorf("dlock etcd 后端需要 Etcd 配置")
 		}
 		// 获取 Etcd 连接器
 		etcdConn, err := c.GetEtcdConnector(*cfg.Etcd)
 		if err != nil {
-			return fmt.Errorf("failed to get etcd connector: %w", err)
+			return fmt.Errorf("获取 Etcd 连接器失败: %w", err)
 		}
-		// 创建 dlock
-		locker, err := dlock.NewEtcd(etcdConn, cfg.DLock, dlockLogger)
+		// 创建 DLock 实例 (使用 Option 模式)
+		locker, err := dlock.NewEtcd(etcdConn, cfg.DLock,
+			dlock.WithLogger(c.Log),
+			dlock.WithMeter(c.Meter),
+			dlock.WithTracer(c.Tracer),
+		)
 		if err != nil {
-			return fmt.Errorf("failed to create etcd locker: %w", err)
+			return fmt.Errorf("创建 Etcd DLock 失败: %w", err)
 		}
 		c.DLock = locker
 	default:
-		return fmt.Errorf("unsupported dlock backend: %s", cfg.DLock.Backend)
+		return fmt.Errorf("不支持的 DLock 后端: %s", cfg.DLock.Backend)
 	}
 
+	return nil
+}
+
+// initCache 初始化缓存组件
+func (c *Container) initCache(cfg *Config) error {
+	if cfg.Cache == nil {
+		return nil
+	}
+
+	if cfg.Redis == nil {
+		return fmt.Errorf("cache 组件需要 Redis 配置")
+	}
+
+	// 获取 Redis 连接器
+	redisConn, err := c.GetRedisConnector(*cfg.Redis)
+	if err != nil {
+		return fmt.Errorf("获取 Redis 连接器失败: %w", err)
+	}
+
+	// 创建缓存实例，注入 Logger, Meter, Tracer
+	cacheInstance, err := cache.New(redisConn, cfg.Cache,
+		cache.WithLogger(c.Log),
+		cache.WithMeter(c.Meter),
+		cache.WithTracer(c.Tracer),
+	)
+	if err != nil {
+		return fmt.Errorf("创建缓存组件失败: %w", err)
+	}
+
+	c.Cache = cacheInstance
+	return nil
+}
+
+// Start 启动容器中所有已注册的生命周期组件
+// 按照 Phase 顺序启动 (Phase 越小越先启动)
+// 如果注册了 ConfigManager，会在此时启动配置监听
+func (c *Container) Start(ctx context.Context) error {
+	if c.lifecycleManager != nil {
+		return c.lifecycleManager.StartAll(ctx)
+	}
 	return nil
 }
 
@@ -410,4 +573,22 @@ func (c *Container) GetNATSConnector(config pkgconnector.NATSConfig) (pkgconnect
 	return c.natsManager.Get(config)
 }
 
-type Cache interface{}
+// RegisterConfigManager 注册配置管理器到容器的生命周期管理
+// ConfigManager 应该在 Container 之外创建和加载，然后通过此方法注册
+// 这样 Container 会在启动时调用 ConfigManager.Start() 启动配置监听
+// 在关闭时调用 ConfigManager.Stop() 停止监听
+//
+// 使用示例:
+//
+//	cfgMgr, _ := config.New(...)
+//	_ = cfgMgr.Load(ctx)
+//	app, _ := container.New(cfg)
+//	app.RegisterConfigManager(cfgMgr)
+//	_ = app.Start(ctx) // 会自动启动 ConfigManager
+func (c *Container) RegisterConfigManager(mgr interface {
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+	Phase() int
+}) {
+	c.lifecycleManager.Register("config-manager", mgr)
+}

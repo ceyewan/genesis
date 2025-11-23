@@ -12,6 +12,7 @@ import (
 	"github.com/ceyewan/genesis/pkg/cache/types"
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
+	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 type redisCache struct {
@@ -19,10 +20,12 @@ type redisCache struct {
 	serializer serializer.Serializer
 	prefix     string
 	logger     clog.Logger
+	meter      telemetrytypes.Meter
+	tracer     telemetrytypes.Tracer
 }
 
 // New 创建 Redis 缓存实例
-func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger) (types.Cache, error) {
+func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) (types.Cache, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("redis 连接器为 nil")
 	}
@@ -30,9 +33,20 @@ func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger) (
 		return nil, fmt.Errorf("配置为 nil")
 	}
 
-	s, err := serializer.New(cfg.Serializer)
+	// 设置默认序列化器
+	serializerType := cfg.Serializer
+	if serializerType == "" {
+		serializerType = "json" // 默认使用 JSON
+	}
+
+	s, err := serializer.New(serializerType)
 	if err != nil {
 		return nil, err
+	}
+
+	// 如果没有提供 logger，使用默认 logger
+	if logger == nil {
+		logger = clog.Default()
 	}
 
 	return &redisCache{
@@ -40,6 +54,8 @@ func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger) (
 		serializer: s,
 		prefix:     cfg.Prefix,
 		logger:     logger,
+		meter:      meter,
+		tracer:     tracer,
 	}, nil
 }
 

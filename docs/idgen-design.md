@@ -24,12 +24,14 @@
 
 ```text
 pkg/idgen/
-├── idgen.go            # 工厂方法 (NewSnowflake, NewUUID)
+├── idgen.go            # 工厂方法 (NewSnowflake, NewUUID) + 类型导出
+├── options.go          # Option 模式定义
 └── types/
     ├── config.go       # 配置定义
     └── interface.go    # 公开接口 (Generator)
 
 internal/idgen/
+├── factory.go          # 内部工厂函数
 ├── snowflake/          # Snowflake 核心算法
 ├── uuid/               # UUID 包装
 └── allocator/          # WorkerID 分配器 (核心复杂逻辑)
@@ -127,13 +129,120 @@ idgen:
     key_prefix: "genesis:idgen:worker"
 ```
 
-## 6. 使用示例
+## 6. 组件初始化选项 (Option Pattern)
+
+IDGen 组件支持通过 Option 模式注入可观测性组件：
 
 ```go
-// 初始化
-cfg := config.Load()
-// 自动根据配置选择 Allocator
-gen, err := idgen.NewSnowflake(cfg.IDGen, redisConnector) 
+type Option func(*Options)
 
-// 使用
-id := gen.Int64()
+// 可用选项
+func WithLogger(logger clog.Logger) Option
+func WithMeter(meter telemetry.Meter) Option
+func WithTracer(tracer telemetry.Tracer) Option
+```
+
+### 6.1. 独立模式 (Standalone Mode)
+
+适用于测试、脚本、或不使用 Container 的场景。
+
+#### Snowflake 示例
+
+```go
+import (
+    "github.com/ceyewan/genesis/pkg/idgen"
+    "github.com/ceyewan/genesis/pkg/connector"
+)
+
+// 1. 创建连接器 (Redis 模式需要)
+redisConn, _ := connector.NewRedis(&connector.RedisConfig{
+    Addr: "localhost:6379",
+})
+
+// 2. 创建 Snowflake 生成器
+gen, err := idgen.NewSnowflake(&idgen.SnowflakeConfig{
+    Method:       "redis",
+    DatacenterID: 1,
+    KeyPrefix:    "myapp:idgen:",
+    TTL:          30,
+}, redisConn, nil, idgen.WithLogger(logger))
+
+// 3. 生成 ID
+id, _ := gen.Int64()
+fmt.Printf("Generated ID: %d\n", id)
+```
+
+#### UUID 示例
+
+```go
+// 创建 UUID 生成器
+gen, _ := idgen.NewUUID(&idgen.UUIDConfig{
+    Version: "v7",
+}, idgen.WithLogger(logger))
+
+// 生成 UUID
+uuid := gen.String()
+fmt.Printf("Generated UUID: %s\n", uuid)
+```
+
+### 6.2. 容器模式 (Container Mode)
+
+由 Container 统一管理，自动注入依赖。
+
+```go
+import (
+    "github.com/ceyewan/genesis/pkg/container"
+    "github.com/ceyewan/genesis/pkg/idgen"
+)
+
+// 1. 创建 Container
+app, _ := container.New(&container.Config{
+    Redis: &connector.RedisConfig{
+        Addr: "localhost:6379",
+    },
+    IDGen: &idgen.Config{
+        Mode: "snowflake",
+        Snowflake: &idgen.SnowflakeConfig{
+            Method:       "redis",
+            DatacenterID: 1,
+            KeyPrefix:    "myapp:idgen:",
+        },
+    },
+}, container.WithLogger(logger))
+
+// 2. 使用 IDGen
+id, _ := app.IDGen.Int64()
+fmt.Printf("Generated ID: %d\n", id)
+```
+
+## 7. 日志与可观测性
+
+### 7.1. Logger Namespace
+
+IDGen 组件会自动为 Logger 添加 `component=idgen` 字段：
+
+```go
+// 应用级 Logger
+appLogger := clog.New(&clog.Config{...}, &clog.Option{
+    NamespaceParts: []string{"myapp"},
+})
+
+// 创建 IDGen (自动派生 Logger)
+gen, _ := idgen.NewSnowflake(cfg, redisConn, nil, idgen.WithLogger(appLogger))
+
+// 日志输出示例:
+// level=info msg="worker id allocated" namespace=myapp component=idgen worker_id=123 datacenter_id=1
+// level=info msg="starting worker id keep alive" namespace=myapp component=idgen worker_id=123 key=myapp:idgen:123
+```
+
+### 7.2. 关键日志事件
+
+| 事件 | 级别 | 说明 |
+|------|------|------|
+| `worker id allocated` | INFO | WorkerID 分配成功 |
+| `starting worker id keep alive` | INFO | 启动保活任务 |
+| `keep alive stopped` | INFO | 保活任务正常停止 |
+| `keep alive failed, circuit breaking` | ERROR | 保活失败，触发熔断 |
+| `failed to allocate worker id` | ERROR | WorkerID 分配失败 |
+
+## 8. WorkerID 分配策略使用指南

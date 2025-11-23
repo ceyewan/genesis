@@ -3,14 +3,27 @@ package types
 import (
 	"context"
 	"time"
-
-	"github.com/ceyewan/genesis/pkg/container"
 )
 
+// Lifecycle 定义生命周期管理接口
+// 避免依赖 pkg/container 造成循环依赖
+// 此接口与 container.Lifecycle 方法签名完全相同，可以无缝适配
+type Lifecycle interface {
+	// Start 启动组件（如启动配置文件监听）
+	Start(ctx context.Context) error
+
+	// Stop 停止组件（如停止监听、清理资源）
+	Stop(ctx context.Context) error
+
+	// Phase 返回组件的初始化阶段
+	// 用于确定启动顺序，数值越小越先启动
+	Phase() int
+}
+
 // Manager 定义配置管理器的核心行为
-// 它同时实现了 container.Lifecycle 接口，以便被容器管理（用于启动 Watcher 等后台任务）
+// 它同时实现了 Lifecycle 接口，以便被容器管理（用于启动 Watcher 等后台任务）
 type Manager interface {
-	container.Lifecycle // Start, Stop, Phase
+	Lifecycle // Start, Stop, Phase
 
 	// Load 加载配置（通常在 Start 之前调用，用于 Bootstrap）
 	Load(ctx context.Context) error

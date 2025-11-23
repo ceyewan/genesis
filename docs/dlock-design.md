@@ -11,7 +11,8 @@
 3. **安全性 (Safety):** 默认支持自动续期 (Watchdog/KeepAlive) 和防误删机制。
 4. **依赖注入 (Dependency Injection):** 不自行管理连接，而是依赖 `connector` 层提供的连接实例。
 5. **统一配置 (Unified Config):** 使用结构化的配置对象进行初始化。
-6. **可观测性 (Observability):** 集成 `clog`，通过注入 Logger 实现统一的日志规范（Namespace）。
+6. **可观测性 (Observability):** 支持注入 Logger, Meter, Tracer，实现统一的可观测性。
+7. **双模式支持 (Dual Mode):** 支持独立模式和容器模式两种使用方式。
 
 ## 2. 项目结构
 
@@ -21,11 +22,12 @@
 genesis/
 ├── pkg/
 │   └── dlock/                  # 公开 API 入口
-│       ├── dlock.go            # 工厂函数 (New)
+│       ├── dlock.go            # 工厂函数 (NewRedis, NewEtcd) + 类型导出
+│       ├── options.go          # 组件初始化 Option (WithLogger, WithMeter, WithTracer)
 │       └── types/              # 类型定义
 │           ├── interface.go    # Locker 接口
 │           ├── config.go       # 配置定义
-│           └── options.go      # 运行时选项
+│           └── options.go      # Lock 操作 Option (WithTTL)
 ├── internal/
 │   └── dlock/                  # 内部实现
 │       ├── factory.go          # 实现工厂逻辑
@@ -35,6 +37,11 @@ genesis/
 │           └── locker.go
 └── ...
 ```
+
+**注意区分两种 Option**:
+
+- **组件初始化 Option** (`pkg/dlock/options.go`): 用于创建 Locker 实例时注入依赖 (Logger, Meter, Tracer)
+- **Lock 操作 Option** (`pkg/dlock/types/options.go`): 用于 Lock/TryLock 调用时设置运行时参数 (TTL)
 
 ## 3. 核心 API 设计
 
@@ -102,7 +109,7 @@ type Config struct {
 }
 ```
 
-### 3.3. 选项 (Option)
+### 3.3. Lock 操作选项 (Lock Option)
 
 支持在调用 `Lock`/`TryLock` 时覆盖默认配置。
 
@@ -111,24 +118,149 @@ type Config struct {
 
 package types
 
-type LockOption struct {
+import "time"
+
+// LockOptions Lock 操作的选项配置
+type LockOptions struct {
     TTL time.Duration
 }
 
-type Option func(*LockOption)
+// LockOption Lock 操作的选项函数
+type LockOption func(*LockOptions)
 
-func WithTTL(d time.Duration) Option {
-    return func(o *LockOption) {
+// WithTTL 设置锁的 TTL（超时时间）
+func WithTTL(d time.Duration) LockOption {
+    return func(o *LockOptions) {
         o.TTL = d
     }
 }
 ```
 
-## 4. 内部实现设计
+### 3.4. 组件初始化选项 (Component Option)
 
-### 4.1. 依赖注入与日志集成
+支持在创建 Locker 实例时注入依赖。
 
-`dlock` 不负责创建 Redis 或 Etcd 的连接，而是通过构造函数接收 `connector` 接口。同时接收 `clog.Logger` 用于日志记录。
+```go
+// pkg/dlock/options.go
+
+package dlock
+
+import (
+    "github.com/ceyewan/genesis/pkg/clog"
+    "github.com/ceyewan/genesis/pkg/telemetry/types"
+)
+
+// Option 组件初始化选项函数
+type Option func(*Options)
+
+// Options 选项结构
+type Options struct {
+    Logger clog.Logger
+    Meter  types.Meter
+    Tracer types.Tracer
+}
+
+// WithLogger 注入日志记录器
+func WithLogger(l clog.Logger) Option {
+    return func(o *Options) {
+        if l != nil {
+            o.Logger = l.WithNamespace("dlock")
+        }
+    }
+}
+
+// WithMeter 注入指标 Meter
+func WithMeter(m types.Meter) Option {
+    return func(o *Options) {
+        o.Meter = m
+    }
+}
+
+// WithTracer 注入 Tracer
+func WithTracer(t types.Tracer) Option {
+    return func(o *Options) {
+        o.Tracer = t
+    }
+}
+```
+
+## 4. 工厂函数设计
+
+### 4.1. 独立模式工厂函数
+
+提供 `NewRedis` 和 `NewEtcd` 两个工厂函数，支持独立模式使用。
+
+```go
+// pkg/dlock/dlock.go
+
+// NewRedis 创建 Redis 分布式锁 (独立模式)
+func NewRedis(conn connector.RedisConnector, cfg *Config, opts ...Option) (Locker, error) {
+    // 应用选项
+    opt := Options{
+        Logger: clog.Default(), // 默认 Logger
+    }
+    for _, o := range opts {
+        o(&opt)
+    }
+
+    return internaldlock.NewRedis(conn, cfg, opt.Logger, opt.Meter, opt.Tracer)
+}
+
+// NewEtcd 创建 Etcd 分布式锁 (独立模式)
+func NewEtcd(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Locker, error) {
+    // 应用选项
+    opt := Options{
+        Logger: clog.Default(), // 默认 Logger
+    }
+    for _, o := range opts {
+        o(&opt)
+    }
+
+    return internaldlock.NewEtcd(conn, cfg, opt.Logger, opt.Meter, opt.Tracer)
+}
+```
+
+### 4.2. 容器模式集成
+
+在 Container 中根据配置的 Backend 自动选择后端。
+
+```go
+// pkg/container/container.go
+
+func (c *Container) initDLock(cfg *Config) error {
+    switch cfg.DLock.Backend {
+    case dlocktypes.BackendRedis:
+        redisConn, _ := c.GetRedisConnector(*cfg.Redis)
+
+        locker, _ := dlock.NewRedis(redisConn, cfg.DLock,
+            dlock.WithLogger(c.Log),
+            dlock.WithMeter(c.Meter),
+            dlock.WithTracer(c.Tracer),
+        )
+
+        c.DLock = locker
+
+    case dlocktypes.BackendEtcd:
+        etcdConn, _ := c.GetEtcdConnector(*cfg.Etcd)
+
+        locker, _ := dlock.NewEtcd(etcdConn, cfg.DLock,
+            dlock.WithLogger(c.Log),
+            dlock.WithMeter(c.Meter),
+            dlock.WithTracer(c.Tracer),
+        )
+
+        c.DLock = locker
+    }
+
+    return nil
+}
+```
+
+## 5. 内部实现设计
+
+### 5.1. 依赖注入与可观测性集成
+
+`dlock` 不负责创建 Redis 或 Etcd 的连接，而是通过构造函数接收 `connector` 接口。同时接收 Logger, Meter, Tracer 用于可观测性。
 
 ```go
 // internal/dlock/redis/locker.go
@@ -136,84 +268,151 @@ func WithTTL(d time.Duration) Option {
 type RedisLocker struct {
     client *redis.Client // 来自 pkg/connector.RedisConnector
     cfg    *types.Config
-    logger clog.Logger   // 注入的 Logger，通常带有 "dlock" namespace
+    logger clog.Logger   // 注入的 Logger，自动带有 "dlock" namespace
+    meter  telemetrytypes.Meter
+    tracer telemetrytypes.Tracer
     // ...
 }
 
 // New 创建 RedisLocker 实例
-// logger: 建议传入 namespace="dlock" 的 logger
-func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger) (*RedisLocker, error) {
+func New(
+    conn connector.RedisConnector,
+    cfg *types.Config,
+    logger clog.Logger,
+    meter telemetrytypes.Meter,
+    tracer telemetrytypes.Tracer,
+) (*RedisLocker, error) {
     // ...
 }
 ```
 
-### 4.2. 自动续期 (Watchdog)
+### 5.2. 自动续期 (Watchdog)
 
 - **Redis:** 启动后台 Goroutine，定期（如 TTL/3）检查并刷新 Key 的过期时间。解锁时通过 Channel 通知停止。
 - **Etcd:** 使用 `clientv3.Lease` 的 `KeepAlive` 机制。
 
-### 4.3. 防误删
+### 5.3. 防误删
 
 - **Redis:** 使用 Lua 脚本，校验 Value（Token）一致后再删除。
 - **Etcd:** 依赖 Lease ID 或 Revision 机制。
 
-## 5. 容器集成 (Container Integration)
+## 6. 使用示例
 
-在 `pkg/container` 中集成 `dlock`，负责 Logger 的 Namespace 派生。
+### 6.1. 独立模式
 
 ```go
-// pkg/container/container.go
+package main
 
-type Container struct {
-    // ...
-    DLock dlock.Locker
-    // ...
-}
+import (
+    "context"
+    "time"
 
-func (c *Container) initDLock(cfg *Config) error {
-    if cfg.DLock == nil {
-        return nil
+    "github.com/ceyewan/genesis/pkg/clog"
+    "github.com/ceyewan/genesis/pkg/connector"
+    "github.com/ceyewan/genesis/pkg/dlock"
+)
+
+func main() {
+    // 创建 Logger
+    logger := clog.New(&clog.Config{
+        Level: "info",
+        Format: "json",
+    })
+
+    // 创建 Redis 连接器
+    redisConn, _ := connector.NewRedis(&connector.RedisConfig{
+        Addr: "localhost:6379",
+    })
+
+    // 创建 DLock 实例
+    locker, _ := dlock.NewRedis(redisConn, &dlock.Config{
+        Prefix: "myapp:lock:",
+        DefaultTTL: 30 * time.Second,
+        RetryInterval: 100 * time.Millisecond,
+    }, dlock.WithLogger(logger))
+
+    // 使用锁
+    ctx := context.Background()
+    key := "order:123"
+
+    // 阻塞加锁，自定义 TTL
+    if err := locker.Lock(ctx, key, dlock.WithTTL(10*time.Second)); err != nil {
+        logger.Error("failed to lock", clog.Error(err))
+        return
     }
+    defer locker.Unlock(ctx, key)
 
-    // 派生 dlock 专用的 Logger
-    // 假设 c.Log 的 namespace 是 "user-service"
-    // dlockLogger 的 namespace 将是 "user-service.dlock"
-    dlockLogger := c.Log.WithNamespace("dlock")
-
-    switch cfg.DLock.Backend {
-    case types.BackendRedis:
-        // 获取 Redis 连接器 (其内部 Logger namespace 可能是 "user-service.redis")
-        redisConn, err := c.GetRedisConnector(*cfg.Redis)
-        // 创建 dlock
-        c.DLock = dlock.NewRedis(redisConn, cfg.DLock, dlockLogger)
-    case types.BackendEtcd:
-        // 获取 Etcd 连接器
-        etcdConn, err := c.GetEtcdConnector(*cfg.Etcd)
-        // 创建 dlock
-        c.DLock = dlock.NewEtcd(etcdConn, cfg.DLock, dlockLogger)
-    }
-    return nil
+    // 业务逻辑
+    processOrder()
 }
 ```
 
-## 6. 使用示例
+### 6.2. 容器模式
 
 ```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "github.com/ceyewan/genesis/pkg/clog"
+    "github.com/ceyewan/genesis/pkg/connector"
+    "github.com/ceyewan/genesis/pkg/container"
+    "github.com/ceyewan/genesis/pkg/dlock"
+)
+
 func main() {
-    // ... 容器初始化 ...
-    
-    // 使用分布式锁
+    // 创建 Logger
+    logger := clog.New(&clog.Config{
+        Level: "info",
+        Format: "json",
+    })
+
+    // 创建 Container
+    app, _ := container.New(&container.Config{
+        Redis: &connector.RedisConfig{
+            Addr: "localhost:6379",
+        },
+        DLock: &dlock.Config{
+            Backend: dlock.BackendRedis,
+            Prefix: "myapp:lock:",
+            DefaultTTL: 30 * time.Second,
+        },
+    }, container.WithLogger(logger))
+
+    // 使用锁
     ctx := context.Background()
-    key := "resource:123"
-    
-    // 1. 阻塞加锁
-    // 日志输出示例: level=info msg="lock acquired" namespace=user-service.dlock key=resource:123
+    key := "order:123"
+
+    // 阻塞加锁
+    // 日志输出: level=info msg="lock acquired" namespace=app.dlock key=order:123
     if err := app.DLock.Lock(ctx, key); err != nil {
         app.Log.Error("failed to lock", clog.Error(err))
         return
     }
     defer app.DLock.Unlock(ctx, key)
-    
-    // 2. 业务逻辑
-    processResource()
+
+    // 业务逻辑
+    processOrder()
 }
+```
+
+### 6.3. 非阻塞加锁
+
+```go
+// 尝试加锁，不阻塞
+locked, err := app.DLock.TryLock(ctx, "resource:456")
+if err != nil {
+    app.Log.Error("failed to try lock", clog.Error(err))
+    return
+}
+if !locked {
+    app.Log.Warn("resource is locked by another process")
+    return
+}
+defer app.DLock.Unlock(ctx, "resource:456")
+
+// 业务逻辑
+processResource()
+```

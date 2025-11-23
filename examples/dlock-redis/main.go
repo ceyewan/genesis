@@ -9,20 +9,28 @@ import (
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/dlock"
-	"github.com/ceyewan/genesis/pkg/dlock/types"
 )
 
 func main() {
 	fmt.Println("=== Redis 分布式锁演示 ===")
 	fmt.Println()
 
-	// 1. 配置容器
+	// 1. 创建应用级 Logger
+	logConfig := &clog.Config{
+		Level:  "info",
+		Format: "console",
+		Output: "stdout",
+	}
+	appLogger, err := clog.New(logConfig, &clog.Option{
+		NamespaceParts: []string{"dlock-redis-demo"},
+	})
+	if err != nil {
+		fmt.Printf("创建 Logger 失败: %v\n", err)
+		return
+	}
+
+	// 2. 配置容器
 	cfg := &container.Config{
-		Log: &clog.Config{
-			Level:  "info",
-			Format: "console",
-			Output: "stdout",
-		},
 		Redis: &connector.RedisConfig{
 			Addr:         "127.0.0.1:6379",
 			Password:     "your_redis_password",
@@ -31,23 +39,23 @@ func main() {
 			MinIdleConns: 5,
 			DialTimeout:  5 * time.Second,
 		},
-		DLock: &types.Config{
-			Backend:       types.BackendRedis,
+		DLock: &dlock.Config{
+			Backend:       dlock.BackendRedis,
 			Prefix:        "dlock:",
 			DefaultTTL:    10 * time.Second,
 			RetryInterval: 100 * time.Millisecond,
 		},
 	}
 
-	// 2. 创建容器
-	c, err := container.New(cfg)
+	// 3. 创建容器 (使用 Option 注入 Logger)
+	c, err := container.New(cfg, container.WithLogger(appLogger))
 	if err != nil {
 		fmt.Printf("创建容器失败: %v\n", err)
 		return
 	}
 	defer c.Close()
 
-	// 3. 获取锁组件
+	// 4. 获取锁组件
 	locker := c.DLock
 	if locker == nil {
 		fmt.Println("锁组件未初始化")

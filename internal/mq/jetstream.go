@@ -10,6 +10,7 @@ import (
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/mq/types"
+	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 // jetStreamClient NATS JetStream 模式实现
@@ -17,10 +18,12 @@ type jetStreamClient struct {
 	js     jetstream.JetStream
 	cfg    *types.JetStreamConfig
 	logger clog.Logger
+	meter  telemetrytypes.Meter
+	tracer telemetrytypes.Tracer
 }
 
 // NewJetStreamClient 创建 NATS JetStream 客户端
-func NewJetStreamClient(conn connector.NATSConnector, cfg *types.JetStreamConfig, logger clog.Logger) (types.Client, error) {
+func NewJetStreamClient(conn connector.NATSConnector, cfg *types.JetStreamConfig, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) (types.Client, error) {
 	js, err := jetstream.New(conn.GetClient())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create jetstream context: %w", err)
@@ -30,6 +33,8 @@ func NewJetStreamClient(conn connector.NATSConnector, cfg *types.JetStreamConfig
 		js:     js,
 		cfg:    cfg,
 		logger: logger,
+		meter:  meter,
+		tracer: tracer,
 	}, nil
 }
 

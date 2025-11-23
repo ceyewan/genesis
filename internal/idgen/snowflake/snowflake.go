@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/internal/idgen/allocator"
+	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/idgen/types"
+	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 const (
@@ -27,10 +29,20 @@ type Generator struct {
 	lastTime  int64
 	// 熔断通道
 	failCh <-chan error
+	// 可观测性组件
+	logger clog.Logger
+	meter  telemetrytypes.Meter
+	tracer telemetrytypes.Tracer
 }
 
 // New 创建 Snowflake 生成器
-func New(cfg *types.SnowflakeConfig, alloc allocator.Allocator) (*Generator, error) {
+func New(
+	cfg *types.SnowflakeConfig,
+	alloc allocator.Allocator,
+	logger clog.Logger,
+	meter telemetrytypes.Meter,
+	tracer telemetrytypes.Tracer,
+) (*Generator, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("snowflake config is nil")
 	}
@@ -40,6 +52,9 @@ func New(cfg *types.SnowflakeConfig, alloc allocator.Allocator) (*Generator, err
 	return &Generator{
 		allocator: alloc,
 		dcID:      cfg.DatacenterID,
+		logger:    logger,
+		meter:     meter,
+		tracer:    tracer,
 	}, nil
 }
 
@@ -48,13 +63,26 @@ func (g *Generator) Init(ctx context.Context) error {
 	// 1. 分配 WorkerID
 	workerID, err := g.allocator.Allocate(ctx)
 	if err != nil {
+		if g.logger != nil {
+			g.logger.Error("failed to allocate worker id", clog.Error(err))
+		}
 		return fmt.Errorf("allocate worker id failed: %w", err)
 	}
 	g.workerID = workerID
 
+	if g.logger != nil {
+		g.logger.Info("worker id allocated",
+			clog.Int64("worker_id", workerID),
+			clog.Int64("datacenter_id", g.dcID),
+		)
+	}
+
 	// 2. 启动保活
 	failCh, err := g.allocator.Start(ctx, workerID)
 	if err != nil {
+		if g.logger != nil {
+			g.logger.Error("failed to start keep alive", clog.Error(err))
+		}
 		return fmt.Errorf("start keep alive failed: %w", err)
 	}
 	g.failCh = failCh

@@ -9,19 +9,24 @@ import (
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/mq/types"
+	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 // coreClient NATS Core 模式实现
 type coreClient struct {
 	conn   *nats.Conn
 	logger clog.Logger
+	meter  telemetrytypes.Meter
+	tracer telemetrytypes.Tracer
 }
 
 // NewCoreClient 创建 NATS Core 客户端
-func NewCoreClient(conn connector.NATSConnector, logger clog.Logger) types.Client {
+func NewCoreClient(conn connector.NATSConnector, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) types.Client {
 	return &coreClient{
 		conn:   conn.GetClient(),
 		logger: logger,
+		meter:  meter,
+		tracer: tracer,
 	}
 }
 

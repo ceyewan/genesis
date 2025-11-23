@@ -13,12 +13,15 @@ import (
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/dlock/types"
+	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 type RedisLocker struct {
 	client *redis.Client
 	cfg    *types.Config
 	logger clog.Logger
+	meter  telemetrytypes.Meter
+	tracer telemetrytypes.Tracer
 	locks  map[string]*redisLockEntry
 	mu     sync.RWMutex
 }
@@ -32,7 +35,7 @@ type redisLockEntry struct {
 }
 
 // New 创建 RedisLocker 实例
-func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger) (*RedisLocker, error) {
+func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) (*RedisLocker, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("redis connector is nil")
 	}
@@ -44,15 +47,17 @@ func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger) (
 		client: conn.GetClient(),
 		cfg:    cfg,
 		logger: logger,
+		meter:  meter,
+		tracer: tracer,
 		locks:  make(map[string]*redisLockEntry),
 	}, nil
 }
 
-func (l *RedisLocker) Lock(ctx context.Context, key string, opts ...types.Option) error {
+func (l *RedisLocker) Lock(ctx context.Context, key string, opts ...types.LockOption) error {
 	return l.lockWithRetry(ctx, key, false, opts...)
 }
 
-func (l *RedisLocker) TryLock(ctx context.Context, key string, opts ...types.Option) (bool, error) {
+func (l *RedisLocker) TryLock(ctx context.Context, key string, opts ...types.LockOption) (bool, error) {
 	entry, err := l.acquireLock(ctx, key, opts...)
 	if err != nil {
 		return false, err
@@ -101,7 +106,7 @@ func (l *RedisLocker) Unlock(ctx context.Context, key string) error {
 	return nil
 }
 
-func (l *RedisLocker) lockWithRetry(ctx context.Context, key string, tryOnce bool, opts ...types.Option) error {
+func (l *RedisLocker) lockWithRetry(ctx context.Context, key string, tryOnce bool, opts ...types.LockOption) error {
 	retryInterval := l.cfg.RetryInterval
 	if retryInterval <= 0 {
 		retryInterval = 100 * time.Millisecond
@@ -129,7 +134,7 @@ func (l *RedisLocker) lockWithRetry(ctx context.Context, key string, tryOnce boo
 	}
 }
 
-func (l *RedisLocker) acquireLock(ctx context.Context, key string, opts ...types.Option) (*redisLockEntry, error) {
+func (l *RedisLocker) acquireLock(ctx context.Context, key string, opts ...types.LockOption) (*redisLockEntry, error) {
 	l.mu.RLock()
 	if _, exists := l.locks[key]; exists {
 		l.mu.RUnlock()
@@ -137,7 +142,7 @@ func (l *RedisLocker) acquireLock(ctx context.Context, key string, opts ...types
 	}
 	l.mu.RUnlock()
 
-	options := &types.LockOption{
+	options := &types.LockOptions{
 		TTL: l.cfg.DefaultTTL,
 	}
 	for _, opt := range opts {
