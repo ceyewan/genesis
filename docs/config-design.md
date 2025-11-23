@@ -20,7 +20,8 @@
 
 * **`pkg/config` (API 层):** 定义配置管理的通用接口和标准配置结构。
 * **`internal/config` (实现层):** 提供基于 Viper 的默认实现，以及未来基于 Etcd 的实现。
-* **`pkg/container` (集成层):** 负责在应用启动时初始化配置模块，并将配置注入到各个组件中。
+* **`pkg/container` (集成层):** 在应用启动后接管已构造好的 `config.Manager`
+  并统一管理其生命周期（如 Watch 热更新），同时将解析后的 `AppConfig` 注入到各个组件中。
 
 ```mermaid
 graph TD
@@ -49,9 +50,10 @@ import (
 )
 
 // Manager 定义配置管理器的核心行为
-// 它同时实现了 container.Lifecycle 接口，以便被容器管理（用于启动 Watcher 等后台任务）
+// 可以选择实现 container.Lifecycle 接口，以便在 Container 构建完成后
+// 由容器托管其 Watch 等后台任务。Manager 的构造与 Load 发生在容器之外。
 type Manager interface {
-    container.Lifecycle // Start, Stop, Phase
+    container.Lifecycle // Start, Stop, Phase（可选实现）
 
     // Load 加载配置（通常在 Start 之前调用，用于 Bootstrap）
     Load(ctx context.Context) error
@@ -178,17 +180,49 @@ func (m *viperManager) Watch(ctx context.Context, key string) (<-chan Event, err
 }
 ```
 
-## 4. 演进路线
+## 4. 与 Container / 远程配置中心 的依赖边界
+
+Config 模块是应用的 **Bootstrapping 组件**，负责在 Container 构建之前，将多种配置源汇聚为一个强类型的 `AppConfig`。
+
+### 4.1 与 Container 的关系
+
+* `config.Manager` 的构造与 `Load(ctx)` 发生在 Container 之外：
+  * 典型流程为：
+    * 业务代码或启动脚本创建 `Manager` 实例；
+    * 调用 `Load` / `Validate`；
+    * 调用 `Unmarshal(&AppConfig)` 得到应用总配置。
+* Container 仅接收已经准备好的 `AppConfig`（以及可选的 `Manager` 实例），用于：
+  * 构建各类 Connector（MySQL/Redis/Etcd 等）；
+  * 构建业务组件（db/dlock/cache/...）；
+  * 构建 telemetry / clog 等横切能力。
+* 如 `Manager` 实现了 `container.Lifecycle`，则只在 Container 构建完成后
+  由 Container 调用其 `Start/Stop` 来管理 Watch 热更新等后台任务，
+  而不参与最初的 Container 构造过程，避免循环依赖。
+
+### 4.2 与 Etcd 等远程配置中心的关系
+
+* 当需要接入 Etcd/Consul 等远程配置中心时，Config 模块可以：
+  * 直接依赖底层 SDK（如 `clientv3`），或
+  * 复用 `pkg/connector/etcd` 暴露的工厂/Manager（不通过 Container 获取）。
+* 无论哪种方式，**Config 模块都不得依赖 `pkg/container`**，
+  只允许依赖比自身更底层的能力（SDK 或 Connector）。
+* 这样可以确保依赖关系是单向的：
+  * Config → Etcd SDK / Etcd Connector
+  * Container → Config (AppConfig)
+  * 避免 Config → Container → Config 的循环。
+* Container 的整体初始化流程与 Phase 编排，详见 `docs/container-design.md`。
+
+## 5. 演进路线
 
 ### Phase 1: 本地文件 + 环境变量 (Current)
 
 * [x] 定义 `pkg/config` 接口。
 * [x] 实现基于 Viper 的文件加载与环境变量覆盖。
 * [x] 实现 `Watch` 机制 (Channel based)。
-* [x] 集成到 `pkg/container`。
+* [x] 支持由 Container 托管 Manager 的生命周期（可选）。
 
 ### Phase 2: 远程配置中心 (Future)
 
 * [ ] 集成 Viper Remote Provider (Etcd)。
-* [ ] 实现配置版本管理。
-* [ ] 实现配置回滚。
+* [ ] 实现配置版本管理与回滚。
+* [ ] 通过公共的 Etcd Connector/Manager 复用连接，避免重复创建客户端。
