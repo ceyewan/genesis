@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/connector"
 	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"github.com/ceyewan/genesis/pkg/connector"
 )
 
 // EtcdAllocator Etcd 分配器

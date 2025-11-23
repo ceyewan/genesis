@@ -38,7 +38,7 @@ func NewHandler(config *types.Config, option *types.Option) (slog.Handler, error
 	}
 
 	levelVar := new(slog.LevelVar)
-	
+
 	// 解析配置的级别字符串，直接映射到slog级别
 	var slogLevel slog.Level
 	switch strings.ToLower(config.Level) {

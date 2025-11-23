@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/clog"
 	"gorm.io/gorm/logger"
+
+	"github.com/ceyewan/genesis/pkg/clog"
 )
 
 // GormLogger 实现 GORM 的 logger.Interface，将日志转发到 clog

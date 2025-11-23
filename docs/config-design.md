@@ -1,159 +1,194 @@
-# Genesis 配置设计文档 (Config Design)
+# Genesis 配置中心设计文档
 
-## 1. 目标与原则
+## 1. 目标与愿景
 
-配置组件旨在为 Genesis 框架提供统一、类型安全且易于扩展的配置管理能力。
+配置中心 (Config Center) 旨在为 Genesis 框架提供统一、灵活且支持动态更新的配置管理能力。
 
-**核心原则：**
+**核心目标：**
 
-1. **集中管理 (Centralized):** 所有组件的配置由统一的 `AppConfig` 结构体定义，避免散落在各处。
-2. **类型安全 (Type-Safe):** 业务代码和组件通过强类型的结构体访问配置，而非 `map[string]interface{}`。
-3. **自顶向下 (Top-Down):** 配置由 `main` 函数加载，传递给 `Container`，再由 `Container` 分发给各组件。组件本身不感知配置文件的存在。
-4. **多源支持 (Multi-Source):** 支持从 YAML、JSON、环境变量 (Env)、命令行参数 (Flags) 加载配置。
+1. **统一管理:** 集中管理所有组件（DB, Redis, Log, MQ 等）的配置。
+2. **多源支持:** 支持从多种来源加载配置，包括本地文件 (YAML/JSON)、环境变量 (Env)、以及未来的远程配置中心 (Etcd/Consul)。
+3. **热更新 (Hot Reload):** 支持配置的动态监听与实时更新，无需重启服务。
+4. **类型安全:** 提供强类型的配置解析与绑定能力。
+5. **接口抽象:** 遵循 Genesis 的接口驱动原则，屏蔽底层实现（Viper/Etcd），便于未来切换。
 
-## 2. 架构设计
+## 2. 核心设计
 
-### 2.1 配置流向
+### 2.1. 架构分层
+
+遵循 Genesis 的分层架构：
+
+* **`pkg/config` (API 层):** 定义配置管理的通用接口和标准配置结构。
+* **`internal/config` (实现层):** 提供基于 Viper 的默认实现，以及未来基于 Etcd 的实现。
+* **`pkg/container` (集成层):** 负责在应用启动时初始化配置模块，并将配置注入到各个组件中。
 
 ```mermaid
 graph TD
-    ConfigFile[配置文件<br>config.yaml] -->|1. Load| ConfigLoader[Config Loader];
-    EnvVars[环境变量<br>ENV] -->|1. Load| ConfigLoader;
+    App[应用层] --> ConfigAPI["pkg/config (Interface)"]
     
-    ConfigLoader -->|2. Unmarshal| AppConfig[AppConfig Struct];
-    
-    AppConfig -->|3. Pass| Container[Container Init];
-    
-    subgraph Container Scope
-        Container -->|4. Extract| LogCfg[Log Config];
-        Container -->|4. Extract| RedisCfg[Redis Config];
-        Container -->|4. Extract| DLockCfg[DLock Config];
+    subgraph "Genesis Config Module"
+        ConfigAPI --> ViperImpl[internal/config/viper]
+        ConfigAPI --> EtcdImpl["internal/config/etcd (Future)"]
         
-        LogCfg -->|5. Inject| Logger[Logger];
-        RedisCfg -->|5. Inject| RedisConn[Redis Connector];
-        DLockCfg -->|5. Inject| DLock[DLock Component];
+        ViperImpl --> File[YAML/JSON File]
+        ViperImpl --> Env[Environment Variables]
+        EtcdImpl --> EtcdCluster[Etcd Cluster]
     end
 ```
 
-### 2.2 核心结构体 (`AppConfig`)
-
-`AppConfig` 是整个应用的配置根节点，它聚合了所有基础设施和组件的配置。
+### 2.2. 接口定义 (`pkg/config`)
 
 ```go
-// pkg/config/types/config.go
+package config
 
-type AppConfig struct {
-    // 应用基础信息
-    App AppInfo `yaml:"app" json:"app"`
-
-    // 基础设施配置 (Connectors)
-    Connectors ConnectorsConfig `yaml:"connectors" json:"connectors"`
-
-    // 业务组件配置 (Components)
-    Components ComponentsConfig `yaml:"components" json:"components"`
+import (
+    "context"
+    "time"
     
-    // 可观测性配置
-    Log     clog.Config        `yaml:"log" json:"log"`
-    Metrics observability.Config `yaml:"metrics" json:"metrics"`
+    "github.com/ceyewan/genesis/pkg/container"
+)
+
+// Manager 定义配置管理器的核心行为
+// 它同时实现了 container.Lifecycle 接口，以便被容器管理（用于启动 Watcher 等后台任务）
+type Manager interface {
+    container.Lifecycle // Start, Stop, Phase
+
+    // Load 加载配置（通常在 Start 之前调用，用于 Bootstrap）
+    Load(ctx context.Context) error
+    
+    // Get 获取原始配置值
+    Get(key string) any
+    
+    // Unmarshal 将配置解析到结构体
+    Unmarshal(v any) error
+    
+    // UnmarshalKey 将指定 Key 的配置解析到结构体
+    UnmarshalKey(key string, v any) error
+    
+    // Watch 监听配置变化
+    // 返回一个只读 channel，当配置发生变化时发送事件
+    // 可以通过 context 取消监听
+    Watch(ctx context.Context, key string) (<-chan Event, error)
+    
+    // Validate 验证当前配置的有效性
+    Validate() error
 }
 
-type AppInfo struct {
-    Name      string `yaml:"name" json:"name"`
-    Version   string `yaml:"version" json:"version"`
-    Namespace string `yaml:"namespace" json:"namespace"` // 用于日志和 Metrics 的根命名空间
-    Env       string `yaml:"env" json:"env"`             // dev, test, prod
+// Event 配置变更事件
+type Event struct {
+    Key       string
+    Value     any
+    OldValue  any       // 旧值 (如果支持)
+    Source    string    // "file", "env", "remote"
+    Timestamp time.Time
 }
 
-type ConnectorsConfig struct {
-    Redis map[string]connector.RedisConfig `yaml:"redis" json:"redis"`
-    MySQL map[string]connector.MySQLConfig `yaml:"mysql" json:"mysql"`
-    Etcd  map[string]connector.EtcdConfig  `yaml:"etcd" json:"etcd"`
-    NATS  map[string]connector.NATSConfig  `yaml:"nats" json:"nats"`
+// Option 配置选项模式
+type Option func(*Options)
+
+type Options struct {
+    Name       string
+    Paths      []string
+    FileType   string
+    EnvPrefix  string
+    RemoteOpts *RemoteOptions
 }
 
-type ComponentsConfig struct {
-    DLock     dlock.Config     `yaml:"dlock" json:"dlock"`
-    DB        db.Config        `yaml:"db" json:"db"`
-    Cache     cache.Config     `yaml:"cache" json:"cache"`
-    MQ        mq.Config        `yaml:"mq" json:"mq"`
-    IDGen     idgen.Config     `yaml:"idgen" json:"idgen"`
-    RateLimit ratelimit.Config `yaml:"ratelimit" json:"ratelimit"`
+type RemoteOptions struct {
+    Provider string
+    Endpoint string
 }
 ```
 
-## 3. 接口定义
+### 2.3. 配置加载优先级
 
-配置组件主要提供加载和验证功能。
+配置加载遵循以下优先级（由高到低）：
+
+1. **启动参数 (Flags):** (暂未实现，预留)
+2. **环境变量 (Env):** `GENESIS_MYSQL_HOST` 覆盖配置文件。
+3. **环境特定配置文件:** `config.dev.yaml` (如果存在)。
+4. **基础配置文件:** `config.yaml`。
+5. **默认值 (Defaults):** 代码中硬编码的默认值。
+
+### 2.4. 环境变量规则
+
+* **前缀:** 默认为 `GENESIS` (可通过 Option 修改)。
+* **分隔符:** 使用下划线 `_` 替代层级点 `.`。
+* **格式:** `{PREFIX}_{SECTION}_{KEY}` (全大写)。
+
+**示例:**
+
+* YAML: `mysql.host`
+* Env: `GENESIS_MYSQL_HOST`
+
+### 2.5. 多环境支持
+
+推荐的目录结构：
+
+```text
+config/
+├── config.yaml          # 基础配置 (Base)
+├── config.dev.yaml      # 开发环境覆盖 (Override)
+├── config.prod.yaml     # 生产环境覆盖
+└── config.local.yaml    # 本地开发覆盖 (git ignored)
+```
+
+加载逻辑：先加载 `config.yaml`，然后根据 `GENESIS_ENV` 环境变量加载对应的 `config.{env}.yaml` 进行合并覆盖。
+
+## 3. 实现细节 (Viper)
+
+当前阶段使用 `spf13/viper` 作为核心实现。
+
+### 3.1. 初始化流程
+
+1. **New:** 创建 Manager 实例，配置 Options。
+2. **Load:**
+    * 设置默认值。
+    * 读取 `config.yaml`。
+    * 读取 `config.{env}.yaml` (如果指定)。
+    * 读取环境变量 (AutomaticEnv)。
+    * 合并所有配置源。
+3. **Start:** 启动 `WatchConfig` 协程，监听文件变更。
+
+### 3.2. 热更新实现
+
+利用 Viper 的 `WatchConfig` 能力。
 
 ```go
-// pkg/config/interface.go
+// internal/config/viper/manager.go
 
-type Loader interface {
-    // Load 加载配置到目标结构体
-    // path: 配置文件路径
-    // target: 目标结构体指针 (通常是 &AppConfig)
-    Load(path string, target interface{}) error
-}
-
-// 默认实现支持 YAML/JSON 和 ENV 覆盖
-// ENV 规则: GENESIS_APP_NAME 覆盖 app.name
-```
-
-## 4. 使用示例
-
-### 4.1 配置文件 (`config.yaml`)
-
-```yaml
-app:
-  name: "order-service"
-  namespace: "order-service"
-  env: "prod"
-
-log:
-  level: "info"
-  format: "json"
-
-connectors:
-  redis:
-    default:
-      addr: "localhost:6379"
-      db: 0
-  mysql:
-    primary:
-      dsn: "user:pass@tcp(127.0.0.1:3306)/orders"
-
-components:
-  dlock:
-    backend: "redis"
-    redis_connector: "default" # 引用 connectors.redis.default
-    prefix: "dlock:"
-    default_ttl: "30s"
-```
-
-### 4.2 代码集成
-
-```go
-func main() {
-    // 1. 定义配置变量
-    var cfg config.AppConfig
-
-    // 2. 加载配置
-    if err := config.Load("config.yaml", &cfg); err != nil {
-        panic(err)
-    }
-
-    // 3. 初始化 Container
-    // Container 内部会解析 cfg.Connectors 和 cfg.Components
-    c := container.New(cfg)
-
-    // 4. 启动
-    c.Start(context.Background())
+func (m *viperManager) Watch(ctx context.Context, key string) (<-chan Event, error) {
+    ch := make(chan Event, 1)
+    
+    m.v.OnConfigChange(func(e fsnotify.Event) {
+        // 1. 重新读取配置
+        // 2. 检查指定 key 是否真的变化
+        // 3. 发送事件到 ch
+    })
+    m.v.WatchConfig()
+    
+    // 处理 context 取消
+    go func() {
+        <-ctx.Done()
+        close(ch)
+        // 清理逻辑
+    }()
+    
+    return ch, nil
 }
 ```
 
-## 5. 最佳实践
+## 4. 演进路线
 
-1. **环境隔离:** 建议使用 `config.yaml` (默认), `config.dev.yaml`, `config.prod.yaml` 分离不同环境配置。
-2. **敏感信息:** 密码、密钥等敏感信息**禁止**明文写在配置文件中，必须通过环境变量注入（如 `GENESIS_CONNECTORS_MYSQL_PRIMARY_DSN`）。
-3. **默认值:** 各组件的 `Config` 结构体应实现 `SetDefaults()` 方法，确保在配置缺失时有合理的默认行为。
-4. **验证:** 各组件的 `Config` 结构体应实现 `Validate()` 方法，在启动阶段尽早发现配置错误。
+### Phase 1: 本地文件 + 环境变量 (Current)
+
+* [x] 定义 `pkg/config` 接口。
+* [x] 实现基于 Viper 的文件加载与环境变量覆盖。
+* [x] 实现 `Watch` 机制 (Channel based)。
+* [x] 集成到 `pkg/container`。
+
+### Phase 2: 远程配置中心 (Future)
+
+* [ ] 集成 Viper Remote Provider (Etcd)。
+* [ ] 实现配置版本管理。
+* [ ] 实现配置回滚。

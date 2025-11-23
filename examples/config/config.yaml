@@ -1,0 +1,20 @@
+app:
+  name: "genesis-demo-1"
+  version: "1.0.0"
+  debug: true
+
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+database:
+  driver: "pgsql"
+  host: "localhost"
+  port: 3306
+  username: "root"
+  password: "password"
+  database: "genesis"
+
+redis:
+  addr: "localhost:6379"
+  db: 0
