@@ -7,9 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/ceyewan/genesis/pkg/clog"
 	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
-	"github.com/redis/go-redis/v9"
 )
 
 // redisConnector Redis连接器实现
@@ -167,9 +168,9 @@ func (c *redisConnector) Reload(ctx context.Context, newConfig pkgconnector.Conf
 	}
 
 	// 类型断言
-	newRedisConfig, ok := newConfig.(pkgconnector.RedisConfig)
+	newRedisConfig, ok := newConfig.(*pkgconnector.RedisConfig)
 	if !ok {
-		return fmt.Errorf("配置类型不匹配，期望 RedisConfig")
+		return fmt.Errorf("配置类型不匹配，期望 *RedisConfig")
 	}
 
 	c.logger.InfoContext(ctx, "正在重载Redis配置", clog.String("name", c.name))
@@ -182,7 +183,7 @@ func (c *redisConnector) Reload(ctx context.Context, newConfig pkgconnector.Conf
 
 	// 更新配置
 	c.mu.Lock()
-	c.config = newRedisConfig
+	c.config = *newRedisConfig
 	c.mu.Unlock()
 
 	c.logger.InfoContext(ctx, "Redis配置已重载，正在重新连接", clog.String("name", c.name))

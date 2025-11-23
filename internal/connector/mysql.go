@@ -7,12 +7,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ceyewan/genesis/internal/connector/adapter"
-	"github.com/ceyewan/genesis/pkg/clog"
-	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	"github.com/ceyewan/genesis/internal/connector/adapter"
+	"github.com/ceyewan/genesis/pkg/clog"
+	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
 )
 
 // mysqlConnector MySQL连接器实现
@@ -237,9 +238,9 @@ func (c *mysqlConnector) Reload(ctx context.Context, newConfig pkgconnector.Conf
 	}
 
 	// 类型断言
-	newMySQLConfig, ok := newConfig.(pkgconnector.MySQLConfig)
+	newMySQLConfig, ok := newConfig.(*pkgconnector.MySQLConfig)
 	if !ok {
-		return fmt.Errorf("配置类型不匹配，期望 MySQLConfig")
+		return fmt.Errorf("配置类型不匹配，期望 *MySQLConfig")
 	}
 
 	c.logger.InfoContext(ctx, "正在重载MySQL配置", clog.String("name", c.name))
@@ -252,7 +253,7 @@ func (c *mysqlConnector) Reload(ctx context.Context, newConfig pkgconnector.Conf
 
 	// 更新配置
 	c.mu.Lock()
-	c.config = newMySQLConfig
+	c.config = *newMySQLConfig
 	c.mu.Unlock()
 
 	c.logger.InfoContext(ctx, "MySQL配置已重载，正在重新连接", clog.String("name", c.name))

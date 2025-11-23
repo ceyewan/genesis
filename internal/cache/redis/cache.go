@@ -6,11 +6,12 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/ceyewan/genesis/internal/cache/serializer"
 	"github.com/ceyewan/genesis/pkg/cache/types"
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/redis/go-redis/v9"
 )
 
 type redisCache struct {
