@@ -41,7 +41,7 @@ func snowflakeStaticExample() {
 	}
 
 	// Static 模式不需要连接器
-	gen, err := idgen.NewSnowflake(cfg, nil, nil)
+	gen, err := idgen.NewSnowflake(cfg, nil, nil) // 使用默认 Logger
 	if err != nil {
 		log.Printf("Failed to create static snowflake: %v\n", err)
 		return

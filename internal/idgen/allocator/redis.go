@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 )
 
@@ -13,10 +14,11 @@ type RedisAllocator struct {
 	client    connector.RedisConnector
 	keyPrefix string
 	ttl       time.Duration
+	logger    clog.Logger
 }
 
 // NewRedis 创建 Redis 分配器
-func NewRedis(conn connector.RedisConnector, keyPrefix string, ttl int) *RedisAllocator {
+func NewRedis(conn connector.RedisConnector, keyPrefix string, ttl int, logger clog.Logger) *RedisAllocator {
 	if keyPrefix == "" {
 		keyPrefix = "genesis:idgen:worker"
 	}
@@ -27,6 +29,7 @@ func NewRedis(conn connector.RedisConnector, keyPrefix string, ttl int) *RedisAl
 		client:    conn,
 		keyPrefix: keyPrefix,
 		ttl:       time.Duration(ttl) * time.Second,
+		logger:    logger,
 	}
 }
 
@@ -62,6 +65,14 @@ func (a *RedisAllocator) Start(ctx context.Context, workerID int64) (<-chan erro
 	failCh := make(chan error, 1)
 	key := fmt.Sprintf("%s:%d", a.keyPrefix, workerID)
 
+	if a.logger != nil {
+		a.logger.Info("starting worker id keep alive",
+			clog.Int64("worker_id", workerID),
+			clog.String("key", key),
+			clog.Duration("ttl", a.ttl),
+		)
+	}
+
 	// 启动后台 goroutine 续期
 	go func() {
 		ticker := time.NewTicker(a.ttl / 3)
@@ -69,10 +80,19 @@ func (a *RedisAllocator) Start(ctx context.Context, workerID int64) (<-chan erro
 		for {
 			select {
 			case <-ctx.Done():
+				if a.logger != nil {
+					a.logger.Info("keep alive stopped", clog.Int64("worker_id", workerID))
+				}
 				return
 			case <-ticker.C:
 				// 续期失败则熔断
 				if err := a.client.GetClient().Expire(ctx, key, a.ttl).Err(); err != nil {
+					if a.logger != nil {
+						a.logger.Error("keep alive failed, circuit breaking",
+							clog.Int64("worker_id", workerID),
+							clog.Error(err),
+						)
+					}
 					select {
 					case failCh <- fmt.Errorf("keep alive failed: %w", err):
 					default:

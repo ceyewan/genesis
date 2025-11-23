@@ -7,6 +7,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 )
 
@@ -15,10 +16,11 @@ type EtcdAllocator struct {
 	client    connector.EtcdConnector
 	keyPrefix string
 	ttl       time.Duration
+	logger    clog.Logger
 }
 
 // NewEtcd 创建 Etcd 分配器
-func NewEtcd(conn connector.EtcdConnector, keyPrefix string, ttl int) *EtcdAllocator {
+func NewEtcd(conn connector.EtcdConnector, keyPrefix string, ttl int, logger clog.Logger) *EtcdAllocator {
 	if keyPrefix == "" {
 		keyPrefix = "genesis:idgen:worker"
 	}
@@ -29,6 +31,7 @@ func NewEtcd(conn connector.EtcdConnector, keyPrefix string, ttl int) *EtcdAlloc
 		client:    conn,
 		keyPrefix: keyPrefix,
 		ttl:       time.Duration(ttl) * time.Second,
+		logger:    logger,
 	}
 }
 
@@ -99,6 +102,14 @@ func (a *EtcdAllocator) Start(ctx context.Context, workerID int64) (<-chan error
 	}
 	leaseID := clientv3.LeaseID(resp.Kvs[0].Lease)
 
+	if a.logger != nil {
+		a.logger.Info("starting worker id keep alive",
+			clog.Int64("worker_id", workerID),
+			clog.String("key", key),
+			clog.Int64("lease_id", int64(leaseID)),
+		)
+	}
+
 	// 启动 KeepAlive
 	kaCh, err := a.client.GetClient().KeepAlive(ctx, leaseID)
 	if err != nil {
@@ -110,10 +121,18 @@ func (a *EtcdAllocator) Start(ctx context.Context, workerID int64) (<-chan error
 		for {
 			select {
 			case <-ctx.Done():
+				if a.logger != nil {
+					a.logger.Info("keep alive stopped", clog.Int64("worker_id", workerID))
+				}
 				return
 			case resp, ok := <-kaCh:
 				if !ok || resp == nil {
 					// KeepAlive 失败
+					if a.logger != nil {
+						a.logger.Error("keep alive channel closed, circuit breaking",
+							clog.Int64("worker_id", workerID),
+						)
+					}
 					select {
 					case failCh <- fmt.Errorf("keep alive channel closed"):
 					default:

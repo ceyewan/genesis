@@ -10,11 +10,11 @@
 ├─────────────────────────────────────────┤
 │         Container (集成层)               │  依赖注入 & 生命周期管理
 ├─────────────────────────────────────────┤
-│    Components (业务组件层)              │  DB, DLock, Cache, MQ, IDGen
+│    Components (业务组件层)                │  DB, DLock, Cache, MQ, IDGen
 ├─────────────────────────────────────────┤
-│    Connectors (连接器层)                │  MySQL, Redis, Etcd, NATS
+│    Connectors (连接器层)                  │  MySQL, Redis, Etcd, NATS
 ├─────────────────────────────────────────┤
-│    Telemetry & Logger (横切关注点)      │  可观测性
+│    Telemetry & Logger (横切关注点)        │  可观测性
 └─────────────────────────────────────────┘
 ```
 
@@ -31,11 +31,13 @@
 **职责**: Bootstrapping 组件，在 Container 之外初始化
 
 **特点**:
+
 - 不依赖 Container
 - 定义独立的 `Lifecycle` 接口
 - 可选地由 Container 托管生命周期
 
 **使用流程**:
+
 ```go
 // 1. 创建并加载配置
 cfgMgr, _ := config.New(...)
@@ -56,11 +58,13 @@ app.RegisterConfigManager(cfgMgr)
 **职责**: 提供结构化日志能力
 
 **特点**:
+
 - 应用级 Logger 在 Container 之外创建
 - 通过 `WithLogger` Option 注入到 Container
 - Container 内部派生子 Logger 给各个组件
 
 **使用流程**:
+
 ```go
 // 创建应用级 Logger
 logger, _ := clog.New(logConfig, &clog.Option{
@@ -76,11 +80,13 @@ app, _ := container.New(cfg, container.WithLogger(logger))
 **职责**: 提供 Metrics 和 Tracing 能力
 
 **特点**:
+
 - 作为 Phase 0 组件，最先启动
 - 支持通过 Option 注入或配置自动初始化
 - 为其他组件提供 Meter 和 Tracer
 
 **使用流程**:
+
 ```go
 // 方式 1: 配置驱动
 cfg := &container.Config{
@@ -100,6 +106,7 @@ app, _ := container.New(cfg,
 **职责**: 依赖注入和生命周期管理
 
 **管理范围**:
+
 - ✅ Connectors: MySQL, Redis, Etcd, NATS
 - ✅ Components: DB, DLock, Cache, MQ, IDGen
 - ✅ Telemetry: Metrics & Tracing
@@ -107,6 +114,7 @@ app, _ := container.New(cfg,
 - ❌ Logger: 在 Container 之外创建并注入
 
 **生命周期阶段**:
+
 - Phase -10: ConfigManager (如果注册)
 - Phase 0: Telemetry
 - Phase 10: Connectors
@@ -185,4 +193,3 @@ func main() {
 - [Config 设计文档](./config-design.md)
 - [组件开发规范](./specs/component-spec.md)
 - [Container 重构总结](./reviews/container-refactoring-summary.md)
-
