@@ -11,6 +11,7 @@ import (
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/dlock/types"
+	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 type EtcdLocker struct {
@@ -18,6 +19,8 @@ type EtcdLocker struct {
 	session *concurrency.Session
 	cfg     *types.Config
 	logger  clog.Logger
+	meter   telemetrytypes.Meter
+	tracer  telemetrytypes.Tracer
 	locks   map[string]*etcdLockEntry
 	mu      sync.RWMutex
 }
@@ -29,7 +32,7 @@ type etcdLockEntry struct {
 }
 
 // New 创建 EtcdLocker 实例
-func New(conn connector.EtcdConnector, cfg *types.Config, logger clog.Logger) (*EtcdLocker, error) {
+func New(conn connector.EtcdConnector, cfg *types.Config, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) (*EtcdLocker, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("etcd connector is nil")
 	}
@@ -50,15 +53,17 @@ func New(conn connector.EtcdConnector, cfg *types.Config, logger clog.Logger) (*
 		session: session,
 		cfg:     cfg,
 		logger:  logger,
+		meter:   meter,
+		tracer:  tracer,
 		locks:   make(map[string]*etcdLockEntry),
 	}, nil
 }
 
-func (l *EtcdLocker) Lock(ctx context.Context, key string, opts ...types.Option) error {
+func (l *EtcdLocker) Lock(ctx context.Context, key string, opts ...types.LockOption) error {
 	return l.lock(ctx, key, false, opts...)
 }
 
-func (l *EtcdLocker) TryLock(ctx context.Context, key string, opts ...types.Option) (bool, error) {
+func (l *EtcdLocker) TryLock(ctx context.Context, key string, opts ...types.LockOption) (bool, error) {
 	err := l.lock(ctx, key, true, opts...)
 	if err != nil {
 		if err == concurrency.ErrLocked {
@@ -69,7 +74,7 @@ func (l *EtcdLocker) TryLock(ctx context.Context, key string, opts ...types.Opti
 	return true, nil
 }
 
-func (l *EtcdLocker) lock(ctx context.Context, key string, try bool, opts ...types.Option) error {
+func (l *EtcdLocker) lock(ctx context.Context, key string, try bool, opts ...types.LockOption) error {
 	l.mu.RLock()
 	if _, exists := l.locks[key]; exists {
 		l.mu.RUnlock()
@@ -77,7 +82,7 @@ func (l *EtcdLocker) lock(ctx context.Context, key string, try bool, opts ...typ
 	}
 	l.mu.RUnlock()
 
-	options := &types.LockOption{
+	options := &types.LockOptions{
 		TTL: l.cfg.DefaultTTL,
 	}
 	for _, opt := range opts {

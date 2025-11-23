@@ -9,7 +9,6 @@ import (
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/dlock"
-	dlocktypes "github.com/ceyewan/genesis/pkg/dlock/types"
 )
 
 func main() {
@@ -44,7 +43,7 @@ func example1BasicUsage() {
 			WriteTimeout: 3 * time.Second,
 		},
 		DLock: &dlock.Config{
-			Backend:       dlocktypes.BackendRedis,
+			Backend:       dlock.BackendRedis,
 			Prefix:        "dlock:",
 			DefaultTTL:    30 * time.Second,
 			RetryInterval: 100 * time.Millisecond,
@@ -103,7 +102,7 @@ func example2WithCustomLogger() {
 			WriteTimeout: 3 * time.Second,
 		},
 		DLock: &dlock.Config{
-			Backend:       dlocktypes.BackendRedis,
+			Backend:       dlock.BackendRedis,
 			Prefix:        "dlock:",
 			DefaultTTL:    30 * time.Second,
 			RetryInterval: 100 * time.Millisecond,

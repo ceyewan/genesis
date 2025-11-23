@@ -10,7 +10,7 @@ import (
 	"github.com/ceyewan/genesis/pkg/config"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/container"
-	"github.com/ceyewan/genesis/pkg/dlock/types"
+	"github.com/ceyewan/genesis/pkg/dlock"
 )
 
 // AppConfig 应用总配置
@@ -108,8 +108,8 @@ func main() {
 			DB:          appCfg.Redis.DB,
 			DialTimeout: appCfg.Redis.Timeout,
 		},
-		DLock: &types.Config{
-			Backend:    types.BackendRedis,
+		DLock: &dlock.Config{
+			Backend:    dlock.BackendRedis,
 			Prefix:     appCfg.DLock.Prefix,
 			DefaultTTL: appCfg.DLock.DefaultTTL,
 		},

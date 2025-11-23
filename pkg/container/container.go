@@ -444,49 +444,47 @@ func (c *Container) initDLock(cfg *Config) error {
 		return nil
 	}
 
-	// 派生 dlock 专用的 Logger
-	dlockLogger := c.Log.WithNamespace("dlock")
-
-	// TODO: 未来当 DLock 组件支持 WithTracer/WithMeter Option 时，可以这样调用:
-	// locker, err := dlock.NewRedis(redisConn, cfg.DLock,
-	//     dlock.WithLogger(dlockLogger),
-	//     dlock.WithTracer(c.Tracer),
-	//     dlock.WithMeter(c.Meter),
-	// )
-
 	switch cfg.DLock.Backend {
 	case dlocktypes.BackendRedis:
 		if cfg.Redis == nil {
-			return fmt.Errorf("redis backend requires redis config")
+			return fmt.Errorf("dlock redis 后端需要 Redis 配置")
 		}
 		// 获取 Redis 连接器
 		redisConn, err := c.GetRedisConnector(*cfg.Redis)
 		if err != nil {
-			return fmt.Errorf("failed to get redis connector: %w", err)
+			return fmt.Errorf("获取 Redis 连接器失败: %w", err)
 		}
-		// 创建 dlock
-		locker, err := dlock.NewRedis(redisConn, cfg.DLock, dlockLogger)
+		// 创建 DLock 实例 (使用 Option 模式)
+		locker, err := dlock.NewRedis(redisConn, cfg.DLock,
+			dlock.WithLogger(c.Log),
+			dlock.WithMeter(c.Meter),
+			dlock.WithTracer(c.Tracer),
+		)
 		if err != nil {
-			return fmt.Errorf("failed to create redis locker: %w", err)
+			return fmt.Errorf("创建 Redis DLock 失败: %w", err)
 		}
 		c.DLock = locker
 	case dlocktypes.BackendEtcd:
 		if cfg.Etcd == nil {
-			return fmt.Errorf("etcd backend requires etcd config")
+			return fmt.Errorf("dlock etcd 后端需要 Etcd 配置")
 		}
 		// 获取 Etcd 连接器
 		etcdConn, err := c.GetEtcdConnector(*cfg.Etcd)
 		if err != nil {
-			return fmt.Errorf("failed to get etcd connector: %w", err)
+			return fmt.Errorf("获取 Etcd 连接器失败: %w", err)
 		}
-		// 创建 dlock
-		locker, err := dlock.NewEtcd(etcdConn, cfg.DLock, dlockLogger)
+		// 创建 DLock 实例 (使用 Option 模式)
+		locker, err := dlock.NewEtcd(etcdConn, cfg.DLock,
+			dlock.WithLogger(c.Log),
+			dlock.WithMeter(c.Meter),
+			dlock.WithTracer(c.Tracer),
+		)
 		if err != nil {
-			return fmt.Errorf("failed to create etcd locker: %w", err)
+			return fmt.Errorf("创建 Etcd DLock 失败: %w", err)
 		}
 		c.DLock = locker
 	default:
-		return fmt.Errorf("unsupported dlock backend: %s", cfg.DLock.Backend)
+		return fmt.Errorf("不支持的 DLock 后端: %s", cfg.DLock.Backend)
 	}
 
 	return nil
