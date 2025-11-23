@@ -234,7 +234,11 @@ telemetry:
 
 ### 7.3. 与 `container` 集成
 
-Telemetry 组件作为 `container` 的一部分，拥有最高的启动优先级 (Phase 0)，确保在其他组件启动前就绪，从而能够监控到应用启动的全过程。
+Telemetry 组件作为 `container` 管理的基础能力之一，应当在连接器和业务组件之前完成初始化：
+
+* 启动顺序上，建议为较小的 `Phase`（例如 0），确保在 DB/Redis 等连接器和业务组件启动前就绪；
+* Container 在启动阶段为各组件注入 `metrics.Meter` 与 `trace.Tracer`，组件内部仅依赖这些抽象接口，无需关心 OTel Provider 细节；
+* 借助统一的 Context 传递，HTTP/gRPC 中间件与各组件可以共享同一条 Trace 链路，实现从入口到底层连接器的全链路可视化。
 
 ## 8. 演进路线
 

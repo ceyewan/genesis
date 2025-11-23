@@ -175,23 +175,27 @@ func Component(name string) Field        // 映射到 component
 
 ## 6. 命名空间设计
 
-支持递归扩展命名空间，适用于微服务架构。
+clog 支持递归扩展命名空间，适用于微服务架构。推荐的命名空间规则为：
 
-### 6.1. 使用示例
+- 应用级：`<app>`，例如 `user-service`
+- 组件级：`<app>.<component>`，例如 `user-service.dlock`
+- 子模块级：`<app>.<component>.<sub>`，例如 `user-service.dlock.redis`
+
+### 6.1. 与 Container / 组件的协同
+
+在典型的 Genesis 应用中：
 
 ```go
-// 主服务创建 logger
-mainLogger := clog.New(config, &clog.Option{
-    NamespaceParts: []string{"user-service"},
-})
+// main.go 中创建应用级 Logger
+appLogger := clog.New(appCfg.Log).WithNamespace(appCfg.App.Namespace) // 如 "user-service"
 
-// 分布式锁组件扩展命名空间
-lockLogger := mainLogger.WithNamespace("lock")
-// 输出: namespace="user-service.lock"
+// Container 在装配组件时，仅传入 appLogger
+locker, _ := dlock.New(dep, cfg,
+	dlock.WithLogger(appLogger), // dlock 内部会在 Option 中追加 "dlock" 命名空间
+)
 
-// 更深层级
-redisLockLogger := lockLogger.WithNamespace("redis")
-// 输出: namespace="user-service.lock.redis"
+// dlock 组件内部如需更细分的子模块日志，可继续派生
+redisLogger := lockerLogger.WithNamespace("redis") // 最终 namespace: "user-service.dlock.redis"
 ```
 
 ## 7. 如何使用 (用户指南)

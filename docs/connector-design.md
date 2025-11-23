@@ -7,22 +7,31 @@
 **核心设计原则：**
 
 1. **分层与抽象 (Layering & Abstraction):**
-    * **连接器 (Connector):** 专职**管理原始连接**。负责与外部基础设施（如 MySQL, Redis）建立、复用、监控和关闭连接。
-    * **组件 (Component):** 专职**封装业务功能**。构建于连接器之上，提供面向业务场景的高级、抽象的 API（如事务、分布式锁）。
+
+* **连接器 (Connector):** 专职**管理原始连接**。负责与外部基础设施（如 MySQL, Redis）建立、复用、监控和关闭连接。
+* **组件 (Component):** 专职**封装业务功能**。构建于连接器之上，提供面向业务场景的高级、抽象的 API（如事务、分布式锁）。
+
 2. **接口隔离与依赖倒置 (Interface Segregation & Dependency Inversion):**
-    * 所有公开 API 和接口定义于 `pkg/` 目录，作为框架的稳定契约。
-    * 所有具体实现封装于 `internal/` 目录，对用户代码不可见。
-    * 高层模块（组件）依赖于底层模块（连接器）的**抽象接口**，而非具体实现。
+
+* 所有公开 API 和接口定义于 `pkg/` 目录，作为框架的稳定契约。
+* 所有具体实现封装于 `internal/` 目录，对用户代码不可见。
+* 高层模块（组件）依赖于底层模块（连接器）的**抽象接口**，而非具体实现。
 
 3. **生命周期管理 (Lifecycle Management):**
-    * 所有需要初始化和清理资源的模块（连接器、组件）都应实现统一的 `Lifecycle` 接口。
-    * 由核心**容器 (Container)** 负责按预定顺序（`Phase`）进行启动和关闭，确保依赖关系正确，并实现优雅停机 (Graceful Shutdown)。
+
+* 所有需要初始化和清理资源的模块（连接器、组件）都应实现统一的 `Lifecycle` 接口。
+* 由核心**容器 (Container)** 负责按预定顺序（`Phase`）进行启动和关闭，确保依赖关系正确，并实现优雅停机 (Graceful Shutdown)。
+* 连接器的 `Phase` 应早于业务组件，保证在组件启动前连接可用，在组件关闭后再释放底层资源。
 
 4. **集中化管理 (Centralized Management):**
-    * 通过 `internal/connector/manager` 模式，对同一类型和配置的连接进行**缓存和复用**，实现高效的资源利用和并发安全。
+
+* 通过 `internal/connector/manager` 模式，对同一类型和配置的连接进行**缓存和复用**，实现高效的资源利用和并发安全。
+* Manager 本身不依赖 Container，可同时被 Container、Config 模块等上层复用，避免循环依赖。
 
 5. **可观测性 (Observability):**
-    * 框架设计应内建对日志、指标 (Metrics) 和追踪 (Tracing) 的支持，便于监控系统状态和排查问题。
+
+* 框架设计应内建对日志、指标 (Metrics) 和追踪 (Tracing) 的支持，便于监控系统状态和排查问题。
+* 每个连接器的工厂函数必须接收 `clog.Logger`，并在内部基于应用级 Logger 派生命名空间，例如：`user-service.connector.redis.default`。
 
 ## 2. 核心概念定义
 
@@ -222,104 +231,14 @@ func (m *Manager[T]) Release(config any) error {
 
 ## 5. 核心容器 (Core Container) 深度设计
 
-容器是整个应用的粘合剂和启动器。
+容器是整个应用的粘合剂和启动器，其详细设计见 `docs/container-design.md`。本节只从连接器视角说明与 Container 的协作关系。
 
-### 5.1. 生命周期接口 (`pkg/container`)
-
-定义一个所有可管理对象（连接器、需要启动/关闭的组件）都必须实现的接口。
-
-````go
-// pkg/container/lifecycle.go
-package container
-
-import "context"
-
-// Lifecycle 定义了可由容器管理生命周期的对象的行为
-type Lifecycle interface {
-    // Start 启动服务，Phase 越小越先启动
-    Start(ctx context.Context) error
-    // Stop 关闭服务，按启动的逆序调用
-    Stop(ctx context.Context) error
-    // Phase 返回启动阶段，用于排序。例如：
-    // 0: 基础日志
-    // 10: 连接器 (Connectors)
-    // 20: 业务组件 (Components)
-    Phase() int
-}
-````
-
-### 5.2. 容器实现 (`pkg/container`)
-
-容器负责依据 `Phase` 顺序，有序地启动和关闭所有 `Lifecycle` 对象。
-
-```go
-// pkg/container/container.go (示意代码)
-package container
-
-// Container 聚合了所有组件，是应用的统一访问入口
-type Container struct {
-    Log       clog.Logger
-    DB        db.DB
-    Cache     cache.Cache
-    Idgen     idgen.Generator
-    Idem      idem.Idempotent
-    Limit     limit.Limiter
-    // ... 其他组件
-
-    lifecycles []Lifecycle // 存储所有需要管理生命周期的对象
-}
-
-func New(cfg *config.AppConfig) (*Container, error) {
-    // 1. 初始化 Logger
-    c.Log = clog.New(cfg.Log)
-
-    // 2. 初始化所有 Connectors (注入 Logger)
-    //    - e.g., redisConn, err := redisManager.Get(cfg.Connectors.Redis["default"], c.Log.WithNamespace("connector.redis.default"))
-
-    // 3. 初始化所有 Components (注入 Logger, Metrics, Connectors)
-    //    - e.g., cacheComponent := cache.New(redisConn, cfg.Components.Cache, cache.WithLogger(c.Log))
-    
-    // 4. 注册到 lifecycles 数组中
-    //    - c.lifecycles = append(c.lifecycles, redisConn, cacheComponent)
-
-    // 5. 启动所有生命周期对象
-    if err := c.startAll(); err != nil {
-        // 如果启动失败，尝试优雅回滚
-        c.stopAll()
-        return nil, err
-    }
-    
-    return &Container{...}, nil
-}
-
-func (c *Container) startAll() error {
-    // 根据 Phase 对 lifecycles 进行排序
-    sort.Slice(c.lifecycles, func(i, j int) bool {
-        return c.lifecycles[i].Phase() < c.lifecycles[j].Phase()
-    })
-
-    // 顺序启动
-    for _, lc := range c.lifecycles {
-        if err := lc.Start(context.Background()); err != nil {
-            // 如果一个组件启动失败，立即返回错误
-            return fmt.Errorf("failed to start component (phase %d): %w", lc.Phase(), err)
-        }
-    }
-    return nil
-}
-
-func (c *Container) Close() {
-    c.stopAll()
-}
-
-func (c *Container) stopAll() {
-    // 逆序关闭
-    for i := len(c.lifecycles) - 1; i >= 0; i-- {
-        // 忽略关闭过程中的错误，以确保所有组件都尝试关闭
-        _ = c.lifecycles[i].Stop(context.Background())
-    }
-}
-```
+1. Container 在启动阶段，会先完成 Config / Telemetry / 日志等基础能力的初始化；
+2. 随后根据 `AppConfig.Connectors` 调用各类 `connector.Manager` / Factory，使用带命名空间的 Logger 创建具体连接器实例，例如：
+   - `logger.WithNamespace("connector.mysql.primary")`
+   - `logger.WithNamespace("connector.redis.default")`
+3. 连接器实例如实现了 `container.Lifecycle` 接口，则会被注册到 Container 的生命周期管理中，典型 Phase 早于业务组件；
+4. 上层业务组件（如 db / dlock / cache）只通过 `pkg/connector` 暴露的接口访问底层连接，而不直接感知 Container 与 Manager 的存在。
 
 ## 6. 使用示例
 
