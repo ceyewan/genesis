@@ -1,0 +1,8 @@
+app:
+  debug: false
+
+server:
+  port: 8081
+
+database:
+  database: "genesis_dev"

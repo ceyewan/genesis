@@ -7,9 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/ceyewan/genesis/pkg/clog"
 	pkgconnector "github.com/ceyewan/genesis/pkg/connector"
-	"github.com/nats-io/nats.go"
 )
 
 // natsConnector NATS连接器实现
@@ -190,9 +191,9 @@ func (c *natsConnector) Reload(ctx context.Context, newConfig pkgconnector.Confi
 	}
 
 	// 类型断言
-	newNATSConfig, ok := newConfig.(pkgconnector.NATSConfig)
+	newNATSConfig, ok := newConfig.(*pkgconnector.NATSConfig)
 	if !ok {
-		return fmt.Errorf("配置类型不匹配，期望 NATSConfig")
+		return fmt.Errorf("配置类型不匹配，期望 *NATSConfig")
 	}
 
 	c.logger.InfoContext(ctx, "正在重载NATS配置", clog.String("name", c.name))
@@ -205,7 +206,7 @@ func (c *natsConnector) Reload(ctx context.Context, newConfig pkgconnector.Confi
 
 	// 更新配置
 	c.mu.Lock()
-	c.config = newNATSConfig
+	c.config = *newNATSConfig
 	c.mu.Unlock()
 
 	c.logger.InfoContext(ctx, "NATS配置已重载，正在重新连接", clog.String("name", c.name))

@@ -22,7 +22,7 @@ type MySQLConfig struct {
 }
 
 // Validate 实现 Configurable 接口
-func (c MySQLConfig) Validate() error {
+func (c *MySQLConfig) Validate() error {
 	if c.Host == "" {
 		return fmt.Errorf("主机地址不能为空")
 	}
@@ -53,7 +53,7 @@ type RedisConfig struct {
 }
 
 // Validate 实现 Configurable 接口
-func (c RedisConfig) Validate() error {
+func (c *RedisConfig) Validate() error {
 	if c.Addr == "" {
 		return fmt.Errorf("Redis地址不能为空")
 	}
@@ -93,7 +93,7 @@ type EtcdConfig struct {
 }
 
 // Validate 实现 Configurable 接口
-func (c EtcdConfig) Validate() error {
+func (c *EtcdConfig) Validate() error {
 	if len(c.Endpoints) == 0 {
 		return fmt.Errorf("Etcd端点不能为空")
 	}
@@ -125,7 +125,7 @@ type NATSConfig struct {
 }
 
 // Validate 实现 Configurable 接口
-func (c NATSConfig) Validate() error {
+func (c *NATSConfig) Validate() error {
 	if c.URL == "" {
 		return fmt.Errorf("NATS URL不能为空")
 	}

@@ -21,6 +21,7 @@ func extractContextFields(ctx context.Context, option *types.Option, builder *ty
 		if val == nil {
 			if cf.Required {
 				// 如果是必需字段但不存在，可以考虑记录一个内部警告，但这里我们选择跳过
+				continue
 			}
 			continue
 		}
