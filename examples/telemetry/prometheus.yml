@@ -1,0 +1,40 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Prometheus 自身监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Genesis Telemetry 示例服务
+  - job_name: 'order-service'
+    static_configs:
+      - targets: ['order-service:9093']
+        labels:
+          service: 'order-service'
+          environment: 'demo'
+    scrape_interval: 5s
+    metrics_path: '/metrics'
+
+  # 可选：监控其他服务
+  # - job_name: 'node-exporter'
+  #   static_configs:
+  #     - targets: ['node-exporter:9100']
+
+  # 可选：监控 Docker 容器
+  # - job_name: 'cadvisor'
+  #   static_configs:
+  #     - targets: ['cadvisor:8080']
+
+# 告警规则（可选）
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           # - alertmanager:9093
