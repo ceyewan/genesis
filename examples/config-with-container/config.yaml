@@ -1,0 +1,19 @@
+app:
+  name: "config-container-demo"
+  version: "1.0.0"
+
+log:
+  level: "info"
+  format: "console"
+  output: "stdout"
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: "your_redis_password"
+  db: 0
+  timeout: 5s
+
+dlock:
+  prefix: "demo:lock:"
+  default_ttl: 10s
+

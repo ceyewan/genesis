@@ -50,7 +50,17 @@ func main() {
 		log.Fatalf("初始化日志记录器失败: %v", err)
 	}
 
-	logger.Info("=== Genesis Cache IM 场景示例 ===")
+	logger.Info("=== Genesis Cache 组件示例 ===")
+	logger.Info("本示例演示 Cache 组件的两种使用模式:")
+	logger.Info("  1. 独立模式 (Standalone): 手动创建连接器和组件")
+	logger.Info("  2. 容器模式 (Container): 由 Container 统一管理")
+	logger.Info("")
+
+	// 演示容器模式
+	containerModeExample(logger)
+
+	logger.Info("")
+	logger.Info("=== IM 场景示例 (独立模式) ===")
 
 	// 示例 1: 用户路由缓存
 	userRouteExample(logger)
@@ -62,12 +72,66 @@ func main() {
 	recentMessagesExample(logger)
 }
 
+func containerModeExample(logger clog.Logger) {
+	logger.Info("--- 容器模式示例 ---")
+
+	// 使用 Container 统一管理 Cache 组件
+	containerCfg := &container.Config{
+		Redis: &connector.RedisConfig{
+			Addr:        "127.0.0.1:6379",
+			Password:    "your_redis_password",
+			DialTimeout: 2 * time.Second,
+		},
+		Cache: &cache.Config{
+			Prefix:     "container:",
+			Serializer: "json",
+		},
+	}
+
+	c, err := container.New(containerCfg, container.WithLogger(logger))
+	if err != nil {
+		logger.Warn("跳过容器模式示例: 容器初始化失败", clog.Error(err))
+		return
+	}
+	defer c.Close()
+
+	ctx := context.Background()
+
+	// 直接使用 Container 中的 Cache
+	if c.Cache == nil {
+		logger.Warn("Cache 组件未初始化")
+		return
+	}
+
+	// 缓存用户信息
+	route := UserRoute{
+		UserID:    "user_2001",
+		GatewayID: "gateway_02",
+		ServerID:  "server_02",
+	}
+
+	err = c.Cache.Set(ctx, "user:"+route.UserID, route, 24*time.Hour)
+	if err != nil {
+		logger.Error("设置用户路由失败", clog.Error(err))
+		return
+	}
+	logger.Info("✓ 容器模式: 已缓存用户路由", clog.Any("route", route))
+
+	// 获取用户路由信息
+	var cachedRoute UserRoute
+	err = c.Cache.Get(ctx, "user:"+route.UserID, &cachedRoute)
+	if err != nil {
+		logger.Error("获取用户路由失败", clog.Error(err))
+		return
+	}
+	logger.Info("✓ 容器模式: 获取到的用户路由", clog.Any("route", cachedRoute))
+}
+
 func userRouteExample(logger clog.Logger) {
 	logger.Info("--- 示例 1: 用户路由缓存 ---")
 
 	// 1. 使用 Container 初始化 Redis 连接器
 	containerCfg := &container.Config{
-		Log: &clogtypes.Config{Level: "info", Format: "console", Output: "stdout"},
 		Redis: &connector.RedisConfig{
 			Addr:        "127.0.0.1:6379",
 			Password:    "your_redis_password",
@@ -75,7 +139,7 @@ func userRouteExample(logger clog.Logger) {
 		},
 	}
 
-	c, err := container.New(containerCfg)
+	c, err := container.New(containerCfg, container.WithLogger(logger))
 	if err != nil {
 		logger.Warn("跳过用户路由示例: 容器初始化失败", clog.Error(err))
 		return
@@ -95,8 +159,8 @@ func userRouteExample(logger clog.Logger) {
 		Serializer:         "json",
 	}
 
-	// 3. 创建缓存实例
-	cacheClient, err := cache.NewRedis(redisConn, cacheCfg, nil)
+	// 3. 创建缓存实例 (独立模式)
+	cacheClient, err := cache.New(redisConn, cacheCfg, cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
 		return
@@ -133,7 +197,6 @@ func sessionListExample(logger clog.Logger) {
 
 	// 1. 使用 Container 初始化 Redis 连接器
 	containerCfg := &container.Config{
-		Log: &clogtypes.Config{Level: "info", Format: "console", Output: "stdout"},
 		Redis: &connector.RedisConfig{
 			Addr:        "127.0.0.1:6379",
 			Password:    "your_redis_password",
@@ -141,7 +204,7 @@ func sessionListExample(logger clog.Logger) {
 		},
 	}
 
-	c, err := container.New(containerCfg)
+	c, err := container.New(containerCfg, container.WithLogger(logger))
 	if err != nil {
 		logger.Warn("跳过会话列表示例: 容器初始化失败", clog.Error(err))
 		return
@@ -161,8 +224,8 @@ func sessionListExample(logger clog.Logger) {
 		Serializer:         "json",
 	}
 
-	// 3. 创建缓存实例
-	cacheClient, err := cache.NewRedis(redisConn, cacheCfg, nil)
+	// 3. 创建缓存实例 (独立模式)
+	cacheClient, err := cache.New(redisConn, cacheCfg, cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
 		return
@@ -228,7 +291,6 @@ func recentMessagesExample(logger clog.Logger) {
 
 	// 1. 使用 Container 初始化 Redis 连接器
 	containerCfg := &container.Config{
-		Log: &clogtypes.Config{Level: "info", Format: "console", Output: "stdout"},
 		Redis: &connector.RedisConfig{
 			Addr:        "127.0.0.1:6379",
 			Password:    "your_redis_password",
@@ -236,7 +298,7 @@ func recentMessagesExample(logger clog.Logger) {
 		},
 	}
 
-	c, err := container.New(containerCfg)
+	c, err := container.New(containerCfg, container.WithLogger(logger))
 	if err != nil {
 		logger.Warn("跳过最新消息示例: 容器初始化失败", clog.Error(err))
 		return
@@ -256,8 +318,8 @@ func recentMessagesExample(logger clog.Logger) {
 		Serializer:         "json",
 	}
 
-	// 3. 创建缓存实例
-	cacheClient, err := cache.NewRedis(redisConn, cacheCfg, nil)
+	// 3. 创建缓存实例 (独立模式)
+	cacheClient, err := cache.New(redisConn, cacheCfg, cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
 		return

@@ -18,11 +18,6 @@ func main() {
 
 	// 1. 配置容器
 	cfg := &container.Config{
-		Log: &clog.Config{
-			Level:  "info",
-			Format: "console",
-			Output: "stdout",
-		},
 		Etcd: &connector.EtcdConfig{
 			Endpoints: []string{"127.0.0.1:2379"},
 			Timeout:   5 * time.Second,
@@ -35,15 +30,29 @@ func main() {
 		},
 	}
 
-	// 2. 创建容器
-	c, err := container.New(cfg)
+	// 2. 创建应用级 Logger (可选)
+	logConfig := &clog.Config{
+		Level:  "info",
+		Format: "console",
+		Output: "stdout",
+	}
+	appLogger, err := clog.New(logConfig, &clog.Option{
+		NamespaceParts: []string{"dlock-demo"},
+	})
+	if err != nil {
+		fmt.Printf("创建 Logger 失败: %v\n", err)
+		return
+	}
+
+	// 3. 创建容器 (使用 Option 注入 Logger)
+	c, err := container.New(cfg, container.WithLogger(appLogger))
 	if err != nil {
 		fmt.Printf("创建容器失败: %v\n", err)
 		return
 	}
 	defer c.Close()
 
-	// 3. 获取锁组件
+	// 4. 获取锁组件
 	locker := c.DLock
 	if locker == nil {
 		fmt.Println("锁组件未初始化")

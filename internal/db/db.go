@@ -7,18 +7,28 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/sharding"
 
+	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/db"
+	"github.com/ceyewan/genesis/pkg/db/types"
+	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 // database 是 DB 接口的实现
 type database struct {
 	client *gorm.DB
+	logger clog.Logger
+	meter  telemetrytypes.Meter
+	tracer telemetrytypes.Tracer
 }
 
 // New 创建一个新的数据库组件实例
-func New(conn connector.MySQLConnector, cfg *db.Config) (db.DB, error) {
+func New(conn connector.MySQLConnector, cfg *types.Config, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) (types.DB, error) {
 	gormDB := conn.GetClient()
+
+	// 使用默认 Logger 如果未提供
+	if logger == nil {
+		logger = clog.Default()
+	}
 
 	// 注册分片中间件
 	if cfg.EnableSharding && len(cfg.ShardingRules) > 0 {
@@ -41,7 +51,12 @@ func New(conn connector.MySQLConnector, cfg *db.Config) (db.DB, error) {
 		}
 	}
 
-	return &database{client: gormDB}, nil
+	return &database{
+		client: gormDB,
+		logger: logger,
+		meter:  meter,
+		tracer: tracer,
+	}, nil
 }
 
 // DB 获取底层的 *gorm.DB 实例

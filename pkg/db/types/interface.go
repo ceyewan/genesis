@@ -1,4 +1,4 @@
-package db
+package types
 
 import (
 	"context"
@@ -19,3 +19,4 @@ type DB interface {
 	// Close 关闭组件
 	Close() error
 }
+

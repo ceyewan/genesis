@@ -1,5 +1,6 @@
-package db
+package types
 
+// Config DB 组件配置
 type Config struct {
 	// 是否开启分片特性
 	EnableSharding bool `json:"enable_sharding" yaml:"enable_sharding"`
@@ -9,6 +10,7 @@ type Config struct {
 	ShardingRules []ShardingRule `json:"sharding_rules" yaml:"sharding_rules"`
 }
 
+// ShardingRule 分片规则
 type ShardingRule struct {
 	// 分片键 (例如 "user_id")
 	ShardingKey string `json:"sharding_key" yaml:"sharding_key"`
@@ -19,3 +21,4 @@ type ShardingRule struct {
 	// 应用此规则的逻辑表名列表 (例如 ["orders", "audit_logs"])
 	Tables []string `json:"tables" yaml:"tables"`
 }
+
