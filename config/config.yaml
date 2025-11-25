@@ -5,23 +5,25 @@ app:
   environment: "development"
   debug:       true
 
+
 # MySQL Configuration
 mysql:
   host:          "localhost"
   port:          3306
-  username:      "root"
-  password:      "your_mysql_password"
-  database:      "genesis_db"
+  username:      "${MYSQL_USER}"
+  password:      "${MYSQL_PASSWORD}"
+  database:      "${MYSQL_DATABASE}"
   charset:       "utf8mb4"
   timeout:       "10s"
-  max_open_conns: 100
+  max_open_conns: 50
   max_idle_conns: 10
   max_lifetime:   "1h"
+
 
 # Redis Configuration
 redis:
   addr:           "localhost:6379"
-  password:       "your_redis_password"
+  password:       "${REDIS_PASSWORD}"
   db:             0
   max_retries:    3
   pool_size:      100
@@ -30,38 +32,39 @@ redis:
   read_timeout:   "3s"
   write_timeout:  "3s"
 
-# Cache Configuration - 包含 Redis 配置和缓存特有配置
+
+# Cache Configuration
 cache:
-  # 继承 Redis 配置
   redis:
     addr:           "localhost:6379"
-    password:       "your_redis_password"
-    db:             1  # 缓存使用不同的 DB
+    password:       "${REDIS_PASSWORD}"
+    db:             1
     max_retries:    3
-    pool_size:      50  # 缓存使用较小的连接池
+    pool_size:      50
     min_idle_conns: 5
     dial_timeout:   "5s"
     read_timeout:   "3s"
     write_timeout:  "3s"
-  
-  # 缓存特有配置
-  prefix:         "genesis:cache:"     # 缓存键前缀
-  serializer:     "msgpack"            # 序列化方式: json, msgpack, protobuf
-  default_ttl:    "1h"                 # 默认过期时间
-  max_key_length: 250                  # 最大键长度
-  compression:    true                 # 是否启用压缩
-  compression_threshold: 1024          # 压缩阈值（字节）
+  prefix:         "genesis:cache:"
+  serializer:     "msgpack"
+  default_ttl:    "1h"
+  max_key_length: 250
+  compression:    true
+  compression_threshold: 1024
 
+
+# NATS 配置
 nats:
   urls:            ["nats://localhost:4222"]
-  name:           "genesis-mq"
-  reconnect_wait: "2s"
-  max_reconnects: 60
-  ping_interval:  "2m"
-  max_pings_out:  2
-  timeout:        "5s"
+  name:            "genesis-nats"
+  reconnect_wait:  "2s"
+  max_reconnects:  60
+  ping_interval:   "2m"
+  max_pings_out:   2
+  timeout:         "5s"
 
-# Etcd Configuration
+
+# Etcd 配置
 etcd:
   endpoints:          ["localhost:2379"]
   username:           ""
@@ -69,6 +72,31 @@ etcd:
   timeout:            "5s"
   keep_alive_time:    "10s"
   keep_alive_timeout: "3s"
+  
+# Kafka 配置
+kafka:
+  brokers: ["localhost:9092"]
+  cluster_id: "${KAFKA_CLUSTER_ID_STANDALONE}"
+  num_partitions: 3
+  default_replication_factor: 1
+  offsets_topic_replication_factor: 1
+  transaction_state_log_replication_factor: 1
+  transaction_state_log_min_isr: 1
+  heap_opts: "-Xmx1G -Xms1G"
+
+# PostgreSQL 配置
+postgres:
+  host: "localhost"
+  port: 5432
+  user: "${POSTGRES_USER}"
+  password: "${POSTGRES_PASSWORD}"
+  dbname: "${POSTGRES_DB}"
+  sslmode: "disable"
+  max_connections: 50
+  shared_buffers: "256MB"
+  work_mem: "64MB"
+  log_min_messages: "WARNING"
+  log_min_duration_statement: 1000
 
 # Logging Configuration
 clog:
