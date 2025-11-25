@@ -1,19 +1,19 @@
-package types
+package config
 
 // Option 配置选项模式
 type Option func(*Options)
 
 type Options struct {
-	Name       string
-	Paths      []string
-	FileType   string
-	EnvPrefix  string
+	Name       string   // 配置文件名称（不含扩展名）
+	Paths      []string // 配置文件搜索路径
+	FileType   string   // 配置文件类型 (yaml, json, etc.)
+	EnvPrefix  string   // 环境变量前缀
 	RemoteOpts *RemoteOptions
 }
 
 type RemoteOptions struct {
-	Provider string
-	Endpoint string
+	Provider string // 远程提供者 (etcd, consul, etc.)
+	Endpoint string // 远程端点
 }
 
 // WithConfigName 设置配置文件名称（不带扩展名）
@@ -61,8 +61,8 @@ func WithRemote(provider, endpoint string) Option {
 	}
 }
 
-// DefaultOptions 返回默认选项
-func DefaultOptions() *Options {
+// defaultOptions 返回默认选项
+func defaultOptions() *Options {
 	return &Options{
 		Name:      "config",
 		Paths:     []string{".", "./config"},

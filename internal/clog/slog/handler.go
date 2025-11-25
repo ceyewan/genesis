@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -90,30 +89,6 @@ func NewHandler(config *types.Config, option *types.Option) (slog.Handler, error
 			// 路径裁剪和调用信息处理 - 显示为caller字段
 			if a.Key == slog.SourceKey {
 				if source, ok := a.Value.Any().(*slog.Source); ok {
-					// 使用runtime获取更准确的调用信息
-					_, file, line, ok := runtime.Caller(6) // 跳过足够的调用栈层级
-					if ok {
-						fileName := file
-						if config.SourceRoot != "" {
-							// 如果指定了SourceRoot，尝试从该路径开始裁剪
-							relPath, err := filepath.Rel(config.SourceRoot, fileName)
-							if err == nil && !strings.HasPrefix(relPath, "..") {
-								fileName = relPath
-							} else {
-								// 如果SourceRoot无效，尝试查找包含"genesis"的路径并裁剪
-								if idx := strings.Index(fileName, "genesis"); idx != -1 {
-									fileName = fileName[idx:]
-								}
-							}
-						}
-						// 如果没有设置SourceRoot，显示完整路径（默认行为）
-						// 创建caller字段，格式：文件名:行号
-						caller := fmt.Sprintf("%s:%d", fileName, line)
-						// 返回caller属性而不是修改source
-						return slog.String("caller", caller)
-					}
-
-					// 如果runtime.Caller失败，回退到source信息
 					fileName := source.File
 					if config.SourceRoot != "" {
 						// 如果指定了SourceRoot，尝试从该路径开始裁剪
@@ -127,7 +102,6 @@ func NewHandler(config *types.Config, option *types.Option) (slog.Handler, error
 							}
 						}
 					}
-					// 如果没有设置SourceRoot，显示完整路径（默认行为）
 					// 创建caller字段，格式：文件名:行号
 					caller := fmt.Sprintf("%s:%d", fileName, source.Line)
 					// 返回caller属性而不是修改source

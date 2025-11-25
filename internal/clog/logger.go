@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"runtime"
 	"time"
 
 	slogadapter "github.com/ceyewan/genesis/internal/clog/slog"
@@ -154,8 +155,10 @@ func (l *loggerImpl) log(ctx context.Context, level types.Level, msg string, fie
 		slogLevel = slog.LevelInfo
 	}
 
-	// 设置正确的调用者跳过级别 - 跳过当前函数调用栈
-	record := slog.NewRecord(time.Now(), slogLevel, msg, 1)
+	// 获取正确的程序计数器(PC)值，用于准确的源码位置
+	var pcs [1]uintptr
+	runtime.Callers(3, pcs[:]) // skip: runtime.Callers, logger.log, Debug/Info/Error等
+	record := slog.NewRecord(time.Now(), slogLevel, msg, pcs[0])
 	record.AddAttrs(attrs...)
 
 	// 使用 handler.Enabled 进行级别检查，避免直接调用 Handle 绕过过滤逻辑

@@ -1,228 +1,240 @@
-# Genesis 配置中心设计文档
+# Config 组件设计文档
 
-## 1. 目标与愿景
+## 1. 概述
 
-配置中心 (Config Center) 旨在为 Genesis 框架提供统一、灵活且支持动态更新的配置管理能力。
+Config 组件为 Genesis 框架提供统一的配置管理能力，支持多源加载（YAML/JSON、环境变量、.env）和热更新。
 
-**核心目标：**
+**定位**: Glue Layer - 在应用启动前进行配置引导，独立于容器构造过程。
 
-1. **统一管理:** 集中管理所有组件（DB, Redis, Log, MQ 等）的配置。
-2. **多源支持:** 支持从多种来源加载配置，包括本地文件 (YAML/JSON)、环境变量 (Env)、以及未来的远程配置中心 (Etcd/Consul)。
-3. **热更新 (Hot Reload):** 支持配置的动态监听与实时更新，无需重启服务。
-4. **类型安全:** 提供强类型的配置解析与绑定能力。
-5. **接口抽象:** 遵循 Genesis 的接口驱动原则，屏蔽底层实现（Viper/Etcd），便于未来切换。
+## 2. 核心目标
 
-## 2. 核心设计
+1. **统一管理**: 集中管理所有组件（DB, Redis, Log, MQ 等）的配置
+2. **多源支持**: 支持从本地文件、环境变量、.env 以及未来的远程配置中心加载
+3. **热更新**: 支持配置的动态监听与实时更新，无需重启服务
+4. **类型安全**: 提供强类型的配置解析与绑定能力
+5. **接口抽象**: 屏蔽底层实现（Viper/Etcd），便于未来切换
 
-### 2.1. 架构分层
+## 3. 核心设计原则
 
-遵循 Genesis 的分层架构：
+1. **扁平化 API**: 所有类型、接口和错误都在 `pkg/config` 根包下，无冗余子包
+2. **零依赖**: 不依赖任何 Genesis 组件（除 `xerrors`），避免循环依赖
+3. **标准化错误**: 所有错误使用 `xerrors` Sentinel Errors 或 `xerrors.Wrap` 进行包装
+4. **接口优先**: 对外暴露 `Loader` 接口，隐藏具体实现
+5. **生命周期管理**: 实现 `container.Lifecycle` 接口，支持由容器管理 Watch 后台任务
 
-* **`pkg/config` (API 层):** 定义配置管理的通用接口和标准配置结构。
-* **`internal/config` (实现层):** 提供基于 Viper 的默认实现，以及未来基于 Etcd 的实现。
-* **`pkg/container` (集成层):** 在应用启动后接管已构造好的 `config.Manager`
-  并统一管理其生命周期（如 Watch 热更新），同时将解析后的 `AppConfig` 注入到各个组件中。
+## 4. 核心接口
 
-```mermaid
-graph TD
-    App[应用层] --> ConfigAPI["pkg/config (Interface)"]
-    
-    subgraph "Genesis Config Module"
-        ConfigAPI --> ViperImpl[internal/config/viper]
-        ConfigAPI --> EtcdImpl["internal/config/etcd (Future)"]
-        
-        ViperImpl --> File[YAML/JSON File]
-        ViperImpl --> Env[Environment Variables]
-        EtcdImpl --> EtcdCluster[Etcd Cluster]
-    end
-```
-
-### 2.2. 接口定义 (`pkg/config`)
+### 4.1 Loader 接口
 
 ```go
-package config
-
-import (
-    "context"
-    "time"
-    
-    "github.com/ceyewan/genesis/pkg/container"
-)
-
-// Manager 定义配置管理器的核心行为
-// 可以选择实现 container.Lifecycle 接口，以便在 Container 构建完成后
-// 由容器托管其 Watch 等后台任务。Manager 的构造与 Load 发生在容器之外。
-type Manager interface {
-    container.Lifecycle // Start, Stop, Phase（可选实现）
-
-    // Load 加载配置（通常在 Start 之前调用，用于 Bootstrap）
+type Loader interface {
+    // Load 加载配置（Bootstrap 阶段调用，在 Start 之前）
     Load(ctx context.Context) error
-    
+
     // Get 获取原始配置值
     Get(key string) any
-    
-    // Unmarshal 将配置解析到结构体
+
+    // Unmarshal 将整个配置反序列化到结构体
     Unmarshal(v any) error
-    
-    // UnmarshalKey 将指定 Key 的配置解析到结构体
+
+    // UnmarshalKey 将指定 Key 的配置反序列化到结构体
     UnmarshalKey(key string, v any) error
-    
-    // Watch 监听配置变化
-    // 返回一个只读 channel，当配置发生变化时发送事件
-    // 可以通过 context 取消监听
+
+    // Watch 监听配置变化，通过 context 取消监听
     Watch(ctx context.Context, key string) (<-chan Event, error)
-    
+
     // Validate 验证当前配置的有效性
     Validate() error
-}
 
-// Event 配置变更事件
+    // Start 启动后台任务（如文件监听）
+    Start(ctx context.Context) error
+
+    // Stop 停止后台任务
+    Stop(ctx context.Context) error
+
+    // Phase 返回生命周期阶段（用于容器排序启动顺序）
+    Phase() int
+}
+```
+
+### 4.2 Event 事件类型
+
+```go
 type Event struct {
-    Key       string
-    Value     any
-    OldValue  any       // 旧值 (如果支持)
-    Source    string    // "file", "env", "remote"
+    Key       string    // 配置 key
+    Value     any       // 新值
+    OldValue  any       // 旧值
+    Source    string    // "file" | "env" | "remote"
     Timestamp time.Time
 }
+```
 
-// Option 配置选项模式
+### 4.3 选项模式
+
+```go
 type Option func(*Options)
 
 type Options struct {
-    Name       string
-    Paths      []string
-    FileType   string
-    EnvPrefix  string
+    Name       string        // 配置文件名称（不含扩展名）
+    Paths      []string      // 配置文件搜索路径
+    FileType   string        // 配置文件类型 (yaml, json)
+    EnvPrefix  string        // 环境变量前缀
     RemoteOpts *RemoteOptions
-}
-
-type RemoteOptions struct {
-    Provider string
-    Endpoint string
 }
 ```
 
-### 2.3. 配置加载优先级
+主要 Option 函数：
 
-配置加载遵循以下优先级（由高到低）：
+- `WithConfigName(name)` - 设置配置文件名称
+- `WithConfigPaths(paths...)` - 设置搜索路径
+- `WithConfigType(typ)` - 设置文件类型
+- `WithEnvPrefix(prefix)` - 设置环境变量前缀
 
-1. **启动参数 (Flags):** (暂未实现，预留)
-2. **环境变量 (Env):** `GENESIS_MYSQL_HOST` 覆盖配置文件。
-3. **环境特定配置文件:** `config.dev.yaml` (如果存在)。
-4. **基础配置文件:** `config.yaml`。
-5. **默认值 (Defaults):** 代码中硬编码的默认值。
+### 4.4 错误处理
 
-### 2.4. 环境变量规则
+所有错误使用 `xerrors` 处理：
 
-* **前缀:** 默认为 `GENESIS` (可通过 Option 修改)。
-* **分隔符:** 使用下划线 `_` 替代层级点 `.`。
-* **格式:** `{PREFIX}_{SECTION}_{KEY}` (全大写)。
+- `xerrors.ErrInvalidInput` - 配置格式无效或验证失败
+- `xerrors.ErrNotFound` - 配置文件不存在
+- 其他错误通过 `xerrors.Wrap` 包装
 
-**示例:**
+## 5. 加载优先级（由高到低）
 
-* YAML: `mysql.host`
-* Env: `GENESIS_MYSQL_HOST`
+1. **环境变量** (GENESIS_*)
+2. **环境特定配置** (config.{env}.yaml)
+3. **.env 文件**
+4. **基础配置** (config.yaml)
+5. **代码默认值**
 
-### 2.5. 多环境支持
+## 6. 环境变量规则
 
-推荐的目录结构：
+- **前缀**: 默认为 `GENESIS`（可通过 `WithEnvPrefix` 修改）
+- **分隔符**: 使用下划线 `_` 替代层级点 `.`
+- **格式**: `{PREFIX}_{SECTION}_{KEY}`（全大写）
+
+**示例**: YAML `mysql.host` → 环境变量 `GENESIS_MYSQL_HOST`
+
+## 7. 多环境支持
 
 ```text
 config/
-├── config.yaml          # 基础配置 (Base)
-├── config.dev.yaml      # 开发环境覆盖 (Override)
+├── config.yaml          # 基础配置
+├── config.dev.yaml      # 开发环境覆盖
 ├── config.prod.yaml     # 生产环境覆盖
 └── config.local.yaml    # 本地开发覆盖 (git ignored)
 ```
 
 加载逻辑：先加载 `config.yaml`，然后根据 `GENESIS_ENV` 环境变量加载对应的 `config.{env}.yaml` 进行合并覆盖。
 
-## 3. 实现细节 (Viper)
+## 8. 使用示例
 
-当前阶段使用 `spf13/viper` 作为核心实现。
-
-### 3.1. 初始化流程
-
-1. **New:** 创建 Manager 实例，配置 Options。
-2. **Load:**
-    * 设置默认值。
-    * 读取 `config.yaml`。
-    * 读取 `config.{env}.yaml` (如果指定)。
-    * 读取环境变量 (AutomaticEnv)。
-    * 合并所有配置源。
-3. **Start:** 启动 `WatchConfig` 协程，监听文件变更。
-
-### 3.2. 热更新实现
-
-利用 Viper 的 `WatchConfig` 能力。
+### 8.1 标准使用（Bootstrap + 容器管理）
 
 ```go
-// internal/config/viper/manager.go
+ctx := context.Background()
 
-func (m *viperManager) Watch(ctx context.Context, key string) (<-chan Event, error) {
-    ch := make(chan Event, 1)
-    
-    m.v.OnConfigChange(func(e fsnotify.Event) {
-        // 1. 重新读取配置
-        // 2. 检查指定 key 是否真的变化
-        // 3. 发送事件到 ch
-    })
-    m.v.WatchConfig()
-    
-    // 处理 context 取消
-    go func() {
-        <-ctx.Done()
-        close(ch)
-        // 清理逻辑
-    }()
-    
-    return ch, nil
+// 1. 创建并加载配置
+loader, err := config.New(
+    config.WithEnvPrefix("MYAPP"),
+    config.WithConfigPaths("./config"),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+if err := loader.Load(ctx); err != nil {
+    log.Fatal(err)
+}
+
+// 2. 解析配置到结构体
+var cfg AppConfig
+if err := loader.Unmarshal(&cfg); err != nil {
+    log.Fatal(err)
+}
+
+// 3. 传递给容器（容器管理生命周期）
+c, err := container.New(cfg, loader)
+defer c.Stop(ctx)
+```
+
+### 8.2 简单使用（无容器）
+
+```go
+loader, _ := config.New()
+loader.Load(ctx)
+
+var cfg Config
+loader.Unmarshal(&cfg)
+// 使用配置...
+```
+
+### 8.3 监听配置变化
+
+```go
+loader.Start(ctx)
+defer loader.Stop(ctx)
+
+ch, _ := loader.Watch(ctx, "database.host")
+for event := range ch {
+    log.Infof("Config changed: %s = %v", event.Key, event.Value)
 }
 ```
 
-## 4. 与 Container / 远程配置中心 的依赖边界
+## 9. 与 Container 的关系
 
-Config 模块是应用的 **Bootstrapping 组件**，负责在 Container 构建之前，将多种配置源汇聚为一个强类型的 `AppConfig`。
+- `Loader` 的构造与 `Load(ctx)` 发生在 Container 之外
+- 流程：创建 Loader → Load → Unmarshal(&AppConfig) → 传给 Container
+- Container 接收已准备好的 `AppConfig`，用于构建各类 Connector、业务组件、可观测性能力
+- 若 `Loader` 实现了 `container.Lifecycle`，只在 Container 构建后由容器管理其 Watch 后台任务
+- 这样避免了 Config ↔ Container 的循环依赖
 
-### 4.1 与 Container 的关系
+## 10. 与远程配置中心的关系
 
-* `config.Manager` 的构造与 `Load(ctx)` 发生在 Container 之外：
-  * 典型流程为：
-    * 业务代码或启动脚本创建 `Manager` 实例；
-    * 调用 `Load` / `Validate`；
-    * 调用 `Unmarshal(&AppConfig)` 得到应用总配置。
-* Container 仅接收已经准备好的 `AppConfig`（以及可选的 `Manager` 实例），用于：
-  * 构建各类 Connector（MySQL/Redis/Etcd 等）；
-  * 构建业务组件（db/dlock/cache/...）；
-  * 构建 telemetry / clog 等横切能力。
-* 如 `Manager` 实现了 `container.Lifecycle`，则只在 Container 构建完成后
-  由 Container 调用其 `Start/Stop` 来管理 Watch 热更新等后台任务，
-  而不参与最初的 Container 构造过程，避免循环依赖。
+- 当需要接入 Etcd/Consul 时，Config 可直接依赖底层 SDK 或复用 `pkg/connector/etcd`
+- **Config 模块不得依赖 `pkg/container`**，只允许依赖更底层的能力
+- 这确保依赖关系单向：Config → SDK/Connector，Container → Config
 
-### 4.2 与 Etcd 等远程配置中心的关系
+## 11. 实现细节
 
-* 当需要接入 Etcd/Consul 等远程配置中心时，Config 模块可以：
-  * 直接依赖底层 SDK（如 `clientv3`），或
-  * 复用 `pkg/connector/etcd` 暴露的工厂/Manager（不通过 Container 获取）。
-* 无论哪种方式，**Config 模块都不得依赖 `pkg/container`**，
-  只允许依赖比自身更底层的能力（SDK 或 Connector）。
-* 这样可以确保依赖关系是单向的：
-  * Config → Etcd SDK / Etcd Connector
-  * Container → Config (AppConfig)
-  * 避免 Config → Container → Config 的循环。
-* Container 的整体初始化流程与 Phase 编排，详见 `docs/container-design.md`。
+当前使用 `spf13/viper` 作为核心实现。
 
-## 5. 演进路线
+### 11.1 初始化流程
 
-### Phase 1: 本地文件 + 环境变量 (Current)
+1. **New**: 创建 Loader 实例，配置 Options
+2. **Load**: 依次加载 .env → config.yaml → config.{env}.yaml → 环境变量
+3. **Start**: 启动 WatchConfig 协程，监听文件变更
+4. **Watch**: 返回一个只读 channel，当配置发生变化时发送事件
 
-* [x] 定义 `pkg/config` 接口。
-* [x] 实现基于 Viper 的文件加载与环境变量覆盖。
-* [x] 实现 `Watch` 机制 (Channel based)。
-* [x] 支持由 Container 托管 Manager 的生命周期（可选）。
+### 11.2 热更新实现
 
-### Phase 2: 远程配置中心 (Future)
+利用 Viper 的 `WatchConfig` 能力，通过 `fsnotify` 监听文件变更。
 
-* [ ] 集成 Viper Remote Provider (Etcd)。
-* [ ] 实现配置版本管理与回滚。
-* [ ] 通过公共的 Etcd Connector/Manager 复用连接，避免重复创建客户端。
+## 12. 目录结构
+
+```text
+pkg/config/
+├── config.go          # 工厂函数 New()
+├── interface.go       # Loader 接口和 Event 类型
+├── manager.go         # loader 具体实现
+├── options.go         # Option 模式定义
+├── errors.go          # 错误处理辅助函数
+└── config_test.go     # 单元测试
+```
+
+## 13. 演进路线
+
+### Phase 1: 本地文件 + 环境变量（当前）✓
+
+- [x] 文件加载（YAML/JSON）
+- [x] 环境变量覆盖
+- [x] .env 文件支持
+- [x] 多环境支持（config.{env}.yaml）
+- [x] 热更新（Watch）
+- [x] 验证机制（Validate）
+- [x] 扁平化 API，使用 xerrors
+
+### Phase 2: 远程配置中心（未来）
+
+- [ ] Etcd 支持
+- [ ] 配置版本管理与回滚
+- [ ] 通过公共 Etcd Connector 复用连接
