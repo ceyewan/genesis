@@ -37,10 +37,20 @@ Container 本身并不关心具体业务逻辑，它只负责：
 
 ```go
 type Lifecycle interface {
-    Start(ctx context.Context) error
-    Stop(ctx context.Context) error
-    Phase() int // Phase 越小越先启动
+  Start(ctx context.Context) error
+  Stop(ctx context.Context) error
 }
+```
+
+Container 仍然需要按 Phase 启动/关闭组件，但我们建议**将 Phase 从组件接口中移除**，由 Container 在注册时指定 Phase（避免组件暴露与其启动顺序有关的职责）。示例注册方式：
+
+```go
+// Container 注册 Lifecycle 时同时指定 Phase，Phase 越小越先启动
+func (c *Container) RegisterWithPhase(lc Lifecycle, phase int)
+
+// 内部启动逻辑示意
+// sort by phase asc -> call Start
+// sort by phase desc -> call Stop
 ```
 
 推荐的 Phase 分配（仅示意，可按需要微调）：

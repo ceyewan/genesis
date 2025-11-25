@@ -4,6 +4,8 @@
 
 Genesis 旨在打造一个**轻量级、标准化、高可扩展**的 Go 微服务基座库。它不是一个包罗万象的庞大框架，而是一套精心设计的**组件集合**和**架构规范**。
 
+注意：`docs/refactoring-plan.md` 为当前执行的重构方案（source-of-truth）。本设计文档是总体愿景与背景说明，重构实现细节请参见 refactoring-plan。
+
 我们的目标是让开发者能够像搭积木一样构建微服务，既能享受标准化的便利，又不失对底层技术的掌控力。
 
 ## 2. 核心设计哲学 (Design Philosophy)
@@ -120,30 +122,29 @@ Genesis 将按照"在精不在多"的原则逐步演进：
 
 ## 6. 目录结构规范
 
+按照当前重构执行计划，目录组织对不同层采取不同策略：
+
 ```text
 genesis/
-├── pkg/                  # 公开 API 和接口定义
-│   ├── clog/             # 日志组件
-│   ├── connector/        # 连接器接口
-│   ├── container/        # 容器接口
-│   ├── config/           # 配置中心接口
-│   ├── telemetry/        # Metrics & Tracing 接口
-│   ├── db/               # 数据库组件
-│   ├── dlock/            # 分布式锁组件
-│   └── mq/               # 消息队列组件
-├── internal/             # 内部实现细节 (不对外暴露)
-│   ├── clog/
-│   ├── connector/
-│   ├── container/
-│   ├── config/
-│   ├── telemetry/
-│   ├── db/
-│   ├── dlock/
-│   └── mq/
+├── pkg/                  # 公开 API 和接口定义 (L0/L1/L2/L3)
+│   ├── clog/             # 日志组件 (L0)
+│   ├── telemetry/        # Metrics & Tracing 接口 (L0)
+│   ├── connector/        # 连接器接口 (L1)
+│   ├── db/               # 数据库组件 (L1)
+│   ├── container/        # 容器接口 (Glue)
+│   ├── dlock/            # 业务组件 (L2)
+│   ├── cache/            # 业务组件 (L2)
+│   ├── ratelimit/        # 治理组件 (L3)
+│   └── breaker/          # 治理组件 (L3)
+├── internal/             # 仅保留复杂实现或驱动 (主要面向 L1)
+│   ├── connector/        # MySQL/Redis/Etcd 等具体驱动实现
+│   └── db/               # 复杂的分库分表驱动实现
 ├── deploy/               # 部署依赖 (Docker Compose 等)
 ├── docs/                 # 设计文档
 └── examples/             # 使用示例
 ```
+
+说明：对于 L2/L3（业务与治理）组件，优先采用扁平化 `pkg/<component>/` 结构，将面向用户的类型（`Config`, `Interface`, `Errors`）放在包根；实现细节用非导出类型或同包的 `impl.go` 封装。对于 L1（基础设施）因驱动较复杂，保留 `internal/` 实现以控制可见性。
 
 ## 7. 组件开发规范 (Component Specification)
 

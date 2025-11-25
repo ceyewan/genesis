@@ -11,36 +11,52 @@
     * **独立模式 (Standalone)：** 组件提供标准的 `New` 工厂函数，允许在不依赖 Container 的情况下独立实例化（主要用于单元测试和工具脚本），调用方需要自行管理依赖与资源释放。
 4. **可观测性优先 (Observability First):** 日志、Metrics 和 Tracing 必须作为一级公民，通过统一接口注入，组件内部只依赖抽象接口，不直接依赖 OTel 等具体实现。
 
-## 2. 目录结构规范
+## 2. 目录结构规范 (已对齐重构计划)
 
-所有组件应遵循以下目录结构：
+按照当前重构执行计划，各层的目录组织有所差别：
+
+- Level 1 (Infrastructure): 保持 `pkg/` (对外 API) + `internal/` (实现) 的分离。
+- Level 2 / Level 3 (Business / Governance): 为了扁平化 API 并减少导入前缀，`types/` 子包将被扁平化并移入 `pkg/<component>/` 根目录；实现细节以非导出结构体封装在同包中或放在 `internal/`（见下一条约定）。
+
+建议的目录结构示例：
 
 ```text
+# 对于 L2 / L3 组件（扁平化）
 pkg/<component>/
-├── component.go        # 统一入口：工厂函数 (New) 和导出类型
-├── options.go          # Option 模式定义 (WithLogger, WithMetrics 等)
-└── types/              # 类型定义
-    ├── config.go       # 配置结构体
-    ├── interface.go    # 核心接口
-    └── errors.go       # 错误定义
-internal/<component>/
-├── impl.go             # 核心实现
-└── ...
+├── component.go        # Factory (New)、导出接口与导出类型 (Config, Errors, Interface)
+├── options.go          # Option 模式定义 (WithLogger, WithMeter, WithTracer 等)
+├── impl.go             # 非导出实现（如 type limiter struct{}）
+└── adapter/            # (可选) protocol adapters 或 middleware
+
+# 对于 L1 基础设施（保留 internal 实现）
+pkg/<component>/
+├── api.go              # 导出接口、Config 定义
+└── internal/
+    └── impl.go         # 实现细节、驱动逻辑（connection pools, health checks）
 ```
+
+说明：此处的关键点是将组件面向用户的类型（`Config`, `Interface`, `Errors`）放在 `pkg/<component>/` 根目录，避免 `pkg/<component>/types` 的冗长导入路径；同时通过非导出实现或 `internal/` 控制可见性。
 
 ## 3. 初始化规范
 
-### 3.1 工厂函数签名
+### 3.1 工厂函数签名（已调整，参照重构计划）
 
-所有组件必须在 `pkg/<component>/component.go` 中提供一个统一的工厂函数：
+为简化调用方代码与提高一致性，工厂函数需遵循下列约定：
+
+- 必选参数只用于传递核心依赖（例如 Connector 接口或其他必需服务）；禁止在必选参数中传入 Logger/Meter/Tracer。
+- 可选项（如日志、指标、链路）使用 `Option` 模式注入。
+- `New` 不应执行阻塞 I/O；所有 I/O 或后台任务应在 `Start(ctx)` 中完成。
+
+推荐签名示例：
 
 ```go
-// New 创建一个新的组件实例
-// dep: 组件依赖的连接器 / 其他组件接口（可以是聚合结构体）
-// cfg: 组件配置结构体 (必须，由上层构造传入)
-// opts: 可选参数 (Logger, Metrics, Tracer 等)
-func New(dep types.Dep, cfg types.Config, opts ...Option) (types.Interface, error)
+// New 创建组件实例（示例）
+// conn: 核心连接器或依赖
+// opts: 可选依赖（WithLogger, WithMeter, WithTracer, WithConfig 等）
+func New(conn connector.RedisConnector, opts ...Option) (Interface, error)
 ```
+
+如果组件确实需要一个强类型的配置结构体（推荐做法），可将其通过 `WithConfig(cfg)` 形式作为 Option 传入，或在容器模式下由 Container 在调用 `New` 前裁剪并传入。
 
 ### 3.2 Option 模式
 
