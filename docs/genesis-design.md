@@ -170,7 +170,45 @@ Genesis 采用 **“容器优先的双模式”** 策略：
 * **日志命名空间:** 组件接收 Logger 后，必须在内部派生子命名空间，例如 `user-service` -> `user-service.dlock` -> `user-service.dlock.redis`。
 * **配置分离:** 组件只定义自己的配置结构体，由上层（通常是 Container + Config 模块）构造并传入，不直接读取配置文件或环境变量。
 
-### 7.3. 代码组织结构
+### 7.3. 双模式与生命周期 (Dual Mode & Lifecycle)
+
+为了兼顾灵活性与生产环境的规范性，Genesis 采用“容器优先”的双模式设计：
+
+1. **独立模式 (Standalone Mode) - 灵活**
+
+* 组件只通过 `New` 函数接收依赖（Connector 接口），不感知 Container。
+* 开发者需要手动调用 Connector 的 `Start/Stop` 以及组件的 `Start/Stop`。
+* 示例：
+
+    ```go
+    // 1. 手动启动连接器
+    rc, _ := redis.New(cfg)
+    rc.Start(ctx)
+    defer rc.Stop(ctx)
+    
+    // 2. 注入连接器并启动组件
+    limiter, _ := ratelimit.New(rc, limitCfg) // New 只负责创建对象
+    limiter.Start(ctx)                        // Start 负责后台任务
+    defer limiter.Stop(ctx)
+    ```
+
+2. **容器模式 (Container Mode) - 规范**
+
+* Container 充当 **Orchestrator**。它负责根据配置加载所有组件。
+* Container 自动管理依赖顺序：`Start` 顺序为 Infra -> Business，`Stop` 顺序相反。
+* 业务代码无需手动管理连接释放，只需 `defer container.Stop(ctx)`。
+
+3. **Lifecycle 接口**:
+所有需要后台任务或资源管理的组件必须实现：
+
+```go
+type Lifecycle interface {
+    Start(ctx context.Context) error
+    Stop(ctx context.Context) error
+}
+```
+
+### 7.4. 代码组织结构
 
 ```text
 pkg/component/
