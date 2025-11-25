@@ -1,8 +1,20 @@
+# config.dev.yaml - 开发环境特定配置文件（中等优先级）
+# 只设置 redis、log、app，不设置 mysql
+# 优先级：环境变量 > .env 文件 > 环境特定配置 > 基础配置
+
 app:
-  debug: false
+  name: "Genesis 开发应用"
+  version: "1.0.0-dev"
+  environment: "development"
+  debug: true
 
-server:
-  port: 8081
+redis:
+  addr: "dev-redis.internal:6379"
+  db: 1
 
-database:
-  database: "genesis_dev"
+clog:
+  level: "debug"
+  format: "text"
+  output: "stdout"
+  enable_color: true
+  add_source: false

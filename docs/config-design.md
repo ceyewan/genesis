@@ -101,10 +101,10 @@ type Options struct {
 ## 5. 加载优先级（由高到低）
 
 1. **环境变量** (GENESIS_*)
-2. **环境特定配置** (config.{env}.yaml)
-3. **.env 文件**
+2. **.env 文件**
+3. **环境特定配置** (config.{env}.yaml)
 4. **基础配置** (config.yaml)
-5. **代码默认值**
+5. **代码默认值**Í
 
 ## 6. 环境变量规则
 
@@ -128,33 +128,25 @@ config/
 
 ## 8. 使用示例
 
-### 8.1 标准使用（Bootstrap + 容器管理）
-
 ```go
-ctx := context.Background()
-
-// 1. 创建并加载配置
-loader, err := config.New(
-    config.WithEnvPrefix("MYAPP"),
-    config.WithConfigPaths("./config"),
+// 基础使用
+loader, _ := config.New(
+    config.WithConfigName("config"),
+    config.WithConfigPath("./config"),
+    config.WithEnvPrefix("GENESIS"),
 )
-if err != nil {
-    log.Fatal(err)
-}
+loader.Load(ctx)
 
-if err := loader.Load(ctx); err != nil {
-    log.Fatal(err)
-}
-
-// 2. 解析配置到结构体
+// 解析配置
 var cfg AppConfig
-if err := loader.Unmarshal(&cfg); err != nil {
-    log.Fatal(err)
-}
+loader.Unmarshal(&cfg)
 
-// 3. 传递给容器（容器管理生命周期）
-c, err := container.New(cfg, loader)
-defer c.Stop(ctx)
+// 部分解析
+var mysqlCfg MySQLConfig
+loader.UnmarshalKey("mysql", &mysqlCfg)
+
+// 监听变化
+ch, _ := loader.Watch(ctx, "mysql.host")
 ```
 
 ### 8.2 简单使用（无容器）
@@ -201,9 +193,11 @@ for event := range ch {
 ### 11.1 初始化流程
 
 1. **New**: 创建 Loader 实例，配置 Options
-2. **Load**: 依次加载 .env → config.yaml → config.{env}.yaml → 环境变量
+2. **Load**: 依次加载 基础配置 → 环境特定配置 → .env 文件 → 环境变量（按优先级覆盖）
 3. **Start**: 启动 WatchConfig 协程，监听文件变更
 4. **Watch**: 返回一个只读 channel，当配置发生变化时发送事件
+
+**注意**：实际加载顺序与优先级相反，低优先级先加载，高优先级后加载进行覆盖
 
 ### 11.2 热更新实现
 

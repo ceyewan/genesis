@@ -45,12 +45,7 @@ func NewLoader(opts ...Option) (Loader, error) {
 
 // Load 初始化并从所有来源加载配置
 func (l *loader) Load(ctx context.Context) error {
-	// 1. 尝试加载 .env 文件
-	if err := l.loadDotEnv(); err != nil {
-		fmt.Printf("Warning: failed to load .env file: %v\n", err)
-	}
-
-	// 2. 配置 Viper
+	// 1. 配置 Viper
 	l.v.SetConfigName(l.opts.Name)
 	l.v.SetConfigType(l.opts.FileType)
 
@@ -58,12 +53,17 @@ func (l *loader) Load(ctx context.Context) error {
 		l.v.AddConfigPath(path)
 	}
 
-	// 3. 环境变量设置
+	// 2. 环境变量设置（最高优先级）- 先设置，确保能捕获所有环境变量
 	l.v.SetEnvPrefix(l.opts.EnvPrefix)
 	l.v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	l.v.AutomaticEnv()
 
-	// 4. 加载基础配置
+	// 3. 尝试加载 .env 文件（高优先级）- 在配置文件之前加载
+	if err := l.loadDotEnv(); err != nil {
+		fmt.Printf("Warning: failed to load .env file: %v\n", err)
+	}
+
+	// 4. 加载基础配置（最低优先级）
 	if err := l.v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return xerrors.Wrapf(err, "failed to read config file %s", l.opts.Name)
@@ -71,7 +71,7 @@ func (l *loader) Load(ctx context.Context) error {
 		fmt.Printf("Warning: no configuration file found at %s\n", l.v.ConfigFileUsed())
 	}
 
-	// 5. 加载环境特定配置
+	// 5. 加载环境特定配置（中等优先级）
 	if err := l.loadEnvironmentConfig(); err != nil {
 		return err
 	}
@@ -196,7 +196,15 @@ func (l *loader) removeWatch(key string, ch chan Event) {
 			delete(l.oldValues, key)
 		}
 	}
-	close(ch)
+
+	// 检查通道是否已经关闭，避免重复关闭
+	select {
+	case <-ch:
+		// 通道已关闭，不需要再次关闭
+	default:
+		// 通道未关闭，安全关闭
+		close(ch)
+	}
 }
 
 // Validate 验证配置
@@ -217,8 +225,13 @@ func (l *loader) Start(ctx context.Context) error {
 	}
 
 	l.v.OnConfigChange(func(e fsnotify.Event) {
+		// 重新加载环境特定配置
 		if err := l.loadEnvironmentConfig(); err != nil {
 			fmt.Printf("Error reloading environment config: %v\n", err)
+		}
+		// 重新加载 .env 文件
+		if err := l.loadDotEnv(); err != nil {
+			fmt.Printf("Warning: failed to reload .env file: %v\n", err)
 		}
 		l.notifyWatches(e)
 	})
