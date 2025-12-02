@@ -1,295 +1,562 @@
-# 微服务框架：连接器与组件设计文档
+# 连接器设计文档 (Connector Design)
 
-## 1. 目标与核心原则
+## 1. 概述
 
-本设计旨在为微服务框架提供一个统一、健壮且可扩展的外部服务连接管理方案。它通过**分层解耦**、**集中管理**和**面向接口**的设计，构建一个易于使用、维护和扩展的基础设施层。
+连接器 (Connector) 是 Genesis 基础设施层的核心组件，负责管理与外部服务（MySQL、Redis、Etcd、NATS）的原始连接。
 
-**核心设计原则：**
+**核心职责**：
 
-1. **分层与抽象 (Layering & Abstraction):**
+- 创建和管理连接池
+- 提供类型安全的客户端访问
+- 健康检查与连接监控
+- 资源释放
 
-* **连接器 (Connector):** 专职**管理原始连接**。负责与外部基础设施（如 MySQL, Redis）建立、复用、监控和关闭连接。
-* **组件 (Component):** 专职**封装业务功能**。构建于连接器之上，提供面向业务场景的高级、抽象的 API（如事务、分布式锁）。
+**设计原则**：
 
-2. **接口隔离与依赖倒置 (Interface Segregation & Dependency Inversion):**
+- **资源所有权**：Connector 拥有连接，必须调用 `Close()` 释放
+- **最小接口**：只暴露必要的方法，避免过度设计
+- **扁平化结构**：接口、配置、实现放在同一包下
+- **统一 L0 组件**：使用 Genesis 的 `clog`、`metrics`、`xerrors` 实现日志、监控、错误处理
 
-* 所有公开 API 和接口定义于 `pkg/` 目录，作为框架的稳定契约。
-* 所有具体实现封装于 `internal/` 目录，对用户代码不可见。
-* 高层模块（组件）依赖于底层模块（连接器）的**抽象接口**，而非具体实现。
+## 2. 接口设计
 
-3. **生命周期管理 (Lifecycle Management):**
+### 2.1. 核心接口
 
-* 所有需要初始化和清理资源的模块（连接器、组件）都应实现统一的 `Lifecycle` 接口。
-* 由核心**容器 (Container)** 负责按预定顺序（`Phase`）进行启动和关闭，确保依赖关系正确，并实现优雅停机 (Graceful Shutdown)。
-* 连接器的 `Phase` 应早于业务组件，保证在组件启动前连接可用，在组件关闭后再释放底层资源。
+```go
+// pkg/connector/interface.go
 
-4. **集中化管理 (Centralized Management):**
-
-* 通过 `internal/connector/manager` 模式，对同一类型和配置的连接进行**缓存和复用**，实现高效的资源利用和并发安全。
-* Manager 本身不依赖 Container，可同时被 Container、Config 模块等上层复用，避免循环依赖。
-
-5. **可观测性 (Observability):**
-
-* 框架设计应内建对日志、指标 (Metrics) 和追踪 (Tracing) 的支持，便于监控系统状态和排查问题。
-* 每个连接器的工厂函数必须接收 `clog.Logger`，并在内部基于应用级 Logger 派生命名空间，例如：`user-service.connector.redis.default`。
-
-## 2. 核心概念定义
-
-1. **连接器 (Connector):**
-    * **职责:** 管理与外部基础设施的**原始连接**。
-    * **位置:** 接口位于 `pkg/connector/`，实现位于 `internal/connector/`。
-    * **核心:** 负责连接的建立、关闭、连接池、健康检查。向内部暴露**类型安全**的原始客户端实例。
-    * **目标:** 屏蔽底层驱动差异，提供稳定、可监控的连接源。
-
-2. **组件 (Component):**
-    * **职责:** 提供面向业务场景的**高级功能封装**。
-    * **位置:** `pkg/component/`, `pkg/db/`, `pkg/mq/` 等。
-    * **核心:** 基于一个或多个连接器，封装通用业务模式（如事务、分布式锁、消息发布订阅），提供简洁的业务 API。
-    * **目标:** 提升开发效率，统一业务范式，增强代码可读性。
-
-3. **容器 (Container):**
-    * **职责:** 应用的**“心脏”，负责组装、管理所有依赖**。
-    * **位置:** `pkg/container/`。
-    * **核心:** 在应用启动时，通过依赖注入（DI）初始化所有连接器和组件，并编排它们的生命周期。
-    * **目标:** 简化应用初始化，清晰化依赖关系，实现资源的有序启动和优雅关闭。
-
-## 3. 整体架构
-
-### 3.1. 架构分层视图
-
-```mermaid
-graph TD
-    A[业务逻辑层<br>Business Logic] --> B{核心容器<br>pkg/container};
-    B --> C["组件层 (API)<br>pkg/component, pkg/db"];
-    C --> D["连接器接口层 (API)<br>pkg/connector"];
-    E[连接器实现层<br>internal/connector] -- 实现 --> D;
-    B -- 注入 --> E;
-
-    style A fill:#cde4ff
-    style B fill:#e1d5e7
-    style C fill:#d5e8d4
-    style D fill:#d5e8d4
-    style E fill:#f8cecc
-```
-
-### 3.2. 项目结构
-
-```text
-genesis/
-├── internal/
-│   ├── connector/          # 连接器实现层 (实现 pkg/connector 接口)
-│   │   ├── manager.go      # 通用连接管理器 (复用、生命周期)
-│   │   ├── mysql/
-│   │   └── redis/
-└── pkg/
-    ├── component/          # 通用功能组件
-    │   ├── component.go
-    │   └── types/
-    │       ├── interface.go
-    │       └── config.go
-    ├── connector/          # 连接器抽象层 (定义接口)
-    │   ├── connector.go    # 别名导出
-    │   └── types/
-    │       ├── interface.go
-    │       ├── config.go   # 连接器配置定义
-    │       └── errors.go   # 统一错误定义
-    ├── container/          # 核心 DI 容器与生命周期编排
-    │   ├── container.go
-    │   └── lifecycle.go
-    ├── db/                 # DB 领域组件
-    └── clog/               # 日志组件 (基础核心组件)
-```
-
-## 4. 连接器层 (Connector) 深度设计
-
-### 4.1. 统一接口 (`pkg/connector`)
-
-通过定义一组标准接口，确保所有连接器行为一致。
-
-````go
-// pkg/connector/types/interface.go
-package types
-
-import "context"
-
-// Connector 是所有连接器的基础接口
+// Connector 基础连接器接口
 type Connector interface {
-    // Connect 负责建立连接，应幂等且并发安全
+    // Connect 建立连接，应幂等且并发安全
     Connect(ctx context.Context) error
-    // Close 负责关闭连接，释放资源
+    // Close 关闭连接，释放资源
     Close() error
-    // HealthCheck 检查连接的健康状态
+    // HealthCheck 检查连接健康状态
     HealthCheck(ctx context.Context) error
-    // IsHealthy 返回一个缓存的、快速的健康状态标志
+    // IsHealthy 返回缓存的健康状态标志
     IsHealthy() bool
-    // Name 返回此连接实例的唯一名称（如：mysql.primary）
+    // Name 返回连接实例名称
     Name() string
 }
 
-// Factory 定义了连接器的创建接口
-type Factory[C any] func(cfg C, logger clog.Logger) (Connector, error)
-
-// TypedConnector 是一个泛型接口，用于提供类型安全的客户端访问
+// TypedConnector 泛型接口，提供类型安全的客户端访问
 type TypedConnector[T any] interface {
     Connector
     GetClient() T
 }
+```
 
-// Configurable 定义了配置验证的能力
-type Configurable interface {
-    Validate() error
-}
+### 2.2. 具体类型接口
 
-// Reloadable 定义了热重载配置的能力 (可选实现)
-type Reloadable interface {
-    Reload(ctx context.Context, newConfig Configurable) error
-}
-
-// MySQLConnector 是 MySQL 连接器的具体接口定义
-type MySQLConnector interface {
-    TypedConnector[*gorm.DB]
-    Configurable
-}
-
-// RedisConnector 是 Redis 连接器的具体接口定义
+```go
+// RedisConnector Redis 连接器接口
 type RedisConnector interface {
     TypedConnector[*redis.Client]
-    Configurable
 }
-````
 
-### 4.2. 统一错误处理 (`pkg/connector`)
+// MySQLConnector MySQL 连接器接口
+type MySQLConnector interface {
+    TypedConnector[*gorm.DB]
+}
 
-定义标准的错误类型，便于上层进行统一的错误处理和判断。
+// EtcdConnector Etcd 连接器接口
+type EtcdConnector interface {
+    TypedConnector[*clientv3.Client]
+}
 
-````go
-// pkg/connector/types/errors.go
-package types
+// NATSConnector NATS 连接器接口
+type NATSConnector interface {
+    TypedConnector[*nats.Conn]
+}
+```
 
-type ErrorType int
+### 2.3. 设计说明
 
-const (
-    ErrConnection ErrorType = iota // 连接建立失败
-    ErrTimeout                     // 操作超时
-    ErrConfig                      // 配置错误
-    ErrHealthCheck                 // 健康检查失败
-    ErrClosed                      // 连接已关闭
+**为什么移除 Lifecycle 接口？**
+
+原设计中 Connector 继承了 `Lifecycle` 接口（`Start/Stop/Phase`），这是为 DI 容器服务的。现在采用 Go Native 依赖注入后：
+
+| 原方法 | 问题 | 解决方案 |
+|--------|------|----------|
+| `Start()` | 与 `Connect()` 重复 | 删除，使用 `Connect()` |
+| `Stop()` | 与 `Close()` 重复 | 删除，使用 `Close()` |
+| `Phase()` | 只为 Container 服务 | 删除，使用 defer 自然排序 |
+
+## 3. 配置结构
+
+### 3.1. 通用配置
+
+```go
+// pkg/connector/config.go
+
+// BaseConfig 通用连接配置
+type BaseConfig struct {
+    Name            string        `mapstructure:"name"`
+    MaxRetries      int           `mapstructure:"max_retries"`
+    RetryInterval   time.Duration `mapstructure:"retry_interval"`
+    ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`
+    HealthCheckFreq time.Duration `mapstructure:"health_check_freq"`
+}
+
+func (c *BaseConfig) SetDefaults() {
+    if c.Name == "" {
+        c.Name = "default"
+    }
+    if c.MaxRetries == 0 {
+        c.MaxRetries = 3
+    }
+    if c.RetryInterval == 0 {
+        c.RetryInterval = time.Second
+    }
+    if c.ConnectTimeout == 0 {
+        c.ConnectTimeout = 5 * time.Second
+    }
+}
+```
+
+### 3.2. 具体连接器配置
+
+```go
+// RedisConfig Redis 连接配置
+type RedisConfig struct {
+    BaseConfig   `mapstructure:",squash"`
+    Addr         string `mapstructure:"addr"`
+    Password     string `mapstructure:"password"`
+    DB           int    `mapstructure:"db"`
+    PoolSize     int    `mapstructure:"pool_size"`
+    MinIdleConns int    `mapstructure:"min_idle_conns"`
+}
+
+// MySQLConfig MySQL 连接配置
+type MySQLConfig struct {
+    BaseConfig      `mapstructure:",squash"`
+    DSN             string `mapstructure:"dsn"`
+    MaxOpenConns    int    `mapstructure:"max_open_conns"`
+    MaxIdleConns    int    `mapstructure:"max_idle_conns"`
+    ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
+}
+
+// EtcdConfig Etcd 连接配置
+type EtcdConfig struct {
+    BaseConfig   `mapstructure:",squash"`
+    Endpoints    []string `mapstructure:"endpoints"`
+    DialTimeout  time.Duration `mapstructure:"dial_timeout"`
+    Username     string `mapstructure:"username"`
+    Password     string `mapstructure:"password"`
+}
+
+// NATSConfig NATS 连接配置
+type NATSConfig struct {
+    BaseConfig      `mapstructure:",squash"`
+    URL             string `mapstructure:"url"`
+    MaxReconnects   int    `mapstructure:"max_reconnects"`
+    ReconnectWait   time.Duration `mapstructure:"reconnect_wait"`
+}
+```
+
+## 4. 错误处理
+
+使用 Genesis 的 `xerrors` 组件定义和包装错误：
+
+```go
+// pkg/connector/errors.go
+import "github.com/ceyewan/genesis/pkg/xerrors"
+
+// Sentinel Errors
+var (
+    ErrNotConnected  = xerrors.New("connector: not connected")
+    ErrAlreadyClosed = xerrors.New("connector: already closed")
+    ErrConnection    = xerrors.New("connector: connection failed")
+    ErrTimeout       = xerrors.New("connector: timeout")
+    ErrConfig        = xerrors.New("connector: invalid config")
+    ErrHealthCheck   = xerrors.New("connector: health check failed")
 )
 
-type Error struct {
-    Type      ErrorType // 错误类型
-    Connector string    // 出错的连接器名称
-    Cause     error     // 原始错误
-    Retryable bool      // 是否可重试
-}
-
-func (e *Error) Error() string {
-    return fmt.Sprintf("connector[%s] error: type=%d, retryable=%v, cause=%v", e.Connector, e.Type, e.Retryable, e.Cause)
-}
-````
-
-### 4.3. 连接管理器 (`internal/connector/manager`)
-
-管理器是连接器实现的核心，它不直接暴露给用户，但负责所有连接的生命周期和复用。
-
-**核心职责：**
-
-1. **实例缓存:** 根据配置的哈希值缓存连接器实例，确保相同配置只创建一个连接。
-2. **引用计数:** 通过引用计数安全地管理连接的创建 (`Get`) 和销毁 (`Release`)。当引用计数归零时，才真正关闭连接。
-3. **并发安全:** 所有对外的 `Get` 和 `Release` 方法都是线程安全的。
-4. **工厂模式:** 通过泛型工厂函数创建不同类型的连接器实例。
-
-```go
-// internal/connector/manager.go (示意代码)
-package manager
-
-// Manager 负责管理某一类连接器的所有实例
-type Manager[T connector.Connector] struct {
-    mu         sync.RWMutex
-    instances  map[string]*managedInstance[T] // key 为配置的 hash
-    factory    func(config any, logger clog.Logger) (T, error)    // 创建具体连接器的工厂函数
-}
-
-type managedInstance[T connector.Connector] struct {
-    instance T
-    refCount int32
-}
-
-func (m *Manager[T]) Get(config any, logger clog.Logger) (T, error) {
-    // 1. 计算 config 的 hash
-    // 2. 加锁检查 instance 是否已存在
-    // 3. 如果存在，增加引用计数并返回
-    // 4. 如果不存在，调用 factory 创建新实例，存入 map，设置引用计数为 1，然后返回
-}
-
-func (m *Manager[T]) Release(config any) error {
-    // 1. 计算 config 的 hash
-    // 2. 加锁减少引用计数
-    // 3. 如果引用计数归零，调用 instance.Close() 并从 map 中移除
+// 使用时包装错误
+func (c *redisConnector) Connect(ctx context.Context) error {
+    if err := c.client.Ping(ctx).Err(); err != nil {
+        return xerrors.Wrapf(ErrConnection, "redis %s: %v", c.cfg.Addr, err)
+    }
+    return nil
 }
 ```
 
-## 5. 核心容器 (Core Container) 深度设计
+## 5. 工厂函数
 
-容器是整个应用的粘合剂和启动器，其详细设计见 `docs/container-design.md`。本节只从连接器视角说明与 Container 的协作关系。
-
-1. Container 在启动阶段，会先完成 Config / Telemetry / 日志等基础能力的初始化；
-2. 随后根据 `AppConfig.Connectors` 调用各类 `connector.Manager` / Factory，使用带命名空间的 Logger 创建具体连接器实例，例如：
-   - `logger.WithNamespace("connector.mysql.primary")`
-   - `logger.WithNamespace("connector.redis.default")`
-3. 连接器实例如实现了 `container.Lifecycle` 接口，则会被注册到 Container 的生命周期管理中，典型 Phase 早于业务组件；
-4. 上层业务组件（如 db / dlock / cache）只通过 `pkg/connector` 暴露的接口访问底层连接，而不直接感知 Container 与 Manager 的存在。
-
-## 6. 使用示例
-
-最终，业务代码的开发体验将变得极为简洁和统一。
+### 5.1. 标准签名
 
 ```go
-// cmd/server/main.go
-package main
+// 工厂函数签名
+func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error)
+func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error)
+func NewEtcd(cfg *EtcdConfig, opts ...Option) (EtcdConnector, error)
+func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error)
 
-func main() {
-    // 1. 加载配置
-    cfg, err := loadConfig()
-    if err != nil {
-        log.Fatalf("failed to load config: %v", err)
+// Must 版本（panic on error）
+func MustNewRedis(cfg *RedisConfig, opts ...Option) RedisConnector
+func MustNewMySQL(cfg *MySQLConfig, opts ...Option) MySQLConnector
+```
+
+### 5.2. Option 模式
+
+使用 Genesis 的 `clog` 和 `metrics` 组件：
+
+```go
+// pkg/connector/options.go
+import (
+    "github.com/ceyewan/genesis/pkg/clog"
+    "github.com/ceyewan/genesis/pkg/metrics"
+)
+
+type options struct {
+    logger clog.Logger
+    meter  metrics.Meter
+}
+
+type Option func(*options)
+
+func WithLogger(l clog.Logger) Option {
+    return func(o *options) {
+        o.logger = l.WithNamespace("connector")
+    }
+}
+
+func WithMeter(m metrics.Meter) Option {
+    return func(o *options) {
+        o.meter = m
+    }
+}
+```
+
+## 6. 实现示例
+
+### 6.1. Redis 连接器
+
+```go
+// pkg/connector/redis.go
+
+type redisConnector struct {
+    cfg     *RedisConfig
+    client  *redis.Client
+    logger  clog.Logger
+    healthy atomic.Bool
+    mu      sync.RWMutex
+}
+
+func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
+    cfg.SetDefaults()
+    if err := cfg.Validate(); err != nil {
+        return nil, fmt.Errorf("invalid config: %w", err)
     }
 
-    // 2. 创建并启动应用容器
-    app, err := container.New(cfg)
-    if err != nil {
-        log.Fatalf("failed to start application: %v", err)
+    opt := &options{}
+    for _, o := range opts {
+        o(opt)
     }
-    // 注册优雅关闭
-    defer app.Close()
 
-    // 3. 使用组件
-    ctx := context.Background()
-    app.Log.InfoContext(ctx, "service started successfully")
+    c := &redisConnector{
+        cfg:    cfg,
+        logger: opt.logger.With("connector", "redis", "name", cfg.Name),
+    }
 
-    // 使用 DB 组件进行事务操作
-    err = app.DB.Transaction(ctx, func(tx db.Tx) error {
-        // 在这里执行数据库操作
-        // ...
-        return nil
+    // 创建 Redis 客户端
+    c.client = redis.NewClient(&redis.Options{
+        Addr:         cfg.Addr,
+        Password:     cfg.Password,
+        DB:           cfg.DB,
+        PoolSize:     cfg.PoolSize,
+        MinIdleConns: cfg.MinIdleConns,
     })
-    if err != nil {
-        app.Log.ErrorContext(ctx, "transaction failed", "error", err)
+
+    return c, nil
+}
+
+func (c *redisConnector) Connect(ctx context.Context) error {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+
+    if err := c.client.Ping(ctx).Err(); err != nil {
+        return &Error{
+            Type:      ErrConnection,
+            Connector: c.cfg.Name,
+            Cause:     err,
+            Retryable: true,
+        }
     }
 
-    // 使用 Cache 组件
-    app.Cache.Set(ctx, "user:1", []byte("data"), time.Minute)
+    c.healthy.Store(true)
+    c.logger.Info("connected to redis", "addr", c.cfg.Addr)
+    return nil
+}
 
-    // 阻塞主协程，等待中断信号
-    // ...
+func (c *redisConnector) Close() error {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+
+    c.healthy.Store(false)
+    if c.client != nil {
+        return c.client.Close()
+    }
+    return nil
+}
+
+func (c *redisConnector) HealthCheck(ctx context.Context) error {
+    if err := c.client.Ping(ctx).Err(); err != nil {
+        c.healthy.Store(false)
+        return err
+    }
+    c.healthy.Store(true)
+    return nil
+}
+
+func (c *redisConnector) IsHealthy() bool {
+    return c.healthy.Load()
+}
+
+func (c *redisConnector) Name() string {
+    return c.cfg.Name
+}
+
+func (c *redisConnector) GetClient() *redis.Client {
+    return c.client
 }
 ```
 
-## 7. 总结
+## 7. 目录结构
 
-这份设计方案通过明确的**分层**、**接口**和**生命周期管理**，构建了一个健壮、可扩展且易于维护的框架基础。其核心优势在于：
+采用扁平化结构，所有内容放在 `pkg/connector/` 下：
 
-* **高内聚低耦合：** 连接器和组件职责单一，通过接口解耦。
-* **资源安全：** 通过 Manager 和 Container 确保连接被高效复用和安全释放。
-* **启动/关闭健壮性：** 有序的生命周期管理保证了应用的稳定启动和优雅停机。
-* **开发体验统一：** 开发者通过统一的容器入口与框架交互，无需关心底层细节。
+```text
+pkg/connector/
+├── interface.go    # Connector 接口定义
+├── config.go       # 配置结构体
+├── errors.go       # 错误定义
+├── options.go      # Option 函数
+├── redis.go        # Redis 实现
+├── mysql.go        # MySQL 实现
+├── etcd.go         # Etcd 实现
+└── nats.go         # NATS 实现
+```
+
+**说明**：
+
+- 不再有 `internal/connector/` 目录
+- 不再有 `types/` 子包
+- 实现类型使用非导出结构体（如 `redisConnector`）
+
+## 8. 使用示例
+
+### 8.1. 基本使用
+
+```go
+func main() {
+    ctx := context.Background()
+
+    // 创建 Logger
+    logger, _ := clog.New(&clog.Config{Level: "info"})
+
+    // 创建 Redis 连接器
+    redisConn, err := connector.NewRedis(&connector.RedisConfig{
+        Addr:     "localhost:6379",
+        PoolSize: 10,
+    }, connector.WithLogger(logger))
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer redisConn.Close() // 确保资源释放
+
+    // 建立连接
+    if err := redisConn.Connect(ctx); err != nil {
+        log.Fatal(err)
+    }
+
+    // 使用客户端
+    client := redisConn.GetClient()
+    client.Set(ctx, "key", "value", time.Minute)
+}
+```
+
+### 8.2. 与组件配合使用
+
+```go
+func main() {
+    ctx := context.Background()
+
+    // 1. 创建连接器
+    redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+    defer redisConn.Close()
+    redisConn.Connect(ctx)
+
+    mysqlConn, _ := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
+    defer mysqlConn.Close()
+    mysqlConn.Connect(ctx)
+
+    // 2. 创建组件（注入连接器）
+    locker, _ := dlock.NewRedis(redisConn, &cfg.DLock)
+    // locker.Close() 是 no-op，无需 defer
+
+    database, _ := db.New(mysqlConn, &cfg.DB)
+    // database.Close() 是 no-op，无需 defer
+
+    // 3. 业务逻辑...
+}
+```
+
+### 8.3. 健康检查
+
+```go
+// 定期健康检查
+go func() {
+    ticker := time.NewTicker(30 * time.Second)
+    defer ticker.Stop()
+
+    for range ticker.C {
+        if err := redisConn.HealthCheck(ctx); err != nil {
+            logger.Warn("redis health check failed", "error", err)
+        }
+    }
+}()
+
+// 快速状态查询
+if !redisConn.IsHealthy() {
+    // 处理不健康状态
+}
+```
+
+## 9. 资源所有权
+
+### 9.1. 核心原则
+
+**谁创建，谁负责关闭。**
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                     资源所有权模型                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   Connector (Owner)                                             │
+│   ├── 创建 *redis.Client / *gorm.DB                            │
+│   ├── 管理连接池                                                │
+│   └── Close() 释放资源  ←── 必须调用                            │
+│                                                                 │
+│   Component (Borrower)                                          │
+│   ├── Cache    ─┐                                               │
+│   ├── DLock    ─┼── 借用 Connector.GetClient()                  │
+│   ├── DB       ─┤                                               │
+│   └── MQ       ─┘                                               │
+│        │                                                        │
+│        └── Close() 是 no-op（不拥有资源）                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 9.2. 生命周期管理
+
+使用 Go 的 `defer` 自然管理资源，无需 Lifecycle 接口：
+
+```go
+func main() {
+    // 创建顺序：Redis -> MySQL -> 组件
+    // 关闭顺序：组件 -> MySQL -> Redis (defer 自动逆序)
+    
+    redisConn, _ := connector.NewRedis(&cfg.Redis)
+    defer redisConn.Close() // 最后关闭
+    
+    mysqlConn, _ := connector.NewMySQL(&cfg.MySQL)
+    defer mysqlConn.Close() // 倒数第二关闭
+    
+    // 组件借用连接器，无需 Close
+    cache, _ := cache.New(redisConn, &cfg.Cache)
+    db, _ := db.New(mysqlConn, &cfg.DB)
+}
+```
+
+## 10. 设计决策
+
+### 10.1. 为什么不用 Manager 模式？
+
+原设计有 `internal/connector/manager` 用于连接复用和引用计数。现在简化为：
+
+| 原 Manager 功能 | 现在的处理方式 |
+|----------------|---------------|
+| 实例缓存 | 用户在 main.go 中管理实例 |
+| 引用计数 | 使用 defer 确保 Close |
+| 并发安全 | 每个 Connector 内部处理 |
+
+**优点**：
+
+- 简化代码，减少抽象层次
+- 用户对资源有完全控制权
+- 符合 Go 显式优于隐式的原则
+
+### 10.2. 为什么扁平化结构？
+
+| 原结构 | 问题 |
+|--------|------|
+| `pkg/connector/types/` | 导入路径冗长 |
+| `internal/connector/` | 实现分散，难以理解 |
+
+**现在**：所有内容在 `pkg/connector/` 下，用户只需一个导入：
+
+```go
+import "github.com/ceyewan/genesis/pkg/connector"
+
+conn, _ := connector.NewRedis(&connector.RedisConfig{...})
+```
+
+### 10.3. Connect vs NewWithConnect
+
+两种模式都支持：
+
+```go
+// 模式 1：分步（推荐，可处理连接错误）
+conn, err := connector.NewRedis(&cfg)
+if err != nil { /* 配置错误 */ }
+if err := conn.Connect(ctx); err != nil { /* 连接错误 */ }
+
+// 模式 2：一步到位
+conn, err := connector.NewRedisAndConnect(ctx, &cfg)
+```
+
+## 11. 可观测性
+
+### 11.1. 日志
+
+每个连接器接收 Logger 并派生命名空间：
+
+```go
+func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
+    // ...
+    c.logger = opt.logger.With("connector", "redis", "name", cfg.Name)
+    // 输出: {"connector":"redis", "name":"primary", "msg":"connected"}
+}
+```
+
+### 11.2. 指标
+
+可选注入 Meter 收集连接池指标：
+
+```go
+redisConn, _ := connector.NewRedis(&cfg.Redis,
+    connector.WithLogger(logger),
+    connector.WithMeter(tel.Meter()),
+)
+```
+
+常用指标：
+
+- `connector_pool_active` - 活跃连接数
+- `connector_pool_idle` - 空闲连接数
+- `connector_errors_total` - 错误计数
+- `connector_latency_seconds` - 操作延迟
+
+### 11.3. L0 组件集成总结
+
+Connector 统一使用 Genesis L0 组件：
+
+| 能力 | L0 组件 | Option |
+|------|---------|--------|
+| 日志 | `clog` | `WithLogger(logger)` |
+| 指标 | `metrics` | `WithMeter(meter)` |
+| 错误 | `xerrors` | 使用 Sentinel Errors 和 `xerrors.Wrap` |
+| 配置 | `config` | 配置结构定义在 `connector.RedisConfig` 等 |

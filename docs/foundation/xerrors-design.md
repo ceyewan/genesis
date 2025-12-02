@@ -4,17 +4,15 @@
 
 `xerrors` 是 Genesis 框架的统一错误处理组件，提供标准化的错误创建、包装和检查能力。
 
-- **所属层级**：L0 (Base) — 最底层，无任何 Genesis 依赖
-- **核心职责**：错误包装、Sentinel Errors、泛型 Must 函数
+* **所属层级**：L0 (Base) — 最底层，无任何 Genesis 依赖
+* **核心职责**：错误包装、Sentinel Errors、泛型 Must 函数
+* **设计原则**：
+  * 零依赖：不依赖任何 Genesis 包，避免循环依赖
+  * 零副作用：不做日志输出，由调用方决定如何处理错误
+  * 兼容标准库：完全兼容 `errors.Is`、`errors.As`、`errors.Unwrap`
+  * 扁平化结构：所有导出类型在 `pkg/xerrors/` 根目录
 
-## 2. 设计原则
-
-1. **零依赖**：不依赖任何 Genesis 包，避免循环依赖
-2. **零副作用**：不做日志输出，由调用方决定如何处理错误
-3. **兼容标准库**：完全兼容 `errors.Is`、`errors.As`、`errors.Unwrap`
-4. **扁平化结构**：所有导出类型在 `pkg/xerrors/` 根目录
-
-## 3. 目录结构
+## 2. 目录结构
 
 ```text
 pkg/xerrors/
@@ -22,9 +20,9 @@ pkg/xerrors/
 └── xerrors_test.go  # 单元测试
 ```
 
-## 4. API 设计
+## 3. API 设计
 
-### 4.1 Sentinel Errors
+### 3.1 Sentinel Errors
 
 预定义的通用错误类型，用于 `errors.Is` 判断：
 
@@ -43,7 +41,7 @@ var (
 )
 ```
 
-### 4.2 错误包装
+### 3.2 错误包装
 
 ```go
 // Wrap 添加上下文信息，保留错误链
@@ -59,7 +57,7 @@ func WithCode(err error, code string) error
 func GetCode(err error) string
 ```
 
-### 4.3 Must 函数（仅用于初始化）
+### 3.3 Must 函数（仅用于初始化）
 
 ```go
 // Must 如果 err 非空则 panic
@@ -69,7 +67,7 @@ func Must[T any](v T, err error) T
 func MustOK[T any](v T, ok bool) T
 ```
 
-### 4.4 错误聚合
+### 3.4 错误聚合
 
 ```go
 // Collector 收集多个错误，只保留第一个
@@ -81,7 +79,7 @@ func (c *Collector) Err() error
 func Combine(errs ...error) error
 ```
 
-### 4.5 标准库 Re-exports
+### 3.5 标准库 Re-exports
 
 ```go
 var (
@@ -93,6 +91,97 @@ var (
 )
 ```
 
+## 4. 与其他组件的集成
+
+### 4.1 Connector 错误
+
+Connector 使用 xerrors 定义错误：
+
+```go
+// pkg/connector/errors.go
+var (
+    ErrNotConnected  = xerrors.New("connector: not connected")
+    ErrAlreadyClosed = xerrors.New("connector: already closed")
+)
+
+// 使用时包装
+func (c *redisConnector) Connect(ctx context.Context) error {
+    if err := c.client.Ping(ctx).Err(); err != nil {
+        return xerrors.Wrapf(err, "redis connect to %s", c.cfg.Addr)
+    }
+    return nil
+}
+```
+
+### 4.2 组件错误
+
+每个组件定义自己的 Sentinel Errors：
+
+```go
+// pkg/dlock/errors.go
+var (
+    ErrLockNotHeld   = xerrors.New("dlock: lock not held")
+    ErrLockTimeout   = xerrors.New("dlock: acquire timeout")
+    ErrAlreadyLocked = xerrors.New("dlock: already locked")
+)
+
+// pkg/cache/errors.go
+var (
+    ErrCacheMiss = xerrors.New("cache: miss")
+    ErrKeyTooLong = xerrors.New("cache: key too long")
+)
+
+// pkg/ratelimit/errors.go
+var (
+    ErrRateLimited = xerrors.New("ratelimit: rate limited")
+)
+```
+
+### 4.3 Config 错误
+
+```go
+// pkg/config/errors.go
+var (
+    ErrConfigNotFound = xerrors.New("config: file not found")
+    ErrInvalidConfig  = xerrors.New("config: invalid format")
+    ErrValidation     = xerrors.New("config: validation failed")
+)
+```
+
+### 4.4 错误处理模式
+
+```go
+// 业务代码中的错误处理
+result, err := cache.Get(ctx, key)
+if xerrors.Is(err, cache.ErrCacheMiss) {
+    // 缓存未命中，从数据库加载
+    result, err = db.FindByID(ctx, id)
+    if err != nil {
+        return xerrors.Wrap(err, "load from db")
+    }
+}
+
+// 使用 WithCode 添加业务错误码
+if xerrors.Is(err, xerrors.ErrNotFound) {
+    return xerrors.WithCode(err, "USER_NOT_FOUND")
+}
+```
+
+### 4.5 与 clog 配合
+
+错误应在调用方记录日志，而非在 xerrors 内部：
+
+```go
+result, err := service.DoSomething(ctx)
+if err != nil {
+    logger.ErrorContext(ctx, "operation failed",
+        clog.Error(err),
+        clog.String("operation", "DoSomething"),
+    )
+    return xerrors.Wrap(err, "service.DoSomething")
+}
+```
+
 ## 5. 使用示例
 
 ### 5.1 错误包装
@@ -101,7 +190,7 @@ var (
 func LoadConfig(path string) (*Config, error) {
     data, err := os.ReadFile(path)
     if err != nil {
-        return nil, xerrors.Wrapf(err, "failed to read config file %s", path)
+        return nil, xerrors.Wrapf(err, "read config file %s", path)
     }
     // ...
 }
@@ -111,7 +200,7 @@ func LoadConfig(path string) (*Config, error) {
 
 ```go
 result, err := cache.Get(ctx, key)
-if xerrors.Is(err, xerrors.ErrNotFound) {
+if xerrors.Is(err, cache.ErrCacheMiss) {
     // 缓存未命中，从数据库加载
 }
 ```
@@ -121,7 +210,8 @@ if xerrors.Is(err, xerrors.ErrNotFound) {
 ```go
 func main() {
     cfg := xerrors.Must(config.Load("config.yaml"))
-    db := xerrors.Must(database.Connect(cfg.DSN))
+    logger := xerrors.Must(clog.New(&cfg.Log))
+    redisConn := xerrors.Must(connector.NewRedis(&cfg.Redis))
     // ...
 }
 ```
@@ -144,7 +234,7 @@ func validateUser(u *User) error {
 func GetUser(id int64) (*User, error) {
     user, err := db.FindUser(id)
     if err != nil {
-        if errors.Is(err, sql.ErrNoRows) {
+        if xerrors.Is(err, sql.ErrNoRows) {
             return nil, xerrors.WithCode(xerrors.ErrNotFound, "USER_NOT_FOUND")
         }
         return nil, xerrors.WithCode(err, "DB_ERROR")
@@ -169,9 +259,11 @@ if err != nil {
 | 多步骤 | 使用 `Collector` 或 `Combine` |
 | API 错误 | 使用 `WithCode` 添加机器可读码 |
 | 日志记录 | 在调用方使用 `clog.Error`，不在 xerrors 内部 |
+| 组件错误 | 定义 Sentinel Errors 在组件的 `errors.go` 文件 |
 
 ## 7. 注意事项
 
 1. **Must 仅用于初始化**：在运行时业务逻辑中使用 `Must` 会导致服务 panic
 2. **不在 xerrors 中记录日志**：日志记录是调用方的职责
 3. **保持错误链**：使用 `%w` 动词或 `Wrap` 函数，确保 `errors.Is/As` 可用
+4. **组件定义自己的错误**：每个组件在 `errors.go` 中定义自己的 Sentinel Errors

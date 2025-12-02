@@ -3,118 +3,602 @@
 > NOTE: 本文档为当前重构的执行计划（source-of-truth）。在进行代码重构或调整架构时，应以本文件的约定为优先；其他设计文档（如 `genesis-design.md`、`component-spec.md`）为参考。任何偏离本计划的重要决策，应记录在 `docs/reviews/architecture-decisions.md`。
 
 **目标**：将 Genesis 从原型集合转变为生产级、符合 Go 习惯的微服务基座库。
-**核心原则**：**层次分明**（分层架构）、**易用**（扁平化 API）、**健壮**（统一规范）、**工程化**（CI/CD）。
+**核心原则**：**显式优于隐式**（Explicit over Implicit）、**简单优于聪明**（Simple over Clever）、**组合优于继承**（Composition over Inheritance）。
 
 ---
 
-## 1. 总体架构：四层模型 (Four-Layer Architecture)
+## 1. 核心架构决策：移除 DI 容器
 
-我们将 Genesis 的组件划分为四个逻辑层次，针对不同层次采用不同的重构策略：
+### 1.1. 决策背景
 
-| 层次                                                  | 核心组件                                                | 职责                                                       | 重构策略                                                                               | 目录结构                                           |
-| :---------------------------------------------------- | :------------------------------------------------------ | :--------------------------------------------------------- | :------------------------------------------------------------------------------------- | :------------------------------------------------- |
-| **Glue Layer**`<br>`(胶水层)                  | `container`, `config`                               | 组装依赖，编排生命周期。                                   | **保持极简**。不侵入业务，只负责 `Start/Stop`。                                | `pkg/container`                                  |
-| **Level 3: Governance**`<br>`(治理层)         | `ratelimit`, `breaker`, `registry`, `telemetry` | 流量治理，切面属性。通常作为 Middleware/Interceptor 存在。 | **Core 扁平化 + Adapter 丰富化**。重点建设 gRPC/HTTP 适配器。                    | `pkg/{comp}` (Core)`<br>pkg/{comp}/adapter`    |
-| **Level 2: Business**`<br>`(业务能力层)       | `cache`, `idgen`, `dlock`, `idempotency`        | 具体的业务逻辑封装，被业务代码直接调用。                   | **完全扁平化**。为了极致易用，直接暴露高级 API。                                 | `pkg/{comp}<br>`(无 internal)                    |
-| **Level 1: Infrastructure**`<br>`(基础设施层) | `connector`, `db`, `mq`                           | 连接管理，底层 I/O。                                       | **保持分层**。驱动逻辑复杂，保持 `interface`(pkg) 与 `impl`(internal) 分离。 | `pkg/{comp}` (API)`<br>internal/{comp}` (Impl) |
-| **Level 0: Base**`<br>`(基石层)               | `clog` (Log), `telemetry` (Metric/Trace)            | 框架基石，无处不在。                                       | **极度稳定与规范**。强制所有上层组件通过 Option 注入。                           | `pkg/clog<br>``pkg/telemetry`                  |
+原设计采用了 `pkg/container` 作为 DI 容器，存在以下问题：
 
----
+| 问题 | 描述 | Go 哲学冲突 |
+|------|------|-------------|
+| **服务定位器反模式** | 业务代码从 Container "拉取" 依赖 (`app.DB`, `app.DLock`) | 依赖应该"推入"，而非"拉取" |
+| **隐藏依赖关系** | 函数签名看不出真实依赖 | Go 强调显式声明 |
+| **运行时魔法** | Phase 排序、动态组件创建 | Go 偏好编译时检查 |
+| **测试困难** | 需要 Mock 整个 Container | 应只 Mock 实际依赖的接口 |
 
-## 2. 架构重构详细方案
+### 1.2. 决策结论
 
-### 2.1. 组件扁平化 (Flattening Strategy)
+**删除 `pkg/container`，采用 Go Native 的显式依赖注入。**
 
-* **适用范围**：Level 2 (Business) 和 Level 3 (Governance) 的 Core 部分。
-* **行动**：
-  1. **移除 `internal`**：将 `internal/{comp}/*` 实现逻辑移至 `pkg/{comp}/`。
-  2. **封装机制**：使用 **非导出结构体**（如 `type redisLimiter struct`）实现封装。用户只面向 Interface 编程。
-  3. **移除 `types` 子包**：将 `Config`、`Interface`、`Errors` 移至 `pkg/{component}/` 根目录。避免 `ratelimit.New(&types.Config)` 这种冗余写法，改为 `ratelimit.New(&ratelimit.Config)`。
-
-### 2.2. 基础设施分层 (Layered Strategy)
-
-* **适用范围**：Level 1 (Infrastructure)，主要是 `connector`。
-* **行动**：
-  * **保留** `internal/connector/manager.go` 及具体驱动实现（mysql, redis）。
-  * **理由**：驱动层逻辑复杂，包含连接池管理、健康检查等，且不应被用户直接 import 具体实现代码。
+Genesis 的定位是**组件库**，而非**框架**。我们提供积木，用户自己搭建。
 
 ---
 
-## 3. API 与开发规范 (Specifications)
+## 2. 总体架构：三层模型 (Three-Layer Architecture)
 
-### 3.1. 构造函数规范 (Constructor Spec)
+移除 Glue Layer 后，Genesis 简化为三层：
 
-所有组件的 `New` 函数必须遵循以下签名规范：
+| 层次 | 核心组件 | 职责 | 目录结构 |
+|:-----|:---------|:-----|:---------|
+| **Level 3: Governance** | `ratelimit`, `breaker`, `registry`, `telemetry` | 流量治理，切面能力 | `pkg/{comp}` |
+| **Level 2: Business** | `cache`, `idgen`, `dlock`, `idempotency`, `mq` | 业务能力封装 | `pkg/{comp}` |
+| **Level 1: Infrastructure** | `connector`, `db` | 连接管理，底层 I/O | `pkg/{comp}` + `internal/{comp}` |
+| **Level 0: Base** | `clog`, `config`, `xerrors` | 框架基石 | `pkg/{comp}` |
 
-```go
-// 1. 必选参数：核心依赖 (如 Connector, Config)
-// 2. 可选参数：统一使用 Option 模式
-// 3. 禁止：在必选参数中传递 Logger/Metric/Tracer
-func New(conn connector.RedisConnector, opts ...Option) (Interface, error)
+---
+
+## 3. Go Native 依赖注入设计
+
+### 3.1. 核心原则
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                    Go Native 依赖注入                            │
+├─────────────────────────────────────────────────────────────────┤
+│  1. 构造函数注入：依赖通过 New() 参数传入                         │
+│  2. 显式调用：main.go 中手写初始化代码，依赖关系一目了然           │
+│  3. defer 释放：利用 Go 的 defer 机制，自然实现 LIFO 关闭顺序     │
+│  4. 接口隔离：业务层只依赖需要的接口，而非具体实现                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-* **Context 规范**：`New` 函数**禁止包含阻塞 I/O**，也不接受 `context.Context`。所有 I/O 操作推迟到 `Start(ctx)` 或具体业务方法中。
+### 3.2. 标准初始化模式
 
-### 3.2. Level 0 能力接入规范 (Base Capabilities)
+所有使用 Genesis 的应用应遵循以下模式：
 
-所有组件**必须**通过 `Option` 接入 Level 0 能力：
+```go
+// main.go - 显式、清晰、可读
+package main
 
-1. **Logging (`clog`)**:
-   * 必须提供 `WithLogger(clog.Logger)` Option。
-   * 组件内部必须使用 `logger.With("component", "xxx")` 派生子 Logger。
-2. **Telemetry**:
-   * 必须提供 `WithMeter(meter)` 和 `WithTracer(tracer)`。
-   * 核心逻辑必须埋点（Metrics）和传递 Context（Tracing）。
-3. **Config**:
-   * 组件**禁止**直接读取配置文件或环境变量。
-   * 只能接受由上层传入的 `Config` 结构体。
+import (
+    "context"
+    "log"
+    "os/signal"
+    "syscall"
+    
+    "github.com/ceyewan/genesis/pkg/clog"
+    "github.com/ceyewan/genesis/pkg/config"
+    "github.com/ceyewan/genesis/pkg/connector"
+    "github.com/ceyewan/genesis/pkg/db"
+    "github.com/ceyewan/genesis/pkg/dlock"
+    "github.com/ceyewan/genesis/pkg/cache"
+    "github.com/ceyewan/genesis/pkg/telemetry"
+)
 
-### 3.3. 初始化与生命周期规范 (Initialization & Lifecycle)
+func main() {
+    // 0. 信号处理
+    ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer cancel()
 
-Genesis 采用 **"容器优先的双模式" (Container-First Dual Mode)** 策略，确保组件既能在生产环境中由容器统一管理，也能在测试/脚本中独立运行。
+    // 1. 加载配置（最先，其他组件依赖它）
+    cfg, err := config.Load("config.yaml")
+    if err != nil {
+        log.Fatalf("load config: %v", err)
+    }
 
-1. **双模式设计 (Dual Mode)**:
+    // 2. 初始化 Logger（基础设施，几乎所有组件都需要）
+    logger, err := clog.New(&cfg.Log)
+    if err != nil {
+        log.Fatalf("create logger: %v", err)
+    }
 
-   * **独立模式 (Standalone)**: 组件必须提供纯粹的 `New(Dep, Config, ...Option)` 工厂函数。它**不感知** Container 的存在，由调用方手动管理依赖注入和资源释放。适用于单元测试、工具脚本。
-   * **容器模式 (Container)**: Container 充当 **Orchestrator**。它负责加载配置、创建 Connector、调用组件的 standard `New` 函数，并将组件注册到生命周期管理器中。
-2. **生命周期接口 (Lifecycle Interface)**:
+    // 3. 初始化 Telemetry（可选，用于 Metrics/Tracing）
+    tel, err := telemetry.New(&cfg.Telemetry)
+    if err != nil {
+        log.Fatalf("create telemetry: %v", err)
+    }
+    defer tel.Shutdown(ctx)
 
-   * 所有拥有后台任务（如定时清理）或持有长连接资源（如 Connector）的组件，必须实现 `Start/Stop` 接口：
+    // 4. 创建 Connectors（按依赖顺序，defer 自动逆序关闭）
+    redisConn, err := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+    if err != nil {
+        log.Fatalf("create redis connector: %v", err)
+    }
+    defer redisConn.Close()
 
-     ```go
-     type Lifecycle interface {
-         Start(ctx context.Context) error
-         Stop(ctx context.Context) error
-     }
-     ```
+    mysqlConn, err := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
+    if err != nil {
+        log.Fatalf("create mysql connector: %v", err)
+    }
+    defer mysqlConn.Close()
 
-   * **职责划分**:
+    // 5. 创建组件（注入 Connector + Logger + Telemetry）
+    database, err := db.New(mysqlConn, &cfg.DB,
+        db.WithLogger(logger),
+        db.WithMeter(tel.Meter()),
+        db.WithTracer(tel.Tracer()),
+    )
+    if err != nil {
+        log.Fatalf("create db: %v", err)
+    }
 
-     * **Component/Connector (Worker)**: 负责实现具体的连接建立、后台任务启动和资源释放逻辑。
-     * **Container (Manager)**: 负责维护组件依赖拓扑，按正确顺序（Infrastructure -> Business -> Governance）调用 `Start`，并按**相反顺序**调用 `Stop` (Graceful Shutdown)。
+    locker, err := dlock.NewRedis(redisConn, &cfg.DLock,
+        dlock.WithLogger(logger),
+        dlock.WithMeter(tel.Meter()),
+    )
+    if err != nil {
+        log.Fatalf("create dlock: %v", err)
+    }
 
-### 3.4. 错误处理 (Error Handling)
+    cacheClient, err := cache.New(redisConn, &cfg.Cache,
+        cache.WithLogger(logger),
+    )
+    if err != nil {
+        log.Fatalf("create cache: %v", err)
+    }
 
-* **统一组件**：新增 `pkg/xerrors` 组件，定义统一的错误码和错误包装器。
-* **规范**：所有对外返回的错误必须 Wrap 原始错误，并使用 Sentinel Errors（如 `ErrNotFound`）。
+    // 6. 创建业务服务（注入组件接口）
+    userSvc := service.NewUserService(database, locker)
+    orderSvc := service.NewOrderService(database, cacheClient)
+
+    // 7. 启动服务器
+    server := api.NewServer(userSvc, orderSvc)
+    if err := server.Run(ctx); err != nil {
+        logger.Error("server error", "err", err)
+    }
+}
+```
+
+### 3.3. 为什么这样更好？
+
+| 特性 | Container 模式 | Go Native 模式 |
+|------|----------------|----------------|
+| **依赖可见性** | 隐藏在 Container 内部 | main.go 中一目了然 |
+| **编译时检查** | 运行时才发现缺少依赖 | 编译时检查完整性 |
+| **测试友好** | 需要 Mock Container | 只 Mock 需要的接口 |
+| **学习成本** | 需要理解 Container 机制 | 标准 Go 代码，无需学习 |
+| **调试体验** | 堆栈包含 Container 内部 | 堆栈清晰直接 |
+| **IDE 支持** | 难以跳转到实际实现 | 完美支持 Go to Definition |
+
+### 3.4. 生命周期管理
+
+不再需要 `Lifecycle` 接口和 `Phase` 机制。利用 Go 的 `defer` 自然实现：
+
+```go
+// 创建顺序：Config -> Logger -> Connector -> Component -> Service
+// 关闭顺序：Service -> Component -> Connector -> Logger (defer 自动逆序)
+
+func main() {
+    cfg := config.MustLoad("config.yaml")
+    
+    logger := clog.Must(clog.New(&cfg.Log))
+    // defer logger.Sync() // 如果需要
+    
+    redisConn := connector.MustNewRedis(&cfg.Redis)
+    defer redisConn.Close() // 第 3 个关闭
+    
+    mysqlConn := connector.MustNewMySQL(&cfg.MySQL)
+    defer mysqlConn.Close() // 第 2 个关闭
+    
+    dlock := dlock.MustNewRedis(redisConn, &cfg.DLock)
+    // dlock 无状态，无需 Close
+    
+    server := api.NewServer(dlock)
+    defer server.Shutdown(ctx) // 第 1 个关闭
+    
+    server.Run(ctx)
+}
+```
+
+### 3.5. 大型项目：可选使用 Wire
+
+对于 30+ 个服务的大型项目，可选择使用 [Google Wire](https://github.com/google/wire) 自动生成初始化代码。
+
+**Wire 的本质**：它只是一个代码生成器，生成的代码和手写的一模一样。
+
+```go
+// wire.go (开发者编写)
+//go:build wireinject
+
+package main
+
+import "github.com/google/wire"
+
+func InitializeApp(cfg *Config) (*App, func(), error) {
+    wire.Build(
+        connector.NewRedis,
+        connector.NewMySQL,
+        db.New,
+        dlock.NewRedis,
+        cache.New,
+        service.NewUserService,
+        service.NewOrderService,
+        api.NewServer,
+        wire.Struct(new(App), "*"),
+    )
+    return nil, nil, nil
+}
+```
+
+运行 `wire` 后生成 `wire_gen.go`，内容就是标准的手写初始化代码。
+
+**建议**：先手写，等觉得繁琐了再引入 Wire。
 
 ---
 
-## 4. 工程化建设 (Engineering)
+## 4. Connector 简化与资源所有权
 
-1. **Makefile**: 提供 `make test`, `make lint`, `make up` (启动 dev 环境)。
-2. **CI/CD**: 添加 `.github/workflows/ci.yml`，自动化运行测试和 Lint。
-3. **Dev Env**: 整合 `deploy/*.yml` 为 `docker-compose.dev.yml`，一键拉起 MySQL/Redis/Etcd/NATS。
+### 4.1. 移除 Lifecycle 接口
+
+原设计中 Connector 继承了 `Lifecycle` 接口（`Start/Stop/Phase`），这是为 Container 服务的。现在删除 Container 后，简化为：
+
+```go
+// Before: 过度设计
+type Connector interface {
+    Lifecycle  // Start/Stop/Phase - 冗余！
+    Connect(ctx context.Context) error
+    Close() error
+    HealthCheck(ctx context.Context) error
+    IsHealthy() bool
+    Name() string
+}
+
+// After: 最小接口
+type Connector interface {
+    Connect(ctx context.Context) error   // 建立连接
+    Close() error                         // 关闭连接
+    HealthCheck(ctx context.Context) error
+    IsHealthy() bool
+    Name() string
+}
+```
+
+**移除的内容**：
+- `Start()` → 与 `Connect()` 重复
+- `Stop()` → 与 `Close()` 重复
+- `Phase()` → 只为 Container 服务，不再需要
+- `Lifecycle` 接口定义
+
+### 4.2. 资源所有权原则
+
+**核心原则：谁创建，谁负责关闭。**
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                     资源所有权模型                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   Connector (Owner)                                             │
+│   ├── 创建 *redis.Client / *gorm.DB                            │
+│   ├── 管理连接池                                                │
+│   └── Close() 释放资源  ←── 必须调用                            │
+│                                                                 │
+│   Component (Borrower)                                          │
+│   ├── Cache    ─┐                                               │
+│   ├── DLock    ─┼── 借用 Connector.GetClient()                  │
+│   ├── DB       ─┤                                               │
+│   └── MQ       ─┘                                               │
+│        │                                                        │
+│        └── Close() 是 no-op（不拥有资源）                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 4.3. 组件 Close() 规范
+
+所有**借用** Connector 的组件，其 `Close()` 方法应为 **no-op**：
+
+```go
+// pkg/cache/redis.go
+func (c *redisCache) Close() error {
+    // No-op: Cache 不拥有 Redis 连接，由 Connector 管理
+    // 调用方应关闭 Connector 而非 Cache
+    return nil
+}
+
+// pkg/dlock/redis.go
+func (l *redisLocker) Close() error {
+    // No-op: DLock 不拥有 Redis 连接
+    return nil
+}
+
+// pkg/db/db.go
+func (d *database) Close() error {
+    // No-op: DB 不拥有 MySQL 连接
+    return nil
+}
+```
+
+**为什么保留 Close() 方法？**
+
+1. **接口一致性**：统一的资源清理接口
+2. **未来扩展**：组件可能需要清理内部资源（如本地缓存、后台 goroutine）
+3. **调用无害**：即使误调用也不会出错
+
+### 4.4. 正确的使用模式
+
+```go
+func main() {
+    // ✅ Connector: 必须 defer Close()
+    redisConn, _ := connector.NewRedis(&cfg.Redis)
+    defer redisConn.Close()  // 关闭连接池
+    
+    mysqlConn, _ := connector.NewMySQL(&cfg.MySQL)
+    defer mysqlConn.Close()  // 关闭连接池
+    
+    // ✅ Component: 无需 Close()（但调用也无害）
+    cache, _ := cache.New(redisConn, &cfg.Cache)
+    // defer cache.Close()  // 可选，是 no-op
+    
+    dlock, _ := dlock.NewRedis(redisConn, &cfg.DLock)
+    // defer dlock.Close()  // 可选，是 no-op
+    
+    db, _ := db.New(mysqlConn, &cfg.DB)
+    // defer db.Close()     // 可选，是 no-op
+}
+```
+
+### 4.5. 特殊情况：组件拥有独立资源
+
+如果组件有**自己的**后台资源（非借用），则 `Close()` 必须释放：
+
+```go
+// 例如：带本地缓存的 Cache
+type localCache struct {
+    redis  *redis.Client  // 借用，不关闭
+    local  *bigcache.BigCache  // 自己创建，需要关闭
+    ticker *time.Ticker  // 自己创建，需要停止
+}
+
+func (c *localCache) Close() error {
+    // 只关闭自己拥有的资源
+    c.ticker.Stop()
+    return c.local.Close()
+    // 不关闭 c.redis，它由 Connector 管理
+}
+```
+
+### 4.6. Connector 接口最终定义
+
+```go
+// pkg/connector/interface.go
+
+// Connector 基础连接器接口
+type Connector interface {
+    // Connect 建立连接，应幂等且并发安全
+    Connect(ctx context.Context) error
+    // Close 关闭连接，释放资源
+    Close() error
+    // HealthCheck 检查连接健康状态
+    HealthCheck(ctx context.Context) error
+    // IsHealthy 返回缓存的健康状态标志
+    IsHealthy() bool
+    // Name 返回连接实例名称
+    Name() string
+}
+
+// TypedConnector 泛型接口，提供类型安全的客户端访问
+type TypedConnector[T any] interface {
+    Connector
+    GetClient() T
+}
+
+// 具体类型定义
+type RedisConnector interface {
+    TypedConnector[*redis.Client]
+}
+
+type MySQLConnector interface {
+    TypedConnector[*gorm.DB]
+}
+
+type EtcdConnector interface {
+    TypedConnector[*clientv3.Client]
+}
+
+type NATSConnector interface {
+    TypedConnector[*nats.Conn]
+}
+```
 
 ---
 
-## 5. 执行路线图 (Execution Roadmap)
+## 5. 组件扁平化 (Flattening Strategy)
 
-| 阶段                           | 任务                                   | 详情                                                           |
-| :----------------------------- | :------------------------------------- | :------------------------------------------------------------- |
-| **Phase 1: Pilot**       | **Refactor Ratelimit**           | 试点组件。扁平化结构，实现 `New` 规范，接入 Level 0 Option。 |
-| **Phase 2: Engineering** | **Infrastructure Setup**         | 创建 Makefile, CI Workflow, Docker Compose Dev 环境。          |
-| **Phase 3: Core (L2)**   | **Refactor Cache, Idgen, Dlock** | 执行扁平化重构。                                               |
-| **Phase 4: Feature**     | **Add xerrors**                  | 设计并实现统一错误处理组件。                                   |
-| **Phase 5: Infra (L1)**  | **Refactor Connector, MQ**       | 保持分层，但优化 `types` 包和 API。                          |
-| **Phase 6: Gov (L3)**    | **Refactor Registry, Breaker**   | 重点建设 Adapter (Middleware)。                                |
+### 5.1. 适用范围
+
+Level 2 (Business) 和 Level 3 (Governance) 组件。
+
+### 5.2. 行动
+
+1. **移除 `internal/{comp}`**：实现逻辑移至 `pkg/{comp}/`
+2. **移除 `types` 子包**：`Config`, `Interface`, `Errors` 移至包根目录
+3. **使用非导出结构体**：封装实现细节
+
+```text
+# Before
+pkg/dlock/
+├── dlock.go
+├── options.go
+└── types/
+    ├── config.go
+    ├── interface.go
+    └── errors.go
+internal/dlock/
+├── redis/
+└── etcd/
+
+# After
+pkg/dlock/
+├── dlock.go       # 接口定义 + 工厂函数
+├── config.go      # Config 结构体
+├── errors.go      # Sentinel Errors
+├── options.go     # Option 函数
+├── redis.go       # type redisLocker struct (非导出)
+└── etcd.go        # type etcdLocker struct (非导出)
+```
+
+### 5.3. 用户体验
+
+```go
+// Before: 冗长的导入路径
+import (
+    "github.com/ceyewan/genesis/pkg/dlock"
+    "github.com/ceyewan/genesis/pkg/dlock/types"
+)
+locker, err := dlock.NewRedis(conn, &types.Config{...})
+
+// After: 简洁直接
+import "github.com/ceyewan/genesis/pkg/dlock"
+locker, err := dlock.NewRedis(conn, &dlock.Config{...})
+```
+
+---
+
+## 6. API 与开发规范
+
+### 6.1. 构造函数规范
+
+```go
+// 标准签名
+func New(conn Connector, cfg *Config, opts ...Option) (Interface, error)
+
+// 规则：
+// 1. 必选参数：核心依赖 (Connector) + 配置 (Config)
+// 2. 可选参数：Logger/Meter/Tracer 通过 Option 注入
+// 3. 禁止：New 中执行阻塞 I/O
+```
+
+### 6.2. Option 规范
+
+```go
+type options struct {
+    logger clog.Logger
+    meter  telemetry.Meter
+    tracer telemetry.Tracer
+}
+
+type Option func(*options)
+
+func WithLogger(l clog.Logger) Option {
+    return func(o *options) {
+        o.logger = l.With("component", "dlock")
+    }
+}
+
+func WithMeter(m telemetry.Meter) Option {
+    return func(o *options) { o.meter = m }
+}
+
+func WithTracer(t telemetry.Tracer) Option {
+    return func(o *options) { o.tracer = t }
+}
+```
+
+### 6.3. 接口设计规范
+
+业务服务应依赖**最小接口**，而非具体实现：
+
+```go
+// ✅ Good: 只依赖需要的方法
+type UserRepository interface {
+    FindByID(ctx context.Context, id int64) (*User, error)
+    Save(ctx context.Context, user *User) error
+}
+
+type UserService struct {
+    repo UserRepository  // 接口，易于 Mock
+}
+
+// ❌ Bad: 依赖具体实现
+type UserService struct {
+    db *db.DB  // 具体类型，难以 Mock
+}
+```
+
+### 6.4. 错误处理规范
+
+```go
+// pkg/dlock/errors.go
+var (
+    ErrLockNotHeld   = errors.New("dlock: lock not held")
+    ErrLockTimeout   = errors.New("dlock: acquire timeout")
+    ErrAlreadyLocked = errors.New("dlock: already locked")
+)
+
+// 使用时 Wrap 错误
+return fmt.Errorf("acquire lock %s: %w", key, ErrLockTimeout)
+```
+
+---
+
+## 7. 工程化建设
+
+1. **Makefile**: `make test`, `make lint`, `make up`
+2. **CI/CD**: `.github/workflows/ci.yml`
+3. **Dev Env**: `docker-compose.dev.yml`
+
+---
+
+## 8. 执行路线图
+
+| 阶段 | 任务 | 详情 |
+|:-----|:-----|:-----|
+| **Phase 1** | **删除 Container** | 移除 `pkg/container`，更新所有文档 |
+| **Phase 2** | **简化 Connector** | 移除 `Lifecycle` 接口，简化为最小 API |
+| **Phase 3** | **Pilot: Ratelimit** | 试点扁平化重构 |
+| **Phase 4** | **Core L2** | 重构 `cache`, `idgen`, `dlock`, `idempotency` |
+| **Phase 5** | **Infra L1** | 优化 `connector`, `db`, `mq` API |
+| **Phase 6** | **Gov L3** | 重构 `registry`, `breaker`，建设 Adapter |
+| **Phase 7** | **Examples** | 提供完整的 main.go 示例，展示 Go Native DI |
+
+---
+
+## 9. 待删除/修改内容
+
+执行重构时，需要处理：
+
+### 9.1. 删除
+
+1. `pkg/container/` 目录
+2. `docs/container-design.md` 文件 ✅ 已删除
+3. `examples/container/` 目录
+4. 所有文档中关于 "Container Mode" 的描述
+
+### 9.2. 修改
+
+1. **`pkg/connector/interface.go`**：移除 `Lifecycle` 接口及其继承
+2. **`internal/connector/*.go`**：移除 `Start()`, `Stop()`, `Phase()` 方法
+3. **所有组件的 `Close()` 方法**：确保借用 Connector 的组件实现 no-op Close
+
+---
+
+## 附录：Go 依赖注入最佳实践
+
+### A.1. 为什么不用 DI 容器？
+
+> "A little copying is better than a little dependency." — Rob Pike
+
+Go 社区普遍认为 DI 容器是 Anti-pattern，原因：
+
+1. **违背显式原则**：Go 代码应该一眼看出依赖关系
+2. **运行时魔法**：Go 偏好编译时检查
+3. **过度抽象**：解决的问题比引入的复杂度小
+
+### A.2. 什么时候需要 Wire？
+
+| 场景 | 建议 |
+|------|------|
+| < 10 个服务 | 手写 main.go |
+| 10-30 个服务 | 手写或 Wire 都可以 |
+| > 30 个服务 | 考虑用 Wire 减少样板代码 |
+
+### A.3. 参考项目
+
+- [go-kratos/kratos](https://github.com/go-kratos/kratos) - 使用 Wire
+- [uber-go/fx](https://github.com/uber-go/fx) - Uber 的 DI 框架（非 Go 惯用法）
+- [google/wire](https://github.com/google/wire) - 编译时 DI
