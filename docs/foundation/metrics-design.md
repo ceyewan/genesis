@@ -17,17 +17,16 @@ Metrics 组件为 Genesis 框架提供统一的指标收集能力，基于 OpenT
 
 ```text
 pkg/metrics/
-├── metrics.go       # 工厂函数 + Meter 接口 + Config
-├── counter.go       # Counter 接口与实现
-├── gauge.go         # Gauge 接口与实现
-├── histogram.go     # Histogram 接口与实现
+├── metrics.go       # 工厂函数 + Meter 接口
+├── types.go         # Counter/Gauge/Histogram 接口定义
+├── config.go        # Config 结构体
 ├── options.go       # Option 模式定义
 └── label.go         # Label 定义
 
 internal/metrics/
+├── meter.go         # Meter 实现
 ├── provider.go      # OTel Provider 初始化
-├── prometheus.go    # Prometheus Exporter
-└── otlp.go          # OTLP Exporter
+└── prometheus.go    # Prometheus Exporter
 ```
 
 ## 3. 核心接口
@@ -95,12 +94,8 @@ type Config struct {
     Version     string `mapstructure:"version"`
     
     // Prometheus Exporter
-    Port int    `mapstructure:"port"` // 默认 9090
-    Path string `mapstructure:"path"` // 默认 /metrics
-    
-    // OTLP Exporter（可选）
-    OTLPEndpoint string `mapstructure:"otlp_endpoint"`
-    OTLPProtocol string `mapstructure:"otlp_protocol"` // grpc | http
+    Port int    `mapstructure:"port"` // 默认 9090，Prometheus 指标暴露端口
+    Path string `mapstructure:"path"` // 默认 /metrics，指标 HTTP 路径
 }
 ```
 
@@ -108,13 +103,16 @@ type Config struct {
 
 ```go
 // New 创建 Meter 实例
+// 返回值实现 Meter 接口，用于创建和记录指标
 func New(cfg *Config, opts ...Option) (Meter, error)
 
 // Must 类似 New，但出错时 panic
+// 仅用于初始化阶段
 func Must(cfg *Config, opts ...Option) Meter
 
 // Shutdown 关闭 Meter，刷新所有指标
-func (m *meter) Shutdown(ctx context.Context) error
+// 在应用关闭时调用，确保最后的指标被导出
+func (m Meter) Shutdown(ctx context.Context) error
 ```
 
 ## 5. Option 模式
@@ -141,12 +139,8 @@ metrics:
   enabled: true
   service_name: order-service
   version: v1.0.0
-  port: 9090
-  path: /metrics
-  
-  # 可选：OTLP Exporter
-  # otlp_endpoint: otel-collector:4317
-  # otlp_protocol: grpc
+  port: 9090              # Prometheus 暴露端口
+  path: /metrics          # Prometheus 指标路径
 ```
 
 ## 7. 与其他组件的集成
@@ -233,30 +227,54 @@ func main() {
 }
 ```
 
-## 8. 内置指标
+## 8. 常见指标模式
 
-### 8.1 Connector 指标
+### 8.1 业务指标
 
-| 指标名 | 类型 | 描述 |
-|--------|------|------|
-| `connector_pool_active` | Gauge | 活跃连接数 |
-| `connector_pool_idle` | Gauge | 空闲连接数 |
-| `connector_pool_wait` | Gauge | 等待连接数 |
-| `connector_errors_total` | Counter | 错误计数 |
-| `connector_latency_seconds` | Histogram | 操作延迟 |
+```go
+// HTTP 请求计数
+http_requests_total{method, path, status}
 
-**Label 维度**：`type` (redis/mysql/etcd), `name` (连接器名称)
+// HTTP 请求耗时
+http_request_duration_seconds{method, path}
 
-### 8.2 组件指标
+// 业务操作计数
+orders_created_total{status}
 
-| 组件 | 指标名 | 类型 | 描述 |
-|------|--------|------|------|
-| dlock | `dlock_acquire_total` | Counter | 锁获取次数 |
-| dlock | `dlock_acquire_duration_seconds` | Histogram | 锁获取耗时 |
-| cache | `cache_hits_total` | Counter | 缓存命中 |
-| cache | `cache_misses_total` | Counter | 缓存未命中 |
-| ratelimit | `ratelimit_allowed_total` | Counter | 允许请求数 |
-| ratelimit | `ratelimit_denied_total` | Counter | 拒绝请求数 |
+// 业务操作耗时
+order_create_duration_seconds
+```
+
+### 8.2 资源指标
+
+```go
+// 连接池
+connector_pool_active{type, name}
+connector_pool_idle{type, name}
+
+// 缓存
+cache_hits_total{cache_name}
+cache_misses_total{cache_name}
+
+// 锁
+dlock_acquire_total{lock_name}
+dlock_acquire_duration_seconds{lock_name}
+```
+
+### 8.3 Label 最佳实践
+
+- Label Key 使用小写 + 下划线（如 `http_method` 而非 `HttpMethod`）
+- Label Value 简短且固定（避免高基数问题）
+- 最多 5-10 个 Label 维度
+
+**❌ 反例**：用户 ID、请求 ID 等高基数值不应作为 Label
+```go
+// 错误：高基数，导致指标爆炸
+counter.Inc(ctx, metrics.L("user_id", userID))
+
+// 正确：使用固定值
+counter.Inc(ctx, metrics.L("user_type", "vip"))
+```
 
 ## 9. 使用示例
 
@@ -301,7 +319,7 @@ activeConns, _ := meter.Gauge("active_connections", "Active connections")
 activeConns.Set(ctx, float64(pool.ActiveCount()))
 ```
 
-## 10. Prometheus 集成
+## 9. Prometheus 集成
 
 启用 Prometheus Exporter 后，访问 `http://localhost:9090/metrics` 获取指标：
 
@@ -310,13 +328,33 @@ activeConns.Set(ctx, float64(pool.ActiveCount()))
 # TYPE http_requests_total counter
 http_requests_total{method="POST",path="/users",status="200"} 42
 
-# HELP redis_pool_active Active connections
-# TYPE redis_pool_active gauge
-redis_pool_active{type="redis",name="default"} 5
+# HELP http_request_duration_seconds Request duration
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_bucket{le="0.005",method="POST",path="/users"} 10
+http_request_duration_seconds_bucket{le="0.01",method="POST",path="/users"} 35
+http_request_duration_seconds_sum{method="POST",path="/users"} 0.35
+http_request_duration_seconds_count{method="POST",path="/users"} 42
 ```
 
-## 11. 技术实现
+## 10. 技术实现
 
 * **底层实现**：基于 OpenTelemetry Go SDK
-* **Exporter**：默认 Prometheus，可选 OTLP
+* **Exporter**：Prometheus Exporter（内置）
 * **线程安全**：所有指标操作并发安全
+
+## 11. 完整使用示例
+
+参见 `examples/metrics/main.go` 获取一个完整的 Gin Web 服务示例，包括：
+- Metrics 初始化
+- HTTP 中间件埋点
+- 自定义指标记录
+- Prometheus 暴露端点
+
+运行示例：
+```bash
+cd examples/metrics
+go run main.go
+
+# 在另一个终端访问
+curl http://localhost:9090/metrics
+```
