@@ -19,12 +19,11 @@ import (
 
 // loader 实现 Loader 接口
 type loader struct {
-	v            *viper.Viper
-	opts         *Options
-	mu           sync.RWMutex
-	watches      map[string][]chan Event
-	oldValues    map[string]interface{}
-	watchStarted bool
+	v         *viper.Viper
+	opts      *Options
+	mu        sync.RWMutex
+	watches   map[string][]chan Event
+	oldValues map[string]interface{}
 }
 
 // NewLoader 创建一个新的配置加载器
@@ -83,6 +82,20 @@ func (l *loader) Load(ctx context.Context) error {
 
 	// 7. 保存当前值作为基线
 	l.captureCurrentValues()
+
+	// 8. 启动文件监听（自动启动，无需手动 Start）
+	l.v.OnConfigChange(func(e fsnotify.Event) {
+		// 重新加载环境特定配置
+		if err := l.loadEnvironmentConfig(); err != nil {
+			fmt.Printf("Error reloading environment config: %v\n", err)
+		}
+		// 重新加载 .env 文件
+		if err := l.loadDotEnv(); err != nil {
+			fmt.Printf("Warning: failed to reload .env file: %v\n", err)
+		}
+		l.notifyWatches(e)
+	})
+	l.v.WatchConfig()
 
 	return nil
 }
@@ -215,33 +228,6 @@ func (l *loader) Validate() error {
 	return nil
 }
 
-// Start 启动后台任务
-func (l *loader) Start(ctx context.Context) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.watchStarted {
-		return nil
-	}
-
-	l.v.OnConfigChange(func(e fsnotify.Event) {
-		// 重新加载环境特定配置
-		if err := l.loadEnvironmentConfig(); err != nil {
-			fmt.Printf("Error reloading environment config: %v\n", err)
-		}
-		// 重新加载 .env 文件
-		if err := l.loadDotEnv(); err != nil {
-			fmt.Printf("Warning: failed to reload .env file: %v\n", err)
-		}
-		l.notifyWatches(e)
-	})
-
-	l.v.WatchConfig()
-	l.watchStarted = true
-
-	return nil
-}
-
 // notifyWatches 通知所有监听者
 func (l *loader) notifyWatches(_ fsnotify.Event) {
 	l.mu.Lock()
@@ -271,24 +257,4 @@ func (l *loader) notifyWatches(_ fsnotify.Event) {
 			}
 		}
 	}
-}
-
-// Stop 停止后台任务
-func (l *loader) Stop(ctx context.Context) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	for _, channels := range l.watches {
-		for _, ch := range channels {
-			close(ch)
-		}
-	}
-	l.watches = make(map[string][]chan Event)
-	l.watchStarted = false
-	return nil
-}
-
-// Phase 返回生命周期阶段
-func (l *loader) Phase() int {
-	return -10
 }

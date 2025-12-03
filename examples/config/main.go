@@ -251,11 +251,7 @@ func configWatchExample() {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
-	// 启动配置监听服务
-	if err := loader.Start(ctx); err != nil {
-		log.Fatalf("启动配置监听失败: %v", err)
-	}
-	defer loader.Stop(ctx)
+	// 注意：文件监听在 Load() 时自动启动，无需手动 Start()
 
 	// 监听多个配置项的变化
 	mysqlHostCh, err := loader.Watch(ctx, "mysql.host")
