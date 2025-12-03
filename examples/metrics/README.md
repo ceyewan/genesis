@@ -235,11 +235,25 @@ http_requests_active{method="GET"} 2
 
 ## Prometheus + Grafana 可视化
 
-本示例提供了完整的 Docker Compose 配置，包含 Prometheus 和 Grafana，用于实时监控指标。
+Genesis 项目在根目录提供了统一的 Docker Compose 配置，包含 Prometheus 和 Grafana。
 
 ### 快速启动
 
-#### 1. 启动示例应用
+#### 1. 启动监控服务（根目录）
+
+```bash
+# 在项目根目录
+docker network create genesis-net 2>/dev/null || true
+docker-compose -f docker-compose.dev.yml up prometheus grafana -d
+```
+
+Docker 容器启动后：
+- **Prometheus** - http://localhost:9090
+- **Grafana** - http://localhost:3000
+
+#### 2. 启动示例应用
+
+在另一个终端：
 
 ```bash
 cd examples/metrics
@@ -248,24 +262,11 @@ go run main.go
 
 应用会在以下端口运行：
 - **Gin 服务** - http://localhost:8080
-- **Prometheus 指标** - http://localhost:9090/metrics
-
-#### 2. 启动 Prometheus 和 Grafana（Docker）
-
-在另一个终端：
-
-```bash
-cd examples/metrics
-docker-compose up
-```
-
-Docker 容器启动后：
-- **Prometheus** - http://localhost:9091
-- **Grafana** - http://localhost:3000
+- **Prometheus 指标** - http://localhost:9090/metrics（应用内置）
 
 ### Prometheus 查询
 
-访问 http://localhost:9091，在查询框中输入以下 PromQL 表达式查看指标：
+访问 http://localhost:9090，在查询框中输入以下 PromQL 表达式查看指标：
 
 **请求总数**
 ```promql
@@ -341,54 +342,44 @@ sum(rate(http_requests_total[1m])) by (path)
 
 ### 配置文件说明
 
-#### docker-compose.yml
+监控服务配置位于项目根目录：
 
-本示例包含两个服务：
+- **docker-compose.dev.yml** - Docker Compose 配置（包含 Prometheus 和 Grafana）
+- **config/prometheus.yml** - Prometheus 采集配置
 
-- **Prometheus** - 指标收集和存储
-  - 端口：9091 (外部) → 9090 (内部)
-  - 配置：./prometheus.yml
-  - 数据持久化：prometheus_data 卷
-
-- **Grafana** - 数据可视化
-  - 端口：3000
-  - 默认账户：admin/admin
-  - 数据持久化：grafana_data 卷
-
-#### prometheus.yml
+#### Prometheus 配置
 
 ```yaml
-global:
-  scrape_interval: 5s      # 每 5 秒收集一次指标
-  evaluation_interval: 5s
-
 scrape_configs:
-  - job_name: 'genesis-metrics'
+  - job_name: 'genesis-app'
     static_configs:
-      - targets: ['host.docker.internal:9090']  # 宿主机上的应用
+      - targets: ['host.docker.internal:9091']  # 宿主机上的应用（默认端口 9091）
 ```
+
+> **注意**：metrics 示例使用端口 9090 暴露指标，如需使用根目录的 Prometheus，请修改 main.go 中的 Port 为 9091，或临时修改 config/prometheus.yml。
 
 ### 停止容器
 
 ```bash
-docker-compose down
+# 在项目根目录
+docker-compose -f docker-compose.dev.yml down
 ```
 
 移除数据卷：
 ```bash
-docker-compose down -v
+docker-compose -f docker-compose.dev.yml down -v
 ```
 
 ### 完整工作流程
 
 ```bash
-# 终端 1：启动示例应用
+# 终端 1：启动监控服务（在项目根目录）
+docker network create genesis-net 2>/dev/null || true
+docker-compose -f docker-compose.dev.yml up prometheus grafana -d
+
+# 终端 2：启动示例应用
 cd examples/metrics
 go run main.go
-
-# 终端 2：启动 Docker 容器（等待应用启动后）
-cd examples/metrics
-docker-compose up
 
 # 浏览器：
 # 1. http://localhost:9090 - Prometheus 原生 UI
@@ -403,8 +394,9 @@ docker-compose up
 
 如果在 Prometheus 中看到 "DOWN" 状态，检查：
 1. 应用是否正在运行（http://localhost:8080）
-2. Prometheus 指标是否可访问（http://localhost:9090/metrics）
+2. Prometheus 指标是否可访问（http://localhost:9090/metrics 或 9091/metrics）
 3. Docker 网络配置（使用 `host.docker.internal` 连接宿主机）
+4. 确保 config/prometheus.yml 中的端口与应用一致
 
 **Grafana 无法连接到 Prometheus**
 
@@ -414,7 +406,7 @@ docker-compose up
 
 **查看实时指标**
 
-访问 http://localhost:9091 在 Graph 标签查看实时指标变化。
+访问 http://localhost:9090 在 Graph 标签查看实时指标变化。
 
 ## 最佳实践
 
