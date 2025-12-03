@@ -13,21 +13,21 @@ Metrics 组件为 Genesis 框架提供统一的指标收集能力，基于 OpenT
 
 > **注意**：Genesis 当前只提供 Metrics 能力。如需 Tracing（链路追踪），请直接使用 OpenTelemetry SDK。
 
-## 2. 目录结构
+## 2. 目录结构 (完全扁平化设计)
 
 ```text
-pkg/metrics/
-├── metrics.go       # 工厂函数 + Meter 接口
-├── types.go         # Counter/Gauge/Histogram 接口定义
-├── config.go        # Config 结构体
-├── options.go       # Option 模式定义
-└── label.go         # Label 定义
-
-internal/metrics/
-├── meter.go         # Meter 实现
-├── provider.go      # OTel Provider 初始化
-└── prometheus.go    # Prometheus Exporter
+pkg/metrics/              # 公开 API + 实现（完全扁平化）
+├── metrics.go            # 工厂函数 New/Must/Shutdown + Meter/Counter/Gauge/Histogram 实现
+├── types.go              # Counter/Gauge/Histogram/Meter 接口定义
+├── config.go             # Config 结构体
+├── options.go            # Option 模式 (WithLogger)
+└── label.go              # Label 定义和便捷函数 L()
 ```
+
+**设计原则**：
+- 所有公开 API 和实现都在 `pkg/metrics` 根目录，无 `types/` 子包（完全扁平化）
+- 无 `internal/metrics` 目录，避免循环依赖问题
+- 用户只需导入 `pkg/metrics`，调用 `New()` 即可使用
 
 ## 3. 核心接口
 

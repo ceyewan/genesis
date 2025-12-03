@@ -38,14 +38,14 @@ Genesis 的设计遵循 Go 语言的核心哲学：
 
 ### 3.1. 三层模型
 
-移除 DI 容器后，Genesis 简化为清晰的三层结构：
+移除 DI 容器后，Genesis 简化为清晰的四层结构：
 
-| 层次 | 核心组件 | 职责 |
-|:-----|:---------|:-----|
-| **Level 3: Governance** | `ratelimit`, `breaker`, `registry`, `telemetry` | 流量治理，切面能力 |
-| **Level 2: Business** | `cache`, `idgen`, `dlock`, `idempotency`, `mq` | 业务能力封装 |
-| **Level 1: Infrastructure** | `connector`, `db` | 连接管理，底层 I/O |
-| **Level 0: Base** | `clog`, `config`, `xerrors` | 框架基石 |
+| 层次 | 核心组件 | 职责 | 组织方式 |
+|:-----|:---------|:-----|:----------|
+| **Level 3: Governance** | `ratelimit`, `breaker`, `registry` | 流量治理，切面能力 | 扁平化 |
+| **Level 2: Business** | `cache`, `idgen`, `dlock`, `idempotency`, `mq` | 业务能力封装 | 扁平化 |
+| **Level 1: Infrastructure** | `connector`, `db` | 连接管理，底层 I/O | 扁平化 |
+| **Level 0: Base** | `clog`, `config`, `metrics`, `xerrors` | 框架基石 | 扁平化 |
 
 ### 3.2. 架构图
 
@@ -53,17 +53,17 @@ Genesis 的设计遵循 Go 语言的核心哲学：
 graph TD
     App[应用 main.go] -->|显式创建| Config[配置加载]
     App -->|显式创建| Logger[clog 日志]
-    App -->|显式创建| Tel[Telemetry]
+    App -->|显式创建| Meter[Metrics 指标]
     
     App -->|显式创建| Connectors[连接器层]
     App -->|注入 Connector| Components[组件层]
     App -->|注入 Components| Services[业务服务层]
     
     subgraph "Genesis 组件库"
-        subgraph "Level 0: Base"
+        subgraph "Level 0: Base (扁平化)"
             Logger
             Config
-            Tel
+            Meter
         end
         
         subgraph "Level 1: Infrastructure"
@@ -74,7 +74,7 @@ graph TD
             NATS[NATS Connector]
         end
         
-        subgraph "Level 2: Business"
+        subgraph "Level 2: Business (扁平化)"
             Components
             DB[db 数据库]
             DLock[dlock 分布式锁]
@@ -82,7 +82,7 @@ graph TD
             MQ[mq 消息队列]
         end
         
-        subgraph "Level 3: Governance"
+        subgraph "Level 3: Governance (扁平化)"
             RateLimit[ratelimit 限流]
             Breaker[breaker 熔断]
             Registry[registry 注册]
@@ -92,17 +92,20 @@ graph TD
     Connectors --> Infra[基础设施 Infrastructure]
 ```
 
-**关键点**：没有中央容器，所有依赖在 `main.go` 中显式创建和注入。
+**关键点**：没有中央容器，所有依赖在 `main.go` 中显式创建和注入。所有 L0-L3 组件均采用扁平化设计。
 
 ## 4. 核心模块概览
 
 ### 4.1. Level 0: 基础能力 (Base)
 
-Genesis 所有组件统一使用 L0 基础组件，确保一致的可观测性和错误处理：
+Genesis 所有组件统一使用 L0 基础组件，确保一致的可观测性和错误处理。L0 组件采用**扁平化设计**，所有公开 API 直接在 `pkg/` 根目录：
 
 * **clog (Context Logger):** 基于 `slog` 的结构化日志库，支持 Context 字段自动提取、命名空间派生。所有组件通过 `WithLogger` 注入。
+
 * **config:** 统一的配置加载，从本地文件 / 环境变量加载强类型配置。所有组件配置结构定义在各自包中。
-* **metrics:** 基于 OpenTelemetry 的指标收集能力。所有组件通过 `WithMeter` 注入，自动埋点。
+
+* **metrics:** 基于 OpenTelemetry 的指标收集能力（仅支持 Metrics，不支持 Tracing）。所有组件通过 `WithMeter` 注入，自动埋点。
+
 * **xerrors:** 统一的错误码和错误包装器。所有组件使用 `xerrors` 定义 Sentinel Errors 和包装错误。
 
 ### 4.2. Level 1: 连接器 (Connectors)
@@ -300,42 +303,59 @@ Genesis 将按照"在精不在多"的原则逐步演进：
 
 ## 8. 目录结构规范
 
-采用扁平化结构，Level 2/L3 组件无需 `internal/` 和 `types/` 子包：
+采用扁平化结构，L0/L2/L3 组件无需 `types/` 子包：
 
 ```text
 genesis/
-├── pkg/                  # 公开 API 和接口定义
-│   ├── clog/             # 日志组件 (L0)
-│   ├── config/           # 配置组件 (L0)
-│   ├── telemetry/        # Metrics & Tracing (L0)
-│   ├── xerrors/          # 错误处理 (L0)
-│   ├── connector/        # 连接器 (L1)
-│   │   ├── interface.go  # 接口定义
-│   │   ├── config.go     # 配置结构
-│   │   ├── errors.go     # 错误定义
-│   │   ├── mysql.go      # MySQL 实现
-│   │   ├── redis.go      # Redis 实现
-│   │   ├── etcd.go       # Etcd 实现
-│   │   └── nats.go       # NATS 实现
-│   ├── db/               # 数据库组件 (L1)
-│   ├── dlock/            # 分布式锁 (L2) - 扁平化
-│   │   ├── dlock.go      # 接口 + 工厂
-│   │   ├── config.go     # 配置
-│   │   ├── errors.go     # 错误
-│   │   ├── options.go    # Option
-│   │   ├── redis.go      # Redis 实现
-│   │   └── etcd.go       # Etcd 实现
-│   ├── cache/            # 缓存 (L2)
-│   ├── idgen/            # ID 生成 (L2)
-│   ├── mq/               # 消息队列 (L2)
-│   ├── ratelimit/        # 限流 (L3)
-│   ├── breaker/          # 熔断 (L3)
-│   └── registry/         # 服务注册 (L3)
-├── internal/             # 仅保留 L1 复杂实现
-│   └── connector/        # 驱动适配器等
-├── docs/                 # 设计文档
-└── examples/             # 使用示例
+├── pkg/                      # 公开 API 和接口定义
+│   ├── clog/                 # 日志组件 (L0) - 扁平化
+│   │   ├── clog.go           # 接口 + 工厂
+│   │   └── types/            # 仅 Option/Config 共用类型
+│   ├── config/               # 配置组件 (L0) - 扁平化
+│   ├── metrics/              # 指标组件 (L0) - 扁平化
+│   │   ├── metrics.go        # 工厂函数 + Meter 接口
+│   │   ├── types.go          # Counter/Gauge/Histogram 接口
+│   │   ├── config.go         # Config 结构体
+│   │   ├── options.go        # Option 模式
+│   │   └── label.go          # Label 定义
+│   ├── xerrors/              # 错误处理 (L0) - 扁平化
+│   ├── connector/            # 连接器 (L1)
+│   │   ├── interface.go      # 接口定义
+│   │   ├── config.go         # 配置结构
+│   │   ├── errors.go         # 错误定义
+│   │   ├── mysql.go          # MySQL 实现
+│   │   ├── redis.go          # Redis 实现
+│   │   ├── etcd.go           # Etcd 实现
+│   │   └── nats.go           # NATS 实现
+│   ├── db/                   # 数据库组件 (L1)
+│   ├── dlock/                # 分布式锁 (L2) - 扁平化
+│   │   ├── dlock.go          # 接口 + 工厂
+│   │   ├── config.go         # 配置
+│   │   ├── errors.go         # 错误
+│   │   ├── options.go        # Option
+│   │   ├── redis.go          # Redis 实现
+│   │   └── etcd.go           # Etcd 实现
+│   ├── cache/                # 缓存 (L2) - 扁平化
+│   ├── idgen/                # ID 生成 (L2) - 扁平化
+│   ├── mq/                   # 消息队列 (L2) - 扁平化
+│   ├── ratelimit/            # 限流 (L3) - 扁平化
+│   ├── breaker/              # 熔断 (L3) - 扁平化
+│   └── registry/             # 服务注册 (L3) - 扁平化
+│
+├── internal/                 # 仅保留 L1 复杂实现
+│   ├── connector/            # Connector 驱动适配器
+│   └── metrics/              # Metrics 实现细节
+│       ├── factory.go        # OTel Provider 初始化
+│       └── prometheus.go     # Prometheus Exporter
+│
+├── docs/                     # 设计文档
+└── examples/                 # 使用示例
 ```
+
+**关键说明**：
+- L0 组件（clog、config、metrics、xerrors）采用扁平化设计，所有公开 API 在 pkg 根目录
+- L1/L2/L3 组件不需要 `types/` 子包，接口和实现在同一包中
+- 复杂实现细节放在 `internal/` 下，如 OTel Provider 初始化、Prometheus Exporter
 
 ## 9. 组件开发规范 (Component Specification)
 
