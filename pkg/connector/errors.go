@@ -1,17 +1,29 @@
 // pkg/connector/errors.go
 package connector
 
-import "fmt"
+import (
+	"github.com/ceyewan/genesis/pkg/xerrors"
+)
 
 // ErrorType 错误类型枚举
 type ErrorType int
 
 const (
-	ErrConnection  ErrorType = iota // 连接建立失败
-	ErrTimeout                      // 操作超时
-	ErrConfig                       // 配置错误
-	ErrHealthCheck                  // 健康检查失败
-	ErrClosed                       // 连接已关闭
+	TypeConnection  ErrorType = iota // 连接建立失败
+	TypeTimeout                      // 操作超时
+	TypeConfig                       // 配置错误
+	TypeHealthCheck                  // 健康检查失败
+	TypeClosed                       // 连接已关闭
+)
+
+// Sentinel Errors - 连接器专用的哨兵错误
+var (
+	ErrNotConnected  = xerrors.New("connector: not connected")
+	ErrAlreadyClosed = xerrors.New("connector: already closed")
+	ErrConnection    = xerrors.New("connector: connection failed")
+	ErrTimeout       = xerrors.New("connector: timeout")
+	ErrConfig        = xerrors.New("connector: invalid config")
+	ErrHealthCheck   = xerrors.New("connector: health check failed")
 )
 
 // Error 连接器统一错误类型
@@ -24,8 +36,8 @@ type Error struct {
 
 // Error 实现 error 接口
 func (e *Error) Error() string {
-	return fmt.Sprintf("connector[%s] error: type=%d, retryable=%v, cause=%v",
-		e.Connector, e.Type, e.Retryable, e.Cause)
+	return xerrors.Wrapf(e.Cause, "connector[%s] error: type=%d, retryable=%v",
+		e.Connector, e.Type, e.Retryable).Error()
 }
 
 // Unwrap 支持错误链
@@ -41,4 +53,29 @@ func NewError(connectorName string, errType ErrorType, cause error, retryable bo
 		Cause:     cause,
 		Retryable: retryable,
 	}
+}
+
+// WrapError 用连接器上下文包装错误
+func WrapError(connectorName string, err error, retryable bool) error {
+	if err == nil {
+		return nil
+	}
+
+	// 检查是否是已知的哨兵错误
+	if xerrors.Is(err, ErrNotConnected) ||
+		xerrors.Is(err, ErrAlreadyClosed) ||
+		xerrors.Is(err, ErrConnection) ||
+		xerrors.Is(err, ErrTimeout) ||
+		xerrors.Is(err, ErrConfig) ||
+		xerrors.Is(err, ErrHealthCheck) {
+		return xerrors.Wrapf(err, "connector[%s]", connectorName)
+	}
+
+	// 根据错误类型判断是否可重试
+	isRetryable := retryable
+	if xerrors.Is(err, xerrors.ErrTimeout) || xerrors.Is(err, xerrors.ErrUnavailable) {
+		isRetryable = true
+	}
+
+	return NewError(connectorName, TypeConnection, err, isRetryable)
 }
