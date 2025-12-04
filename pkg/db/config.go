@@ -1,4 +1,4 @@
-package types
+package db
 
 // Config DB 组件配置
 type Config struct {
@@ -21,4 +21,3 @@ type ShardingRule struct {
 	// 应用此规则的逻辑表名列表 (例如 ["orders", "audit_logs"])
 	Tables []string `json:"tables" yaml:"tables"`
 }
-

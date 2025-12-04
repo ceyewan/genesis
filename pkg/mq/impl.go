@@ -5,25 +5,125 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/mq/types"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
+	"github.com/ceyewan/genesis/pkg/metrics"
 )
+
+// coreClient NATS Core 模式实现
+type coreClient struct {
+	conn   *nats.Conn
+	logger clog.Logger
+	meter  metrics.Meter
+	tracer interface{} // TODO: 实现 Tracer 接口
+}
+
+// newCoreClient 创建 NATS Core 客户端
+func newCoreClient(conn connector.NATSConnector, logger clog.Logger, meter metrics.Meter, tracer interface{}) Client {
+	return &coreClient{
+		conn:   conn.GetClient(),
+		logger: logger,
+		meter:  meter,
+		tracer: tracer,
+	}
+}
+
+func (c *coreClient) Publish(ctx context.Context, subject string, data []byte) error {
+	// NATS Core Publish 是发后即忘，非常快
+	return c.conn.Publish(subject, data)
+}
+
+func (c *coreClient) Subscribe(ctx context.Context, subject string, handler Handler) (Subscription, error) {
+	sub, err := c.conn.Subscribe(subject, func(msg *nats.Msg) {
+		// 封装消息
+		m := &coreMessage{msg: msg}
+		// 执行用户处理逻辑
+		if err := handler(context.Background(), m); err != nil {
+			c.logger.Error("消息处理失败", clog.String("subject", subject), clog.Error(err))
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &coreSubscription{sub: sub}, nil
+}
+
+func (c *coreClient) QueueSubscribe(ctx context.Context, subject string, queue string, handler Handler) (Subscription, error) {
+	sub, err := c.conn.QueueSubscribe(subject, queue, func(msg *nats.Msg) {
+		m := &coreMessage{msg: msg}
+		if err := handler(context.Background(), m); err != nil {
+			c.logger.Error("队列消息处理失败", clog.String("subject", subject), clog.String("queue", queue), clog.Error(err))
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &coreSubscription{sub: sub}, nil
+}
+
+func (c *coreClient) Request(ctx context.Context, subject string, data []byte, timeout time.Duration) (Message, error) {
+	msg, err := c.conn.Request(subject, data, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return &coreMessage{msg: msg}, nil
+}
+
+func (c *coreClient) Close() error {
+	// 连接由 Connector 管理，这里不需要关闭
+	return nil
+}
+
+// coreMessage NATS Core 消息封装
+type coreMessage struct {
+	msg *nats.Msg
+}
+
+func (m *coreMessage) Subject() string {
+	return m.msg.Subject
+}
+
+func (m *coreMessage) Data() []byte {
+	return m.msg.Data
+}
+
+func (m *coreMessage) Ack() error {
+	// Core 模式不支持 Ack
+	return nil
+}
+
+func (m *coreMessage) Nak() error {
+	// Core 模式不支持 Nak
+	return nil
+}
+
+// coreSubscription NATS Core 订阅封装
+type coreSubscription struct {
+	sub *nats.Subscription
+}
+
+func (s *coreSubscription) Unsubscribe() error {
+	return s.sub.Unsubscribe()
+}
+
+func (s *coreSubscription) IsValid() bool {
+	return s.sub.IsValid()
+}
 
 // jetStreamClient NATS JetStream 模式实现
 type jetStreamClient struct {
 	js     jetstream.JetStream
-	cfg    *types.JetStreamConfig
+	cfg    *JetStreamConfig
 	logger clog.Logger
-	meter  telemetrytypes.Meter
-	tracer telemetrytypes.Tracer
+	meter  metrics.Meter
+	tracer interface{} // TODO: 实现 Tracer 接口
 }
 
-// NewJetStreamClient 创建 NATS JetStream 客户端
-func NewJetStreamClient(conn connector.NATSConnector, cfg *types.JetStreamConfig, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) (types.Client, error) {
+// newJetStreamClient 创建 NATS JetStream 客户端
+func newJetStreamClient(conn connector.NATSConnector, cfg *JetStreamConfig, logger clog.Logger, meter metrics.Meter, tracer interface{}) (Client, error) {
 	js, err := jetstream.New(conn.GetClient())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create jetstream context: %w", err)
@@ -44,7 +144,7 @@ func (c *jetStreamClient) Publish(ctx context.Context, subject string, data []by
 	return err
 }
 
-func (c *jetStreamClient) Subscribe(ctx context.Context, subject string, handler types.Handler) (types.Subscription, error) {
+func (c *jetStreamClient) Subscribe(ctx context.Context, subject string, handler Handler) (Subscription, error) {
 	// 自动创建 Stream (如果配置开启)
 	if c.cfg != nil && c.cfg.AutoCreateStream {
 		if err := c.ensureStream(ctx, subject); err != nil {
@@ -66,7 +166,7 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, subject string, handler
 	return c.consume(ctx, consumer, handler)
 }
 
-func (c *jetStreamClient) QueueSubscribe(ctx context.Context, subject string, queue string, handler types.Handler) (types.Subscription, error) {
+func (c *jetStreamClient) QueueSubscribe(ctx context.Context, subject string, queue string, handler Handler) (Subscription, error) {
 	if c.cfg != nil && c.cfg.AutoCreateStream {
 		if err := c.ensureStream(ctx, subject); err != nil {
 			return nil, err
@@ -87,7 +187,7 @@ func (c *jetStreamClient) QueueSubscribe(ctx context.Context, subject string, qu
 	return c.consume(ctx, consumer, handler)
 }
 
-func (c *jetStreamClient) consume(_ context.Context, consumer jetstream.Consumer, handler types.Handler) (types.Subscription, error) {
+func (c *jetStreamClient) consume(_ context.Context, consumer jetstream.Consumer, handler Handler) (Subscription, error) {
 	cons, err := consumer.Consume(func(msg jetstream.Msg) {
 		m := &jetStreamMessage{msg: msg}
 
@@ -114,7 +214,7 @@ func (c *jetStreamClient) consume(_ context.Context, consumer jetstream.Consumer
 	return &jetStreamSubscription{cons: cons}, nil
 }
 
-func (c *jetStreamClient) Request(ctx context.Context, subject string, data []byte, timeout time.Duration) (types.Message, error) {
+func (c *jetStreamClient) Request(ctx context.Context, subject string, data []byte, timeout time.Duration) (Message, error) {
 	// JetStream 模式不推荐使用 Request/Reply，但为了接口兼容，可以回退到 Core NATS 的 Request
 	// 或者直接报错。这里选择报错以明确语义。
 	return nil, fmt.Errorf("request/reply pattern is not supported in JetStream mode")

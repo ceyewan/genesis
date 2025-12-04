@@ -1,4 +1,4 @@
-package types
+package mq
 
 // DriverType 驱动类型
 type DriverType string
