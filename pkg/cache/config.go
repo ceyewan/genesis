@@ -1,4 +1,4 @@
-package types
+package cache
 
 // Config 缓存组件配置
 type Config struct {

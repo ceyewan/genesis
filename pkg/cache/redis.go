@@ -1,4 +1,4 @@
-package redis
+package cache
 
 import (
 	"context"
@@ -8,11 +8,9 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/ceyewan/genesis/internal/cache/serializer"
-	"github.com/ceyewan/genesis/pkg/cache/types"
+	"github.com/ceyewan/genesis/pkg/cache/serializer"
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 type redisCache struct {
@@ -20,12 +18,12 @@ type redisCache struct {
 	serializer serializer.Serializer
 	prefix     string
 	logger     clog.Logger
-	meter      telemetrytypes.Meter
-	tracer     telemetrytypes.Tracer
+	meter      interface{} // metrics.Meter - TODO: 修复类型
+	tracer     interface{} // TODO: 实现 Tracer 接口
 }
 
-// New 创建 Redis 缓存实例
-func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) (types.Cache, error) {
+// newRedis 创建 Redis 缓存实例
+func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger, meter interface{}, tracer interface{}) (Cache, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("redis 连接器为 nil")
 	}
@@ -297,14 +295,8 @@ func (c *redisCache) LPushCapped(ctx context.Context, key string, limit int64, v
 // --- 工具与辅助函数 ---
 
 func (c *redisCache) Close() error {
-	// 我们不在这里关闭客户端，因为它由连接器管理
-	// 但如果我们创建了专用客户端，我们会关闭它
-	// 接口要求有关闭方法
-	// 由于我们共享连接器，也许我们不应该关闭它？
-	// 或者缓存实例拥有连接？
-	// 在设计中："Cache_Impl --> Connector"
-	// 通常连接器管理生命周期
-	// 所以 Close() 可能是空操作或只是清理内部资源
+	// No-op: Cache 不拥有 Redis 连接，由 Connector 管理
+	// 调用方应关闭 Connector 而非 Cache
 	return nil
 }
 
