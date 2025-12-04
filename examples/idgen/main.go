@@ -6,9 +6,7 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/idgen"
-	"github.com/ceyewan/genesis/pkg/idgen/types"
 )
 
 func main() {
@@ -21,10 +19,10 @@ func main() {
 	// 示例 2: Snowflake (IP Mode)
 	snowflakeIPExample()
 
-	// 示例 3: Snowflake (Redis Mode)
+	// 示例 3: Snowflake (Redis Mode) - 需要运行 Redis
 	snowflakeRedisExample()
 
-	// 示例 4: Snowflake (Etcd Mode)
+	// 示例 4: Snowflake (Etcd Mode) - 需要运行 Etcd
 	snowflakeEtcdExample()
 
 	// 示例 5: UUID (v4 & v7)
@@ -34,7 +32,7 @@ func main() {
 func snowflakeStaticExample() {
 	fmt.Println("--- Example 1: Snowflake (Static Mode) ---")
 
-	cfg := &types.SnowflakeConfig{
+	cfg := &idgen.SnowflakeConfig{
 		Method:       "static",
 		WorkerID:     1, // 手动指定 WorkerID
 		DatacenterID: 1,
@@ -55,7 +53,7 @@ func snowflakeStaticExample() {
 func snowflakeIPExample() {
 	fmt.Println("--- Example 2: Snowflake (IP Mode) ---")
 
-	cfg := &types.SnowflakeConfig{
+	cfg := &idgen.SnowflakeConfig{
 		Method:       "ip_24", // 使用 IP 后 8 位作为 WorkerID
 		DatacenterID: 1,
 	}
@@ -74,32 +72,23 @@ func snowflakeIPExample() {
 
 func snowflakeRedisExample() {
 	fmt.Println("--- Example 3: Snowflake (Redis Mode) ---")
+	fmt.Println("Note: This example requires Redis running on localhost:6379")
 
-	// 1. 使用 Container 初始化 Redis 连接器
-	// 这是获取连接器的标准方式，避免直接依赖 internal 包
-	containerCfg := &container.Config{
-		Redis: &connector.RedisConfig{
-			Addr:        "127.0.0.1:6379",
-			Password:    "your_redis_password",
-			DialTimeout: 2 * time.Second, // 快速失败
-		},
+	// 1. 直接创建 Redis 连接器 (Go Native DI 模式)
+	redisCfg := &connector.RedisConfig{
+		Addr:        "127.0.0.1:6379",
+		DialTimeout: 2 * time.Second, // 快速失败
 	}
 
-	c, err := container.New(containerCfg)
+	redisConn, err := connector.NewRedis(redisCfg)
 	if err != nil {
-		fmt.Printf("Skipping Redis example: container init failed: %v\n", err)
+		fmt.Printf("Skipping Redis example: failed to create redis connector: %v\n", err)
 		return
 	}
-	defer c.Close()
-
-	redisConn, err := c.GetRedisConnector(*containerCfg.Redis)
-	if err != nil {
-		fmt.Printf("Skipping Redis example: get connector failed: %v\n", err)
-		return
-	}
+	defer redisConn.Close()
 
 	// 2. 配置 Snowflake
-	snowflakeCfg := &types.SnowflakeConfig{
+	snowflakeCfg := &idgen.SnowflakeConfig{
 		Method:       "redis",
 		DatacenterID: 1,
 		KeyPrefix:    "genesis:examples:idgen",
@@ -125,30 +114,23 @@ func snowflakeRedisExample() {
 
 func snowflakeEtcdExample() {
 	fmt.Println("--- Example 4: Snowflake (Etcd Mode) ---")
+	fmt.Println("Note: This example requires Etcd running on localhost:2379")
 
-	// 1. 使用 Container 初始化 Etcd 连接器
-	containerCfg := &container.Config{
-		Etcd: &connector.EtcdConfig{
-			Endpoints: []string{"127.0.0.1:2379"},
-			Timeout:   2 * time.Second,
-		},
+	// 1. 直接创建 Etcd 连接器 (Go Native DI 模式)
+	etcdCfg := &connector.EtcdConfig{
+		Endpoints: []string{"127.0.0.1:2379"},
+		Timeout:   2 * time.Second,
 	}
 
-	c, err := container.New(containerCfg)
+	etcdConn, err := connector.NewEtcd(etcdCfg)
 	if err != nil {
-		fmt.Printf("Skipping Etcd example: container init failed: %v\n", err)
+		fmt.Printf("Skipping Etcd example: failed to create etcd connector: %v\n", err)
 		return
 	}
-	defer c.Close()
-
-	etcdConn, err := c.GetEtcdConnector(*containerCfg.Etcd)
-	if err != nil {
-		fmt.Printf("Skipping Etcd example: get connector failed: %v\n", err)
-		return
-	}
+	defer etcdConn.Close()
 
 	// 2. 配置 Snowflake
-	snowflakeCfg := &types.SnowflakeConfig{
+	snowflakeCfg := &idgen.SnowflakeConfig{
 		Method:       "etcd",
 		DatacenterID: 1,
 		KeyPrefix:    "genesis:examples:idgen",
@@ -176,12 +158,12 @@ func uuidExample() {
 	fmt.Println("--- Example 5: UUID (v4 & v7) ---")
 
 	// UUID v4 (Random)
-	v4Cfg := &types.UUIDConfig{Version: "v4"}
+	v4Cfg := &idgen.UUIDConfig{Version: "v4"}
 	v4Gen, _ := idgen.NewUUID(v4Cfg)
 	fmt.Printf("UUID v4 (Random):      %s\n", v4Gen.String())
 
 	// UUID v7 (Time-ordered)
-	v7Cfg := &types.UUIDConfig{Version: "v7"}
+	v7Cfg := &idgen.UUIDConfig{Version: "v7"}
 	v7Gen, _ := idgen.NewUUID(v7Cfg)
 	fmt.Printf("UUID v7 (Time-ordered): %s\n", v7Gen.String())
 

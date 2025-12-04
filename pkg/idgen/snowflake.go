@@ -1,4 +1,4 @@
-package snowflake
+package idgen
 
 import (
 	"context"
@@ -8,8 +8,7 @@ import (
 
 	"github.com/ceyewan/genesis/internal/idgen/allocator"
 	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/idgen/types"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
+	"github.com/ceyewan/genesis/pkg/metrics"
 )
 
 const (
@@ -19,8 +18,8 @@ const (
 	smallClockBackwards = 5 * time.Millisecond
 )
 
-// Generator Snowflake 生成器实现
-type Generator struct {
+// snowflakeGenerator Snowflake 生成器实现（非导出）
+type snowflakeGenerator struct {
 	mu        sync.Mutex
 	allocator allocator.Allocator
 	workerID  int64
@@ -31,25 +30,25 @@ type Generator struct {
 	failCh <-chan error
 	// 可观测性组件
 	logger clog.Logger
-	meter  telemetrytypes.Meter
-	tracer telemetrytypes.Tracer
+	meter  metrics.Meter
+	tracer interface{} // TODO: 实现 Tracer 接口，暂时使用 interface{}
 }
 
-// New 创建 Snowflake 生成器
-func New(
-	cfg *types.SnowflakeConfig,
+// newSnowflake 创建 Snowflake 生成器（内部函数）
+func newSnowflake(
+	cfg *SnowflakeConfig,
 	alloc allocator.Allocator,
 	logger clog.Logger,
-	meter telemetrytypes.Meter,
-	tracer telemetrytypes.Tracer,
-) (*Generator, error) {
+	meter metrics.Meter,
+	tracer interface{},
+) (Int64Generator, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("snowflake config is nil")
 	}
 	if alloc == nil {
 		return nil, fmt.Errorf("allocator is nil")
 	}
-	return &Generator{
+	return &snowflakeGenerator{
 		allocator: alloc,
 		dcID:      cfg.DatacenterID,
 		logger:    logger,
@@ -59,7 +58,7 @@ func New(
 }
 
 // Init 初始化生成器 (分配 WorkerID 并启动保活)
-func (g *Generator) Init(ctx context.Context) error {
+func (g *snowflakeGenerator) Init(ctx context.Context) error {
 	// 1. 分配 WorkerID
 	workerID, err := g.allocator.Allocate(ctx)
 	if err != nil {
@@ -91,7 +90,7 @@ func (g *Generator) Init(ctx context.Context) error {
 }
 
 // Int64 生成 int64 ID
-func (g *Generator) Int64() (int64, error) {
+func (g *snowflakeGenerator) Int64() (int64, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -148,10 +147,18 @@ func (g *Generator) Int64() (int64, error) {
 }
 
 // String 返回字符串形式的 ID
-func (g *Generator) String() string {
+func (g *snowflakeGenerator) String() string {
 	id, err := g.Int64()
 	if err != nil {
 		return ""
 	}
 	return fmt.Sprintf("%d", id)
+}
+
+// Close 实现 io.Closer 接口，但由于 snowflakeGenerator 不拥有 Connector 资源，
+// 所以这是 no-op，符合资源所有权规范
+func (g *snowflakeGenerator) Close() error {
+	// No-op: SnowflakeGenerator 不拥有 Redis/Etcd 连接，由 Connector 管理
+	// 调用方应关闭 Connector 而非 SnowflakeGenerator
+	return nil
 }
