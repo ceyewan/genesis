@@ -9,8 +9,8 @@ import (
 
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
+	metrics "github.com/ceyewan/genesis/pkg/metrics"
 	"github.com/ceyewan/genesis/pkg/ratelimit/types"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 // luaScript 令牌桶算法的 Lua 脚本
@@ -66,8 +66,7 @@ type Limiter struct {
 	client *redis.Client
 	prefix string
 	logger clog.Logger
-	meter  telemetrytypes.Meter
-	tracer telemetrytypes.Tracer
+	meter  metrics.Meter
 	script *redis.Script
 }
 
@@ -76,8 +75,7 @@ func New(
 	cfg *types.Config,
 	redisConn connector.RedisConnector,
 	logger clog.Logger,
-	meter telemetrytypes.Meter,
-	tracer telemetrytypes.Tracer,
+	meter metrics.Meter,
 ) (*Limiter, error) {
 	if redisConn == nil {
 		return nil, fmt.Errorf("redis connector is nil")
@@ -98,7 +96,6 @@ func New(
 		prefix: prefix,
 		logger: logger,
 		meter:  meter,
-		tracer: tracer,
 		script: redis.NewScript(luaScript),
 	}
 

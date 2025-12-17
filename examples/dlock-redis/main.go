@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/pkg/clog"
+	clogtypes "github.com/ceyewan/genesis/pkg/clog/types"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/dlock"
 )
 
@@ -16,12 +16,11 @@ func main() {
 	fmt.Println()
 
 	// 1. 创建应用级 Logger
-	logConfig := &clog.Config{
+	appLogger, err := clog.New(&clogtypes.Config{
 		Level:  "info",
 		Format: "console",
 		Output: "stdout",
-	}
-	appLogger, err := clog.New(logConfig, &clog.Option{
+	}, &clogtypes.Option{
 		NamespaceParts: []string{"dlock-redis-demo"},
 	})
 	if err != nil {
@@ -29,36 +28,29 @@ func main() {
 		return
 	}
 
-	// 2. 配置容器
-	cfg := &container.Config{
-		Redis: &connector.RedisConfig{
-			Addr:         "127.0.0.1:6379",
-			Password:     "your_redis_password",
-			DB:           0,
-			PoolSize:     10,
-			MinIdleConns: 5,
-			DialTimeout:  5 * time.Second,
-		},
-		DLock: &dlock.Config{
-			Backend:       dlock.BackendRedis,
-			Prefix:        "dlock:",
-			DefaultTTL:    10 * time.Second,
-			RetryInterval: 100 * time.Millisecond,
-		},
-	}
-
-	// 3. 创建容器 (使用 Option 注入 Logger)
-	c, err := container.New(cfg, container.WithLogger(appLogger))
+	// 2. 创建 Redis 连接器
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{
+		Addr:         "127.0.0.1:6379",
+		Password:     "", // 根据实际情况设置
+		DB:           0,
+		PoolSize:     10,
+		MinIdleConns: 5,
+		DialTimeout:  5 * time.Second,
+	}, connector.WithLogger(appLogger))
 	if err != nil {
-		fmt.Printf("创建容器失败: %v\n", err)
+		fmt.Printf("创建 Redis 连接器失败: %v\n", err)
 		return
 	}
-	defer c.Close()
+	defer redisConn.Close()
 
-	// 4. 获取锁组件
-	locker := c.DLock
-	if locker == nil {
-		fmt.Println("锁组件未初始化")
+	// 3. 创建分布式锁组件
+	locker, err := dlock.NewRedis(redisConn, &dlock.Config{
+		Prefix:        "dlock:",
+		DefaultTTL:    10 * time.Second,
+		RetryInterval: 100 * time.Millisecond,
+	}, dlock.WithLogger(appLogger))
+	if err != nil {
+		fmt.Printf("创建分布式锁失败: %v\n", err)
 		return
 	}
 
@@ -107,6 +99,24 @@ func main() {
 	}
 	fmt.Println("WithTTL 加锁成功")
 	locker.Unlock(ctx, key)
+
+	// 9. 测试多次重试
+	fmt.Println("\n测试多次重试...")
+	// 先获取锁
+	locker.Lock(ctx, key)
+	// 在另一个 goroutine 中尝试获取锁
+	go func() {
+		if err := locker.Lock(ctx, key); err != nil {
+			fmt.Printf("重试加锁失败（预期）: %v\n", err)
+		} else {
+			fmt.Println("重试加锁成功")
+			locker.Unlock(ctx, key)
+		}
+	}()
+	// 等待一下然后释放锁
+	time.Sleep(1 * time.Second)
+	locker.Unlock(ctx, key)
+	time.Sleep(2 * time.Second) // 等待重试完成
 
 	fmt.Println("\n=== Redis 分布式锁演示完成 ===")
 }

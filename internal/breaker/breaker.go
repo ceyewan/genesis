@@ -32,8 +32,8 @@ type circuitBreaker struct {
 }
 
 // New 创建熔断器管理器（使用 gobreaker 库）
-func New(cfg *types.Config, logger clog.Logger, meter metrics.Meter, tracer interface{}) (types.Breaker, error) {
-	return NewGoBreakerAdapter(cfg, logger, meter, tracer)
+func New(cfg *types.Config, logger clog.Logger, meter metrics.Meter) (types.Breaker, error) {
+	return NewGoBreakerAdapter(cfg, logger, meter)
 }
 
 // Execute 执行受保护的函数

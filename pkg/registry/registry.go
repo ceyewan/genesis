@@ -43,5 +43,5 @@ func New(conn connector.EtcdConnector, cfg Config, opts ...Option) (Registry, er
 	}
 
 	// 调用内部实现
-	return internalregistry.New(conn, cfg, opt.logger, opt.meter, opt.tracer)
+	return internalregistry.New(conn, cfg, opt.logger, opt.meter)
 }

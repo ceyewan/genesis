@@ -9,7 +9,7 @@ import (
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/idempotency/types"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
+	metrics "github.com/ceyewan/genesis/pkg/metrics"
 )
 
 // Idempotent 幂等组件实现
@@ -17,8 +17,7 @@ type Idempotent struct {
 	store  *store.RedisStore
 	cfg    *types.Config
 	logger clog.Logger
-	meter  telemetrytypes.Meter
-	tracer telemetrytypes.Tracer
+	meter  metrics.Meter
 }
 
 // New 创建幂等组件实例
@@ -26,8 +25,7 @@ func New(
 	redisConn connector.RedisConnector,
 	cfg *types.Config,
 	logger clog.Logger,
-	meter telemetrytypes.Meter,
-	tracer telemetrytypes.Tracer,
+	meter metrics.Meter,
 ) (*Idempotent, error) {
 	if redisConn == nil {
 		return nil, fmt.Errorf("redis connector is nil")
@@ -51,7 +49,6 @@ func New(
 		cfg:    cfg,
 		logger: logger,
 		meter:  meter,
-		tracer: tracer,
 	}, nil
 }
 

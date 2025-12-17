@@ -11,7 +11,7 @@ import (
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/dlock/types"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
+	"github.com/ceyewan/genesis/pkg/metrics"
 )
 
 type EtcdLocker struct {
@@ -19,8 +19,7 @@ type EtcdLocker struct {
 	session *concurrency.Session
 	cfg     *types.Config
 	logger  clog.Logger
-	meter   telemetrytypes.Meter
-	tracer  telemetrytypes.Tracer
+	meter   metrics.Meter
 	locks   map[string]*etcdLockEntry
 	mu      sync.RWMutex
 }
@@ -32,7 +31,7 @@ type etcdLockEntry struct {
 }
 
 // New 创建 EtcdLocker 实例
-func New(conn connector.EtcdConnector, cfg *types.Config, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) (*EtcdLocker, error) {
+func New(conn connector.EtcdConnector, cfg *types.Config, logger clog.Logger, meter metrics.Meter) (*EtcdLocker, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("etcd connector is nil")
 	}
@@ -54,7 +53,6 @@ func New(conn connector.EtcdConnector, cfg *types.Config, logger clog.Logger, me
 		cfg:     cfg,
 		logger:  logger,
 		meter:   meter,
-		tracer:  tracer,
 		locks:   make(map[string]*etcdLockEntry),
 	}, nil
 }

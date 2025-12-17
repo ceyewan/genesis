@@ -10,8 +10,8 @@ import (
 
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
+	metrics "github.com/ceyewan/genesis/pkg/metrics"
 	"github.com/ceyewan/genesis/pkg/registry/types"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -23,8 +23,7 @@ type EtcdRegistry struct {
 	client *clientv3.Client
 	cfg    types.Config
 	logger clog.Logger
-	meter  telemetrytypes.Meter
-	tracer telemetrytypes.Tracer
+	meter  metrics.Meter
 
 	// 后台任务管理
 	leases   map[string]clientv3.LeaseID         // serviceID -> leaseID
@@ -43,8 +42,7 @@ func New(
 	conn connector.EtcdConnector,
 	cfg types.Config,
 	logger clog.Logger,
-	meter telemetrytypes.Meter,
-	tracer telemetrytypes.Tracer,
+	meter metrics.Meter,
 ) (*EtcdRegistry, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("etcd connector cannot be nil")
@@ -81,7 +79,6 @@ func New(
 		cfg:      cfg,
 		logger:   logger,
 		meter:    meter,
-		tracer:   tracer,
 		leases:   make(map[string]clientv3.LeaseID),
 		watchers: make(map[string]context.CancelFunc),
 		cache:    make(map[string][]*types.ServiceInstance),

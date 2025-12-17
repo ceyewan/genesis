@@ -60,13 +60,12 @@ var (
 //	}, idempotency.WithLogger(logger))
 func New(redisConn connector.RedisConnector, cfg *Config, opts ...Option) (Idempotent, error) {
 	// 应用选项
-	opt := Options{
-		Logger: clog.Default(), // 默认 Logger
+	opt := options{
+		logger: clog.Default(), // 默认 Logger
 	}
 	for _, o := range opts {
 		o(&opt)
 	}
 
-	return idempotency.New(redisConn, cfg, opt.Logger, opt.Meter, opt.Tracer)
+	return idempotency.New(redisConn, cfg, opt.logger, opt.meter)
 }
-

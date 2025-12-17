@@ -91,7 +91,7 @@ func New(cfg *Config, opts ...Option) (Breaker, error) {
 		opt.Logger = opt.Logger.With(clog.String("component", "breaker"))
 	}
 
-	return internalbreaker.New(cfg, opt.Logger, opt.Meter, opt.Tracer)
+	return internalbreaker.New(cfg, opt.Logger, opt.Meter)
 }
 
 // validateConfig 验证配置

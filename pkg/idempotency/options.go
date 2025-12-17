@@ -2,37 +2,31 @@ package idempotency
 
 import (
 	"github.com/ceyewan/genesis/pkg/clog"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
+	"github.com/ceyewan/genesis/pkg/metrics"
 )
 
 // Option 组件初始化选项函数
-type Option func(*Options)
+type Option func(*options)
 
-// Options 组件初始化选项配置
-type Options struct {
-	Logger clog.Logger
-	Meter  telemetrytypes.Meter
-	Tracer telemetrytypes.Tracer
+// options 选项结构（导出供 internal 使用）
+type options struct {
+	logger clog.Logger
+	meter  metrics.Meter
 }
 
-// WithLogger 设置 Logger
-func WithLogger(logger clog.Logger) Option {
-	return func(o *Options) {
-		o.Logger = logger
+// WithLogger 注入日志记录器
+// 组件内部会自动追加 Namespace: logger.WithNamespace("idempotency")
+func WithLogger(l clog.Logger) Option {
+	return func(o *options) {
+		if l != nil {
+			o.logger = l.WithNamespace("idempotency")
+		}
 	}
 }
 
-// WithMeter 设置 Meter
-func WithMeter(meter telemetrytypes.Meter) Option {
-	return func(o *Options) {
-		o.Meter = meter
+// WithMeter 注入指标 Meter
+func WithMeter(m metrics.Meter) Option {
+	return func(o *options) {
+		o.meter = m
 	}
 }
-
-// WithTracer 设置 Tracer
-func WithTracer(tracer telemetrytypes.Tracer) Option {
-	return func(o *Options) {
-		o.Tracer = tracer
-	}
-}
-

@@ -80,6 +80,5 @@ func New(cfg *Config, redisConn connector.RedisConnector, opts ...Option) (Limit
 		o(&opt)
 	}
 
-	return ratelimit.New(cfg, redisConn, opt.Logger, opt.Meter, opt.Tracer)
+	return ratelimit.New(cfg, redisConn, opt.Logger, opt.Meter)
 }
-

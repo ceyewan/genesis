@@ -8,36 +8,25 @@ import (
 
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/registry"
 )
 
 func main() {
 	fmt.Println("=== Registry Service Registration & Discovery Example ===\n")
 
-	// 1. 创建容器以管理连接器
-	app, err := container.New(&container.Config{
-		Etcd: &connector.EtcdConfig{
-			Endpoints: []string{"localhost:2379"},
-		},
-	})
-	if err != nil {
-		log.Fatalf("Failed to create container: %v", err)
-	}
-	defer app.Close()
-
-	// 2. 创建 Logger
+	// 1. 创建 Logger
 	logger := clog.Default()
 
-	// 3. 获取 Etcd 连接器
-	etcdConn, err := app.GetEtcdConnector(connector.EtcdConfig{
+	// 2. 创建 Etcd 连接器
+	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{
 		Endpoints: []string{"localhost:2379"},
-	})
+	}, connector.WithLogger(logger))
 	if err != nil {
-		log.Fatalf("Failed to get etcd connector: %v", err)
+		log.Fatalf("Failed to create etcd connector: %v", err)
 	}
+	defer etcdConn.Close()
 
-	// 4. 创建 Registry 实例
+	// 3. 创建 Registry 实例
 	reg, err := registry.New(etcdConn, registry.Config{
 		Namespace:       "/genesis/services",
 		Schema:          "etcd",
@@ -50,14 +39,14 @@ func main() {
 		log.Fatalf("Failed to create registry: %v", err)
 	}
 
-	// 5. 启动 Registry
+	// 4. 启动 Registry
 	ctx := context.Background()
 	if err := reg.Start(ctx); err != nil {
 		log.Fatalf("Failed to start registry: %v", err)
 	}
 	defer reg.Stop(ctx)
 
-	// 6. 注册服务实例
+	// 5. 注册服务实例
 	service := &registry.ServiceInstance{
 		ID:        "user-service-001",
 		Name:      "user-service",
@@ -85,7 +74,7 @@ func main() {
 		}
 	}()
 
-	// 7. 服务发现
+	// 6. 服务发现
 	fmt.Println("2. Discovering services...")
 	time.Sleep(500 * time.Millisecond) // 等待注册生效
 	instances, err := reg.GetService(ctx, "user-service")
@@ -99,7 +88,7 @@ func main() {
 	}
 	fmt.Println()
 
-	// 8. 监听服务变化
+	// 7. 监听服务变化
 	fmt.Println("3. Watching service changes...")
 	watchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -123,7 +112,7 @@ func main() {
 		}
 	}()
 
-	// 9. 注册第二个实例
+	// 8. 注册第二个实例
 	time.Sleep(1 * time.Second)
 	fmt.Println("\n4. Registering second service instance...")
 	service2 := &registry.ServiceInstance{
@@ -148,7 +137,7 @@ func main() {
 		}
 	}()
 
-	// 10. 再次查询服务列表
+	// 9. 再次查询服务列表
 	time.Sleep(1 * time.Second)
 	fmt.Println("\n5. Discovering services again...")
 	instances, err = reg.GetService(ctx, "user-service")

@@ -9,8 +9,8 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/ceyewan/genesis/pkg/clog"
+	metrics "github.com/ceyewan/genesis/pkg/metrics"
 	"github.com/ceyewan/genesis/pkg/ratelimit/types"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
 )
 
 // limiterWrapper 包装 rate.Limiter 并记录最后访问时间
@@ -24,8 +24,7 @@ type limiterWrapper struct {
 type Limiter struct {
 	cfg      *types.Config
 	logger   clog.Logger
-	meter    telemetrytypes.Meter
-	tracer   telemetrytypes.Tracer
+	meter    metrics.Meter
 	limiters sync.Map // map[string]*limiterWrapper
 	stopCh   chan struct{}
 }
@@ -34,8 +33,7 @@ type Limiter struct {
 func New(
 	cfg *types.Config,
 	logger clog.Logger,
-	meter telemetrytypes.Meter,
-	tracer telemetrytypes.Tracer,
+	meter metrics.Meter,
 ) (*Limiter, error) {
 	// 派生 Logger
 	if logger != nil {
@@ -46,7 +44,6 @@ func New(
 		cfg:    cfg,
 		logger: logger,
 		meter:  meter,
-		tracer: tracer,
 		stopCh: make(chan struct{}),
 	}
 
