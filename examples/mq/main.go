@@ -53,6 +53,12 @@ func initMQClient() (mq.Client, connector.NATSConnector) {
 		panic(fmt.Sprintf("failed to create NATS connector: %v", err))
 	}
 
+	// 建立连接
+	ctx := context.Background()
+	if err := natsConn.Connect(ctx); err != nil {
+		panic(fmt.Sprintf("failed to connect to NATS: %v", err))
+	}
+
 	// 创建 MQ 客户端
 	mqClient, err := mq.NewClient(natsConn, &mq.Config{
 		Driver: mq.DriverNatsJetStream, // 使用 JetStream 模式

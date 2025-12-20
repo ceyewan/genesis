@@ -185,4 +185,3 @@ func NewUUID(cfg *UUIDConfig, opts ...Option) (Generator, error) {
 
 	return newUUID(cfg, opt.Logger, opt.Meter, opt.Tracer)
 }
-

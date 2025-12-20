@@ -2,12 +2,12 @@ package mq
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/metrics"
+	"github.com/ceyewan/genesis/pkg/xerrors"
 )
 
 // Message 消息接口
@@ -71,7 +71,7 @@ type Client interface {
 // 参数:
 //   - conn: NATS 连接器
 //   - cfg: MQ 配置
-//   - opts: 可选参数 (Logger, Meter, Tracer)
+//   - opts: 可选参数 (Logger, Meter)
 //
 // 使用示例:
 //
@@ -88,13 +88,13 @@ func NewClient(conn connector.NATSConnector, cfg *Config, opts ...Option) (Clien
 		o(&opt)
 	}
 
-	return New(conn, cfg, opt.Logger, opt.Meter, opt.Tracer)
+	return New(conn, cfg, opt.Logger, opt.Meter)
 }
 
 // New 内部工厂函数
-func New(conn connector.NATSConnector, cfg *Config, logger clog.Logger, meter metrics.Meter, tracer interface{}) (Client, error) {
+func New(conn connector.NATSConnector, cfg *Config, logger clog.Logger, meter metrics.Meter) (Client, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("mq config is required")
+		return nil, xerrors.New("mq config is required")
 	}
 
 	// 使用默认 Logger 如果未提供
@@ -104,10 +104,10 @@ func New(conn connector.NATSConnector, cfg *Config, logger clog.Logger, meter me
 
 	switch cfg.Driver {
 	case DriverNatsCore:
-		return newCoreClient(conn, logger, meter, tracer), nil
+		return newCoreClient(conn, logger, meter), nil
 	case DriverNatsJetStream:
-		return newJetStreamClient(conn, cfg.JetStream, logger, meter, tracer)
+		return newJetStreamClient(conn, cfg.JetStream, logger, meter)
 	default:
-		return nil, fmt.Errorf("unsupported mq driver: %s", cfg.Driver)
+		return nil, xerrors.Wrapf(xerrors.ErrInvalidInput, "unsupported mq driver: %s", cfg.Driver)
 	}
 }

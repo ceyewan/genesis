@@ -2,7 +2,6 @@ package mq
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -11,6 +10,7 @@ import (
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/metrics"
+	"github.com/ceyewan/genesis/pkg/xerrors"
 )
 
 // coreClient NATS Core 模式实现
@@ -18,16 +18,14 @@ type coreClient struct {
 	conn   *nats.Conn
 	logger clog.Logger
 	meter  metrics.Meter
-	tracer interface{} // TODO: 实现 Tracer 接口
 }
 
 // newCoreClient 创建 NATS Core 客户端
-func newCoreClient(conn connector.NATSConnector, logger clog.Logger, meter metrics.Meter, tracer interface{}) Client {
+func newCoreClient(conn connector.NATSConnector, logger clog.Logger, meter metrics.Meter) Client {
 	return &coreClient{
 		conn:   conn.GetClient(),
 		logger: logger,
 		meter:  meter,
-		tracer: tracer,
 	}
 }
 
@@ -119,14 +117,13 @@ type jetStreamClient struct {
 	cfg    *JetStreamConfig
 	logger clog.Logger
 	meter  metrics.Meter
-	tracer interface{} // TODO: 实现 Tracer 接口
 }
 
 // newJetStreamClient 创建 NATS JetStream 客户端
-func newJetStreamClient(conn connector.NATSConnector, cfg *JetStreamConfig, logger clog.Logger, meter metrics.Meter, tracer interface{}) (Client, error) {
+func newJetStreamClient(conn connector.NATSConnector, cfg *JetStreamConfig, logger clog.Logger, meter metrics.Meter) (Client, error) {
 	js, err := jetstream.New(conn.GetClient())
 	if err != nil {
-		return nil, fmt.Errorf("failed to create jetstream context: %w", err)
+		return nil, xerrors.Wrap(err, "failed to create jetstream context")
 	}
 
 	return &jetStreamClient{
@@ -134,7 +131,6 @@ func newJetStreamClient(conn connector.NATSConnector, cfg *JetStreamConfig, logg
 		cfg:    cfg,
 		logger: logger,
 		meter:  meter,
-		tracer: tracer,
 	}, nil
 }
 
@@ -160,7 +156,7 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, subject string, handler
 		// 临时消费者不需要 Durable Name
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create consumer: %w", err)
+		return nil, xerrors.Wrap(err, "failed to create consumer")
 	}
 
 	return c.consume(ctx, consumer, handler)
@@ -181,7 +177,7 @@ func (c *jetStreamClient) QueueSubscribe(ctx context.Context, subject string, qu
 		AckPolicy:     jetstream.AckExplicitPolicy, // 显式确认
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create durable consumer: %w", err)
+		return nil, xerrors.Wrap(err, "failed to create durable consumer")
 	}
 
 	return c.consume(ctx, consumer, handler)
@@ -217,7 +213,7 @@ func (c *jetStreamClient) consume(_ context.Context, consumer jetstream.Consumer
 func (c *jetStreamClient) Request(ctx context.Context, subject string, data []byte, timeout time.Duration) (Message, error) {
 	// JetStream 模式不推荐使用 Request/Reply，但为了接口兼容，可以回退到 Core NATS 的 Request
 	// 或者直接报错。这里选择报错以明确语义。
-	return nil, fmt.Errorf("request/reply pattern is not supported in JetStream mode")
+	return nil, xerrors.New("request/reply pattern is not supported in JetStream mode")
 }
 
 func (c *jetStreamClient) Close() error {

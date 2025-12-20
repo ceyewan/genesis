@@ -12,7 +12,6 @@ type Option func(*Options)
 type Options struct {
 	Logger clog.Logger
 	Meter  metrics.Meter
-	Tracer interface{} // 暂时使用 interface{}，后续可以定义 Tracer 接口
 }
 
 // WithLogger 注入日志记录器

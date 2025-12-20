@@ -77,7 +77,7 @@ type NATSConnector interface {
 原设计中 Connector 继承了 `Lifecycle` 接口（`Start/Stop/Phase`），这是为 DI 容器服务的。现在采用 Go Native 依赖注入后：
 
 | 原方法 | 问题 | 解决方案 |
-|--------|------|----------|
+| -------- | ------ | -------- |
 | `Start()` | 与 `Connect()` 重复 | 删除，使用 `Connect()` |
 | `Stop()` | 与 `Close()` 重复 | 删除，使用 `Close()` |
 | `Phase()` | 只为 Container 服务 | 删除，使用 defer 自然排序 |
@@ -248,6 +248,7 @@ func WithMeter(m metrics.Meter) Option {
 ```
 
 **当前支持的选项**：
+
 - `WithLogger(logger clog.Logger)` - 注入日志器
 - `WithMeter(meter metrics.Meter)` - 注入指标收集器
 
@@ -501,7 +502,7 @@ func main() {
 原设计有 `internal/connector/manager` 用于连接复用和引用计数。现在简化为：
 
 | 原 Manager 功能 | 现在的处理方式 |
-|----------------|---------------|
+| ---------------- | -------------- |
 | 实例缓存 | 用户在 main.go 中管理实例 |
 | 引用计数 | 使用 defer 确保 Close |
 | 并发安全 | 每个 Connector 内部处理 |
@@ -515,7 +516,7 @@ func main() {
 ### 10.2. 为什么扁平化结构？
 
 | 原结构 | 问题 |
-|--------|------|
+| -------- | ------ |
 | `pkg/connector/types/` | 导入路径冗长 |
 | `internal/connector/` | 实现分散，难以理解 |
 
@@ -539,6 +540,7 @@ if err := conn.Connect(ctx); err != nil { /* 连接错误 */ }
 ```
 
 **设计理念**：
+
 - 分离配置验证和连接建立
 - 允许调用方在合适的时机建立连接
 - 提供更清晰的错误处理
@@ -588,7 +590,7 @@ redisConn, _ := connector.NewRedis(&cfg.Redis,
 Connector 统一使用 Genesis L0 组件：
 
 | 能力 | L0 组件 | Option |
-|------|---------|--------|
+| ------ | ------- | ------ |
 | 日志 | `clog` | `WithLogger(logger)` |
 | 指标 | `metrics` | `WithMeter(meter)` |
 | 错误 | `xerrors` | 使用 Sentinel Errors 和 `xerrors.Wrap` |

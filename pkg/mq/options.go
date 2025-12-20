@@ -12,7 +12,6 @@ type Option func(*Options)
 type Options struct {
 	Logger clog.Logger
 	Meter  metrics.Meter
-	Tracer interface{} // TODO: 实现 Tracer 接口
 }
 
 // WithLogger 注入日志记录器
@@ -32,9 +31,3 @@ func WithMeter(m metrics.Meter) Option {
 	}
 }
 
-// WithTracer 注入 Tracer
-func WithTracer(t interface{}) Option {
-	return func(o *Options) {
-		o.Tracer = t
-	}
-}

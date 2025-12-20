@@ -16,6 +16,7 @@
   - [dlock - 分布式锁](#dlock---分布式锁)
   - [cache - 缓存组件](#cache---缓存组件)
   - [idgen - ID 生成器](#idgen---id-生成器)
+  - [mq - 消息队列](#mq---消息队列)
   - [auth - 身份认证](#auth---身份认证)
 - [开发模式](#开发模式)
 - [最佳实践](#最佳实践)
@@ -804,6 +805,123 @@ orderBatch, _ := orderGen.NextBatch(ctx, "daily", 1000) // [1000, 2000, ..., 100
 ```
 
 > **详细信息**：参阅 [示例代码](examples/idgen) 了解完整的用法
+
+### mq - 消息队列
+
+`mq` 组件基于 NATS 实现，支持 Core 和 JetStream 两种模式，提供高性能的消息发布订阅能力。
+
+```go
+import "github.com/ceyewan/genesis/pkg/mq"
+```
+
+#### 基本使用
+
+**NATS Core 模式（发后即忘）**：
+
+```go
+// 创建 NATS Core 客户端
+client, err := mq.NewClient(natsConn, &mq.Config{
+    Driver: mq.DriverNatsCore,
+}, mq.WithLogger(logger))
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+
+// 发布消息
+err = client.Publish(ctx, "orders.created", orderData)
+
+// 订阅消息
+sub, err := client.Subscribe(ctx, "orders.created", func(ctx context.Context, msg mq.Message) error {
+    fmt.Printf("收到订单: %s\n", msg.Data())
+    return nil
+})
+defer sub.Unsubscribe()
+```
+
+**JetStream 模式（持久化）**：
+
+```go
+// 创建 JetStream 客户端
+client, err := mq.NewClient(natsConn, &mq.Config{
+    Driver: mq.DriverNatsJetStream,
+    JetStream: &mq.JetStreamConfig{
+        AutoCreateStream: true, // 自动创建 Stream
+    },
+}, mq.WithLogger(logger))
+if err != nil {
+    log.Fatal(err)
+}
+
+// 发布消息（等待持久化确认）
+err = client.Publish(ctx, "events.order.created", eventData)
+
+// 队列订阅（负载均衡）
+sub, err := client.QueueSubscribe(ctx, "events.order.processed", "order-processor",
+    func(ctx context.Context, msg mq.Message) error {
+        // 处理消息
+        err := processOrder(msg.Data())
+        if err != nil {
+            return err // 自动执行 Nak
+        }
+        return msg.Ack() // 确认消息
+    })
+```
+
+#### 核心接口
+
+**Client 接口**：
+- `Publish(ctx, subject, data)` - 发布消息
+- `Subscribe(ctx, subject, handler)` - 广播订阅
+- `QueueSubscribe(ctx, subject, queue, handler)` - 队列订阅
+- `Request(ctx, subject, data, timeout)` - 请求-响应
+- `Close()` - 关闭客户端
+
+**Message 接口**：
+- `Subject()` - 获取消息主题
+- `Data()` - 获取消息内容
+- `Ack()` - 确认消息（仅 JetStream）
+- `Nak()` - 拒绝消息（仅 JetStream）
+
+#### 配置选项
+
+**Config**：
+- `Driver` - 驱动类型：`DriverNatsCore` | `DriverNatsJetStream`
+- `JetStream` - JetStream 配置（可选）
+
+**JetStreamConfig**：
+- `AutoCreateStream` - 是否自动创建 Stream
+
+#### 常见使用场景
+
+**配置更新广播**：
+```go
+// 广播订阅，所有订阅者都会收到配置更新
+sub, _ := client.Subscribe(ctx, "config.updated", func(ctx context.Context, msg mq.Message) error {
+    return reloadConfig(msg.Data())
+})
+```
+
+**任务队列处理**：
+```go
+// 队列订阅，负载均衡处理任务
+sub, _ := client.QueueSubscribe(ctx, "tasks.email", "email-sender",
+    func(ctx context.Context, msg mq.Message) error {
+        return sendEmail(msg.Data())
+    })
+```
+
+**RPC 请求响应**：
+```go
+// 发送请求并等待响应
+response, err := client.Request(ctx, "user.get", userID, time.Second*5)
+if err != nil {
+    return err
+}
+userData := response.Data()
+```
+
+> **详细信息**：参阅 [示例代码](examples/mq) 了解完整的用法
 
 ### auth - 身份认证
 

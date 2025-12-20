@@ -2,11 +2,11 @@ package db
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
 	"github.com/ceyewan/genesis/pkg/metrics"
+	"github.com/ceyewan/genesis/pkg/xerrors"
 	"gorm.io/gorm"
 	"gorm.io/sharding"
 )
@@ -38,7 +38,7 @@ type DB interface {
 // 参数:
 //   - conn: MySQL 连接器
 //   - cfg: DB 配置
-//   - opts: 可选参数 (Logger, Meter, Tracer)
+//   - opts: 可选参数 (Logger, Meter)
 //
 // 使用示例:
 //
@@ -80,7 +80,7 @@ func New(conn connector.MySQLConnector, cfg *Config, opts ...Option) (DB, error)
 			}, tables...)
 
 			if err := gormDB.Use(middleware); err != nil {
-				return nil, fmt.Errorf("failed to register sharding middleware for tables %v: %w", rule.Tables, err)
+				return nil, xerrors.Wrapf(err, "failed to register sharding middleware for tables %v", rule.Tables)
 			}
 		}
 	}
