@@ -59,7 +59,14 @@ func main() {
 func basicDefaultExample() {
 	fmt.Println("--- Example 1: Default Configuration ---")
 
-	logger := clog.Default()
+	logger := clog.Must(&clog.Config{
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,
+		SourceRoot:  "genesis",
+		EnableColor: true,
+	}, nil)
 
 	logger.Info("application started with default configuration")
 	logger.Debug("this debug message won't show (default level is info)")
@@ -88,14 +95,15 @@ func basicJSONExample() {
 }
 
 func basicConsoleExample() {
-	fmt.Println("--- Example 3: Console Format ---")
+	fmt.Println("--- Example 3: Console Format with Colors ---")
 
 	logger := clog.Must(&clog.Config{
 		Level:       "info",
 		Format:      "console",
 		Output:      "stdout",
-		EnableColor: true,
 		AddSource:   true,
+		SourceRoot:  "genesis",
+		EnableColor: true,
 	}, nil)
 
 	logger.Info("info message in console format")
@@ -108,13 +116,15 @@ func basicConsoleExample() {
 }
 
 func basicLevelExample() {
-	fmt.Println("--- Example 4: Different Log Levels ---")
+	fmt.Println("--- Example 4: Different Log Levels (DEBUG) ---")
 
 	logger := clog.Must(&clog.Config{
-		Level:     "debug",
-		Format:    "console",
-		Output:    "stdout",
-		AddSource: true,
+		Level:       "debug",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,
+		SourceRoot:  "genesis",
+		EnableColor: true,
 	}, nil)
 
 	logger.Debug("debug level message")
@@ -135,13 +145,15 @@ func basicLevelExample() {
 }
 
 func basicFieldsExample() {
-	fmt.Println("--- Example 5: Various Field Types ---")
+	fmt.Println("--- Example 5: Various Field Types (Console) ---")
 
 	logger := clog.Must(&clog.Config{
-		Level:     "info",
-		Format:    "json",
-		Output:    "stdout",
-		AddSource: true,
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,
+		SourceRoot:  "genesis",
+		EnableColor: true,
 	}, nil)
 
 	// 基础类型字段
@@ -175,13 +187,15 @@ func basicFieldsExample() {
 }
 
 func basicErrorExample() {
-	fmt.Println("--- Example 6: Error Handling ---")
+	fmt.Println("--- Example 6: Error Handling (Console) ---")
 
 	logger := clog.Must(&clog.Config{
-		Level:     "info",
-		Format:    "json",
-		Output:    "stdout",
-		AddSource: true,
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,
+		SourceRoot:  "genesis",
+		EnableColor: true,
 	}, nil)
 
 	// 简单错误
@@ -206,18 +220,20 @@ func basicErrorExample() {
 }
 
 func basicContextExample() {
-	fmt.Println("--- Example 7: Context Integration ---")
+	fmt.Println("--- Example 7: Context Integration (Console) ---")
 
 	logger := clog.Must(&clog.Config{
-		Level:     "info",
-		Format:    "json",
-		Output:    "stdout",
-		AddSource: true,
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,
+		SourceRoot:  "genesis",
+		EnableColor: true,
 	}, &clog.Option{
 		ContextFields: []clog.ContextField{
 			{
-				Key:       "request_id", // Context key
-				FieldName: "request_id", // 输出字段名
+				Key:       "request_id",
+				FieldName: "request_id",
 				Required:  false,
 			},
 			{
@@ -231,7 +247,7 @@ func basicContextExample() {
 				Required:  false,
 			},
 		},
-		ContextPrefix: "ctx.", // Context字段前缀
+		ContextPrefix: "ctx.",
 	})
 
 	// 创建带有Context数据的Context
@@ -253,14 +269,16 @@ func basicContextExample() {
 }
 
 func basicNamespaceExample() {
-	fmt.Println("--- Example 8: Namespace Usage ---")
+	fmt.Println("--- Example 8: Namespace Usage (Console) ---")
 
 	// 主服务logger
 	mainLogger := clog.Must(&clog.Config{
-		Level:     "info",
-		Format:    "json",
-		Output:    "stdout",
-		AddSource: true,
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,
+		SourceRoot:  "genesis",
+		EnableColor: true,
 	}, &clog.Option{
 		NamespaceParts:  []string{"user-service"},
 		NamespaceJoiner: ".",
@@ -285,35 +303,36 @@ func basicNamespaceExample() {
 }
 
 func componentVsNamespaceExample() {
-	fmt.Println("--- Example 9: Component vs Namespace ---")
+	fmt.Println("--- Example 9: Component vs Namespace (Console) ---")
 
 	// 创建主服务logger
 	serviceLogger := clog.Must(&clog.Config{
-		Level:     "info",
-		Format:    "json",
-		Output:    "stdout",
-		AddSource: true,
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,
+		SourceRoot:  "genesis",
+		EnableColor: true,
 	}, &clog.Option{
 		NamespaceParts: []string{"user-service", "handler"},
 	})
 
 	// 在handler中使用数据库组件
-	// namespace表示代码层级，component表示技术组件
 	serviceLogger.Info("querying user data",
-		clog.Component("database"), // 技术组件标识
+		clog.Component("database"),
 		clog.String("table", "users"),
 		clog.String("operation", "SELECT"))
 
 	// 使用Redis缓存
-	cacheLogger := serviceLogger.WithNamespace("cache") // 扩展namespace
+	cacheLogger := serviceLogger.WithNamespace("cache")
 	cacheLogger.Info("caching user data",
-		clog.Component("redis"), // 技术组件标识
+		clog.Component("redis"),
 		clog.String("key", "user:123"),
 		clog.Duration("ttl", 1*time.Hour))
 
 	// 发送消息队列
 	cacheLogger.Info("publishing user event",
-		clog.Component("message-queue"), // 技术组件标识
+		clog.Component("message-queue"),
 		clog.String("topic", "user.updated"),
 		clog.Any("payload", map[string]any{
 			"user_id": 123,
@@ -324,20 +343,19 @@ func componentVsNamespaceExample() {
 }
 
 func sourceRootDefaultExample() {
-	fmt.Println("--- Example 10: SourceRoot Default (Absolute Path) ---")
+	fmt.Println("--- Example 10: SourceRoot = nil (Absolute Path - Console) ---")
 
-	// 默认行为：显示绝对路径
 	logger := clog.Must(&clog.Config{
-		Level:     "info",
-		Format:    "json",
-		Output:    "stdout",
-		AddSource: true,
-		// SourceRoot 为空，显示绝对路径
+		Level:       "debug",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,
+		EnableColor: true,
 	}, nil)
 
-	logger.Info("this shows absolute path by default")
-	logger.Debug("debug with absolute path", clog.String("module", "test"))
-	logger.Warn("warning with absolute path")
+	logger.Debug("debug with absolute path")
+	logger.Info("info  with absolute path", clog.String("module", "test"))
+	logger.Warn("warn  with absolute path")
 
 	fmt.Println()
 }
@@ -345,20 +363,19 @@ func sourceRootDefaultExample() {
 func sourceRootGenesisExample() {
 	fmt.Println("--- Example 11: SourceRoot = \"genesis\" (Path Trimming) ---")
 
-	// 设置 SourceRoot = "genesis"：从 genesis 开始裁剪路径
 	logger := clog.Must(&clog.Config{
-		Level:      "info",
-		Format:     "console",
-		Output:     "stdout",
-		AddSource:  true,
-		SourceRoot: "genesis", // 从 genesis 开始显示相对路径
+		Level:       "debug",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   true,
+		SourceRoot:  "genesis",
+		EnableColor: true,
 	}, nil)
 
-	logger.Info("this shows path starting from genesis")
-	logger.Info("path is trimmed to start from genesis",
-		clog.String("component", "source-root"),
-		clog.String("feature", "path-trimming"))
-	logger.Error("error with trimmed path")
+	logger.Debug("debug path from genesis")
+	logger.Info("info  path from genesis", clog.String("component", "source-root"))
+	logger.Warn("warn  path from genesis", clog.String("feature", "path-trimming"))
+	logger.Error("error path from genesis")
 
 	fmt.Println()
 }

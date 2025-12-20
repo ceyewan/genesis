@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/pkg/clog"
+	clogtypes "github.com/ceyewan/genesis/pkg/clog/types"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/dlock"
 )
 
@@ -15,46 +15,38 @@ func main() {
 	fmt.Println("=== Etcd 分布式锁演示 ===")
 	fmt.Println()
 
-	// 1. 配置容器
-	cfg := &container.Config{
-		Etcd: &connector.EtcdConfig{
-			Endpoints: []string{"127.0.0.1:2379"},
-			Timeout:   5 * time.Second,
-		},
-		DLock: &dlock.Config{
-			Backend:       dlock.BackendEtcd,
-			Prefix:        "dlock:",
-			DefaultTTL:    10 * time.Second,
-			RetryInterval: 100 * time.Millisecond,
-		},
-	}
-
-	// 2. 创建应用级 Logger (可选)
-	logConfig := &clog.Config{
+	// 1. 创建应用级 Logger
+	appLogger, err := clog.New(&clogtypes.Config{
 		Level:  "info",
 		Format: "console",
 		Output: "stdout",
-	}
-	appLogger, err := clog.New(logConfig, &clog.Option{
-		NamespaceParts: []string{"dlock-demo"},
+	}, &clogtypes.Option{
+		NamespaceParts: []string{"dlock-etcd-demo"},
 	})
 	if err != nil {
 		fmt.Printf("创建 Logger 失败: %v\n", err)
 		return
 	}
 
-	// 3. 创建容器 (使用 Option 注入 Logger)
-	c, err := container.New(cfg, container.WithLogger(appLogger))
+	// 2. 创建 Etcd 连接器
+	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{
+		Endpoints: []string{"127.0.0.1:2379"},
+		Timeout:   5 * time.Second,
+	}, connector.WithLogger(appLogger))
 	if err != nil {
-		fmt.Printf("创建容器失败: %v\n", err)
+		fmt.Printf("创建 Etcd 连接器失败: %v\n", err)
 		return
 	}
-	defer c.Close()
+	defer etcdConn.Close()
 
-	// 4. 获取锁组件
-	locker := c.DLock
-	if locker == nil {
-		fmt.Println("锁组件未初始化")
+	// 3. 创建分布式锁组件
+	locker, err := dlock.NewEtcd(etcdConn, &dlock.Config{
+		Prefix:        "dlock:",
+		DefaultTTL:    10 * time.Second,
+		RetryInterval: 100 * time.Millisecond,
+	}, dlock.WithLogger(appLogger))
+	if err != nil {
+		fmt.Printf("创建分布式锁失败: %v\n", err)
 		return
 	}
 
@@ -103,6 +95,24 @@ func main() {
 	}
 	fmt.Println("WithTTL 加锁成功")
 	locker.Unlock(ctx, key)
+
+	// 9. 测试多次重试
+	fmt.Println("\n测试多次重试...")
+	// 先获取锁
+	locker.Lock(ctx, key)
+	// 在另一个 goroutine 中尝试获取锁
+	go func() {
+		if err := locker.Lock(ctx, key); err != nil {
+			fmt.Printf("重试加锁失败（预期）: %v\n", err)
+		} else {
+			fmt.Println("重试加锁成功")
+			locker.Unlock(ctx, key)
+		}
+	}()
+	// 等待一下然后释放锁
+	time.Sleep(1 * time.Second)
+	locker.Unlock(ctx, key)
+	time.Sleep(2 * time.Second) // 等待重试完成
 
 	fmt.Println("\n=== Etcd 分布式锁演示完成 ===")
 }

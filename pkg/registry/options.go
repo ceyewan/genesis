@@ -2,17 +2,17 @@ package registry
 
 import (
 	"github.com/ceyewan/genesis/pkg/clog"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
+	metrics "github.com/ceyewan/genesis/pkg/metrics"
 )
 
 // Option 组件初始化选项函数
 type Option func(*options)
 
-// options 选项结构
+// options 选项结构（导出供 internal 使用）
 type options struct {
 	logger clog.Logger
-	meter  telemetrytypes.Meter
-	tracer telemetrytypes.Tracer
+	meter  metrics.Meter
+	tracer interface{} // TODO: 实现 Tracer 接口
 }
 
 // WithLogger 注入日志记录器
@@ -26,14 +26,14 @@ func WithLogger(l clog.Logger) Option {
 }
 
 // WithMeter 注入指标 Meter
-func WithMeter(m telemetrytypes.Meter) Option {
+func WithMeter(m metrics.Meter) Option {
 	return func(o *options) {
 		o.meter = m
 	}
 }
 
-// WithTracer 注入 Tracer
-func WithTracer(t telemetrytypes.Tracer) Option {
+// WithTracer 注入 Tracer（新增支持）
+func WithTracer(t interface{}) Option {
 	return func(o *options) {
 		o.tracer = t
 	}

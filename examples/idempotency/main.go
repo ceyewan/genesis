@@ -12,7 +12,6 @@ import (
 	"github.com/ceyewan/genesis/pkg/clog"
 	clogtypes "github.com/ceyewan/genesis/pkg/clog/types"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/idempotency"
 	"github.com/ceyewan/genesis/pkg/idempotency/adapter"
 )
@@ -32,25 +31,16 @@ func main() {
 		log.Fatalf("failed to create logger: %v", err)
 	}
 
-	// 2. 使用 Container 初始化 Redis 连接器
-	containerCfg := &container.Config{
-		Redis: &connector.RedisConfig{
-			Addr:        "127.0.0.1:6379",
-			Password:    "",
-			DialTimeout: 2 * time.Second,
-		},
-	}
-
-	c, err := container.New(containerCfg, container.WithLogger(logger))
+	// 2. 直接创建 Redis 连接器
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{
+		Addr:        "127.0.0.1:6379",
+		Password:    "",
+		DialTimeout: 2 * time.Second,
+	}, connector.WithLogger(logger))
 	if err != nil {
-		log.Fatalf("failed to create container: %v", err)
+		log.Fatalf("failed to create redis connector: %v", err)
 	}
-	defer c.Close()
-
-	redisConn, err := c.GetRedisConnector(*containerCfg.Redis)
-	if err != nil {
-		log.Fatalf("failed to get redis connector: %v", err)
-	}
+	defer redisConn.Close()
 
 	// 测试连接
 	if err := redisConn.GetClient().Ping(ctx).Err(); err != nil {

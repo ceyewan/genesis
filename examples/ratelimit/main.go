@@ -12,7 +12,6 @@ import (
 	"github.com/ceyewan/genesis/pkg/clog"
 	clogtypes "github.com/ceyewan/genesis/pkg/clog/types"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/ratelimit"
 	"github.com/ceyewan/genesis/pkg/ratelimit/adapter"
 	"github.com/ceyewan/genesis/pkg/ratelimit/types"
@@ -117,27 +116,17 @@ func standaloneExample(ctx context.Context, logger clog.Logger) {
 
 // distributedExample 分布式模式示例
 func distributedExample(ctx context.Context, logger clog.Logger) {
-	// 使用 Container 初始化 Redis 连接器
-	containerCfg := &container.Config{
-		Redis: &connector.RedisConfig{
-			Addr:        "127.0.0.1:6379",
-			Password:    "",
-			DialTimeout: 2 * time.Second,
-		},
-	}
-
-	c, err := container.New(containerCfg, container.WithLogger(logger))
+	// 创建 Redis 连接器
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{
+		Addr:        "127.0.0.1:6379",
+		Password:    "",
+		DialTimeout: 2 * time.Second,
+	}, connector.WithLogger(logger))
 	if err != nil {
-		logger.Warn("跳过分布式模式示例: 容器初始化失败", clog.Error(err))
+		logger.Warn("跳过分布式模式示例: Redis 连接器创建失败", clog.Error(err))
 		return
 	}
-	defer c.Close()
-
-	redisConn, err := c.GetRedisConnector(*containerCfg.Redis)
-	if err != nil {
-		logger.Warn("跳过分布式模式示例: 获取连接器失败", clog.Error(err))
-		return
-	}
+	defer redisConn.Close()
 
 	// 测试连接
 	if err := redisConn.GetClient().Ping(ctx).Err(); err != nil {

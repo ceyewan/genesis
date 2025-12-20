@@ -3,13 +3,35 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
+	"strconv"
 	"time"
 
+	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/db"
+	"github.com/joho/godotenv"
 	"gorm.io/gorm"
 )
+
+// getEnvOrDefault 获取环境变量，如果不存在则返回默认值
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+// getEnvIntOrDefault 获取环境变量并转换为 int，如果不存在或转换失败则返回默认值
+func getEnvIntOrDefault(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
+	}
+	return defaultValue
+}
 
 // Order 订单模型（分片表）
 type Order struct {
@@ -30,71 +52,104 @@ type Product struct {
 }
 
 func main() {
-	fmt.Println("=== Genesis DB Component Example ===")
+	fmt.Println("=== Genesis DB Component Example (Go Native DI) ===")
 
-	// 1. 初始化容器
-	app := initContainer()
-	defer app.Close()
+	// 0. 加载环境变量（从根目录）
+	if err := godotenv.Load("/Users/ceyewan/CodeField/genesis/.env"); err != nil {
+		log.Printf("Warning: could not load .env file: %v", err)
+	}
+
+	// 1. 初始化连接器和组件
+	mysqlConn, database := initComponents()
+	if mysqlConn == nil || database == nil {
+		fmt.Println("Example exited due to missing MySQL connection")
+		return
+	}
+	defer mysqlConn.Close()
 
 	// 2. 自动迁移表结构
-	migrateTables(app)
+	migrateTables(database)
 
 	// 3. 演示：插入分片数据
-	demoInsertShardingData(app)
+	demoInsertShardingData(database)
 
 	// 4. 演示：查询分片数据
-	demoQueryShardingData(app)
+	demoQueryShardingData(database)
 
 	// 5. 演示：事务操作
-	demoTransaction(app)
+	demoTransaction(database)
 
 	// 6. 演示：错误处理
-	demoErrorHandling(app)
+	demoErrorHandling(database)
 }
 
-func initContainer() *container.Container {
-	fmt.Println("\n--- 1. Initializing Container ---")
+func initComponents() (connector.MySQLConnector, db.DB) {
+	fmt.Println("\n--- 1. Initializing Components (Go Native DI) ---")
 
-	cfg := &container.Config{
-		// MySQL 连接配置
-		MySQL: &connector.MySQLConfig{
-			Host:         "127.0.0.1",
-			Port:         3306,
-			Username:     "root",
-			Password:     "your_root_password", // 请替换为实际密码
-			Database:     "app_db",
-			Charset:      "utf8mb4",
-			Timeout:      10 * time.Second,
-			MaxIdleConns: 10,
-			MaxOpenConns: 100,
-			MaxLifetime:  time.Hour,
+	// 1. 初始化 Logger
+	logger, err := clog.New(&clog.Config{
+		Level:  "info",
+		Format: "json",
+		Output: "stdout", // 添加输出配置
+	}, &clog.Option{})
+	if err != nil {
+		log.Fatalf("failed to create logger: %v", err)
+	}
+
+	// 2. 创建 MySQL 连接器
+	mysqlConn, err := connector.NewMySQL(&connector.MySQLConfig{
+		BaseConfig: connector.BaseConfig{
+			Name: "mysql-db-example",
 		},
-		// DB 组件配置
-		DB: &db.Config{
-			EnableSharding: true,
-			ShardingRules: []db.ShardingRule{
-				{
-					ShardingKey:    "user_id",
-					NumberOfShards: 64, // 将创建 orders_00 到 orders_63 共 64 张表
-					Tables:         []string{"orders"},
-				},
+		Host:         getEnvOrDefault("MYSQL_HOST", "localhost"),
+		Port:         getEnvIntOrDefault("MYSQL_PORT", 3306),
+		Username:     getEnvOrDefault("MYSQL_USER", "root"),
+		Password:     getEnvOrDefault("MYSQL_PASSWORD", "password"),
+		Database:     getEnvOrDefault("MYSQL_DATABASE", "genesis_db"),
+		Charset:      "utf8mb4",
+		Timeout:      10 * time.Second,
+		MaxIdleConns: 10,
+		MaxOpenConns: 100,
+		MaxLifetime:  time.Hour,
+	}, connector.WithLogger(logger))
+	if err != nil {
+		fmt.Printf("⚠️  MySQL connector creation failed (expected if MySQL is not running): %v\n", err)
+		fmt.Printf("💡 To run this example, please:\n")
+		fmt.Printf("   1. Start MySQL server\n")
+		fmt.Printf("   2. Create database 'genesis_db'\n")
+		fmt.Printf("   3. Set environment variables (MYSQL_HOST, MYSQL_PASSWORD, etc.)\n")
+		fmt.Printf("   4. Run this example again\n")
+		return nil, nil // 返回 nil，让 main 函数正常退出
+	}
+
+	// 3. 连接到数据库
+	if err := mysqlConn.Connect(context.Background()); err != nil {
+		log.Fatalf("failed to connect to mysql: %v", err)
+	}
+
+	// 4. 创建 DB 组件
+	database, err := db.New(mysqlConn, &db.Config{
+		EnableSharding: true,
+		ShardingRules: []db.ShardingRule{
+			{
+				ShardingKey:    "user_id",
+				NumberOfShards: 64, // 将创建 orders_00 到 orders_63 共 64 张表
+				Tables:         []string{"orders"},
 			},
 		},
+	}, db.WithLogger(logger))
+	if err != nil {
+		log.Fatalf("failed to create db component: %v", err)
 	}
 
-	app, err := container.New(cfg)
-	if err != nil {
-		panic(fmt.Sprintf("failed to initialize container: %v", err))
-	}
-	fmt.Println()
-	fmt.Println("Container initialized successfully")
-	return app
+	fmt.Println("Components initialized successfully")
+	return mysqlConn, database
 }
 
-func migrateTables(app *container.Container) {
+func migrateTables(database db.DB) {
 	fmt.Println("\n--- 2. Migrating Tables ---")
 	ctx := context.Background()
-	gormDB := app.DB.DB(ctx)
+	gormDB := database.DB(ctx)
 
 	// gorm.io/sharding 会自动拦截 AutoMigrate 并为每个分片创建表
 	if err := gormDB.AutoMigrate(&Order{}, &Product{}); err != nil {
@@ -104,15 +159,21 @@ func migrateTables(app *container.Container) {
 	fmt.Println("Tables migrated successfully (including 64 sharded 'orders' tables)")
 }
 
-func demoInsertShardingData(app *container.Container) {
+func demoInsertShardingData(database db.DB) {
 	fmt.Println("\n--- 3. Demo: Insert Sharded Data ---")
 	ctx := context.Background()
-	gormDB := app.DB.DB(ctx)
+	gormDB := database.DB(ctx)
+
+	// 先清理可能存在的旧数据，避免重复插入
+	userID := int64(12345)
+	if err := gormDB.Where("user_id = ?", userID).Delete(&Order{}).Error; err != nil {
+		fmt.Printf("Failed to clean existing orders: %v\n", err)
+		return
+	}
 
 	// 插入 UserID = 12345 的订单
 	// 分片计算: 12345 % 64 = 57
 	// 数据应该存储在 orders_57 表中
-	userID := int64(12345)
 	shardIndex := userID % 64
 
 	order := &Order{
@@ -131,10 +192,10 @@ func demoInsertShardingData(app *container.Container) {
 	}
 }
 
-func demoQueryShardingData(app *container.Container) {
+func demoQueryShardingData(database db.DB) {
 	fmt.Println("\n--- 4. Demo: Query Sharded Data ---")
 	ctx := context.Background()
-	gormDB := app.DB.DB(ctx)
+	gormDB := database.DB(ctx)
 
 	userID := int64(12345)
 	var orders []Order
@@ -150,11 +211,11 @@ func demoQueryShardingData(app *container.Container) {
 	}
 }
 
-func demoTransaction(app *container.Container) {
+func demoTransaction(database db.DB) {
 	fmt.Println("\n--- 5. Demo: Transaction ---")
 	ctx := context.Background()
 
-	err := app.DB.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
+	err := database.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
 		// 1. 插入订单 (分片表)
 		newOrder := &Order{
 			UserID:    67890, // 67890 % 64 = 50 -> orders_50
@@ -187,10 +248,10 @@ func demoTransaction(app *container.Container) {
 	}
 }
 
-func demoErrorHandling(app *container.Container) {
+func demoErrorHandling(database db.DB) {
 	fmt.Println("\n--- 6. Demo: Error Handling (Missing Sharding Key) ---")
 	ctx := context.Background()
-	gormDB := app.DB.DB(ctx)
+	gormDB := database.DB(ctx)
 
 	// 尝试不带分片键查询分片表
 	var orders []Order

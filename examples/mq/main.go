@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/mq"
 )
 
@@ -22,58 +22,65 @@ type Order struct {
 func main() {
 	fmt.Println("=== Genesis MQ Component Example ===")
 
-	// 1. 初始化容器 (使用 JetStream 模式)
-	app := initContainer()
-	defer app.Close()
+	// 1. 初始化连接器和 MQ 客户端 (使用 JetStream 模式)
+	mqClient, conn := initMQClient()
+	defer conn.Close()
 
 	// 2. 演示：广播订阅 (Subscribe)
-	demoSubscribe(app)
+	demoSubscribe(mqClient)
 
 	// 3. 演示：队列订阅 (QueueSubscribe)
-	demoQueueSubscribe(app)
+	demoQueueSubscribe(mqClient)
 
 	// 4. 演示：发布消息
-	demoPublish(app)
+	demoPublish(mqClient)
 
 	// 等待消息处理完成
 	time.Sleep(2 * time.Second)
 }
 
-func initContainer() *container.Container {
-	fmt.Println("\n--- 1. Initializing Container ---")
+func initMQClient() (mq.Client, connector.NATSConnector) {
+	fmt.Println("\n--- 1. Initializing MQ Client ---")
 
-	cfg := &container.Config{
-		// NATS 连接配置
-		NATS: &connector.NATSConfig{
-			URL:           "nats://127.0.0.1:4222",
-			Name:          "genesis-mq-example",
-			ReconnectWait: 2 * time.Second,
-			MaxReconnects: 5,
-		},
-		// MQ 组件配置
-		MQ: &mq.Config{
-			Driver: mq.DriverNatsJetStream, // 使用 JetStream 模式
-			JetStream: &mq.JetStreamConfig{
-				AutoCreateStream: true,
-			},
-		},
-	}
-
-	app, err := container.New(cfg)
+	// 创建 NATS 连接器
+	natsConn, err := connector.NewNATS(&connector.NATSConfig{
+		URL:           "nats://127.0.0.1:4222",
+		Name:          "genesis-mq-example",
+		ReconnectWait: 2 * time.Second,
+		MaxReconnects: 5,
+	}, connector.WithLogger(clog.Default()))
 	if err != nil {
-		panic(fmt.Sprintf("failed to initialize container: %v", err))
+		panic(fmt.Sprintf("failed to create NATS connector: %v", err))
 	}
-	fmt.Println("Container initialized successfully")
-	return app
+
+	// 建立连接
+	ctx := context.Background()
+	if err := natsConn.Connect(ctx); err != nil {
+		panic(fmt.Sprintf("failed to connect to NATS: %v", err))
+	}
+
+	// 创建 MQ 客户端
+	mqClient, err := mq.NewClient(natsConn, &mq.Config{
+		Driver: mq.DriverNatsJetStream, // 使用 JetStream 模式
+		JetStream: &mq.JetStreamConfig{
+			AutoCreateStream: true,
+		},
+	}, mq.WithLogger(clog.Default()))
+	if err != nil {
+		panic(fmt.Sprintf("failed to create MQ client: %v", err))
+	}
+
+	fmt.Println("MQ Client initialized successfully")
+	return mqClient, natsConn
 }
 
-func demoSubscribe(app *container.Container) {
+func demoSubscribe(mqClient mq.Client) {
 	fmt.Println("\n--- 2. Demo: Subscribe (Broadcast) ---")
 	ctx := context.Background()
 
 	// 订阅 "orders.created" 主题
 	// 所有订阅者都会收到消息
-	_, err := app.MQ.Subscribe(ctx, "orders.created", func(ctx context.Context, msg mq.Message) error {
+	_, err := mqClient.Subscribe(ctx, "orders.created", func(ctx context.Context, msg mq.Message) error {
 		fmt.Printf("[Broadcast] Received order: %s\n", string(msg.Data()))
 		return nil // 自动 Ack
 	})
@@ -85,7 +92,7 @@ func demoSubscribe(app *container.Container) {
 	}
 }
 
-func demoQueueSubscribe(app *container.Container) {
+func demoQueueSubscribe(mqClient mq.Client) {
 	fmt.Println("\n--- 3. Demo: QueueSubscribe (Load Balanced) ---")
 	ctx := context.Background()
 
@@ -96,7 +103,7 @@ func demoQueueSubscribe(app *container.Container) {
 
 	for i := 1; i <= 2; i++ {
 		workerID := i
-		_, err := app.MQ.QueueSubscribe(ctx, "orders.created", "order_processors", func(ctx context.Context, msg mq.Message) error {
+		_, err := mqClient.QueueSubscribe(ctx, "orders.created", "order_processors", func(ctx context.Context, msg mq.Message) error {
 			var order Order
 			if err := json.Unmarshal(msg.Data(), &order); err != nil {
 				return err
@@ -112,7 +119,7 @@ func demoQueueSubscribe(app *container.Container) {
 	}
 }
 
-func demoPublish(app *container.Container) {
+func demoPublish(mqClient mq.Client) {
 	fmt.Println("\n--- 4. Demo: Publish ---")
 	ctx := context.Background()
 
@@ -125,7 +132,7 @@ func demoPublish(app *container.Container) {
 		}
 		data, _ := json.Marshal(order)
 
-		if err := app.MQ.Publish(ctx, "orders.created", data); err != nil {
+		if err := mqClient.Publish(ctx, "orders.created", data); err != nil {
 			fmt.Printf("Publish failed: %v\n", err)
 		} else {
 			fmt.Printf("Published order: %s\n", order.ID)

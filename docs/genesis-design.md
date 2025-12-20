@@ -2,185 +2,331 @@
 
 ## 1. 愿景 (Vision)
 
-Genesis 旨在打造一个**轻量级、标准化、高可扩展**的 Go 微服务基座库。它不是一个包罗万象的庞大框架，而是一套精心设计的**组件集合**和**架构规范**。
+Genesis 旨在打造一个**轻量级、标准化、高可扩展**的 Go 微服务**组件库**。它不是一个包罗万象的庞大框架，而是一套精心设计的**组件集合**和**架构规范**。
+
+> **重要**：`docs/refactoring-plan.md` 为当前执行的重构方案（source-of-truth）。本设计文档是总体愿景与背景说明，重构实现细节请参见 refactoring-plan。
 
 我们的目标是让开发者能够像搭积木一样构建微服务，既能享受标准化的便利，又不失对底层技术的掌控力。
 
+**Genesis 是组件库，不是框架**——我们提供积木，用户自己搭建。
+
 ## 2. 核心设计哲学 (Design Philosophy)
 
-Genesis 的设计遵循以下核心原则：
+Genesis 的设计遵循 Go 语言的核心哲学：
 
-1. **分层架构 (Layered Architecture):**
+1. **显式优于隐式 (Explicit over Implicit):**
+    * 依赖关系在代码中显式声明，而非隐藏在容器或框架内部。
+    * 使用构造函数注入，函数签名即是依赖文档。
+
+2. **简单优于聪明 (Simple over Clever):**
+    * 不使用运行时 DI 容器，避免"魔法"代码。
+    * 利用 Go 的 `defer` 机制自然管理资源生命周期。
+
+3. **组合优于继承 (Composition over Inheritance):**
+    * 组件通过接口组合，而非继承层次。
+    * 业务代码依赖最小接口，易于测试和 Mock。
+
+4. **分层架构 (Layered Architecture):**
     * **Connector (连接器):** 负责基础设施的原始连接管理（如 MySQL, Redis 连接池），屏蔽驱动差异。
-    * **Component (组件):** 基于连接器封装业务通用能力（如分布式锁、分库分表 DB），提供面向业务的 API。
-    * **Container (容器):** 负责依赖注入和生命周期管理，是应用的骨架。
-2. **依赖注入 (Dependency Injection):**
-    * 组件之间不直接实例化依赖，而是通过接口和构造函数注入。
-    * 由核心容器统一管理对象的创建和组装，降低耦合度。
-3. **生命周期管理 (Lifecycle Management):**
-    * 统一的 `Start/Stop` 接口和 `Phase` 启动顺序。
-    * 确保资源（连接、后台任务）能够有序启动和优雅关闭 (Graceful Shutdown)。
-4. **接口驱动 (Interface Driven):**
-    * 对外暴露接口 (`pkg/`), 隐藏实现细节 (`internal/`)。
+    * **Component (组件):** 基于连接器封装业务通用能力（如分布式锁、缓存），提供面向业务的 API。
+
+5. **接口驱动 (Interface Driven):**
+    * 对外暴露接口 (`pkg/`), 隐藏实现细节。
     * 便于测试（Mock）和未来替换底层实现。
 
 ## 3. 总体架构 (Architecture)
 
+### 3.1. 四层模型
+
+移除 DI 容器后，Genesis 简化为清晰的四层结构：
+
+| 层次 | 核心组件 | 职责 | 组织方式 |
+| :----- | :--------- | :----- | :---------- |
+| **Level 3: Governance** | `auth`, `ratelimit`, `breaker`, `registry` | 流量治理，身份认证，切面能力 | 扁平化 |
+| **Level 2: Business** | `cache`, `idgen`, `dlock`, `idempotency`, `mq` | 业务能力封装 | 扁平化 |
+| **Level 1: Infrastructure** | `connector`, `db` | 连接管理，底层 I/O | 扁平化 |
+| **Level 0: Base** | `clog`, `config`, `metrics`, `xerrors` | 框架基石 | 扁平化 |
+
+### 3.2. 架构图
+
 ```mermaid
 graph TD
-    ConfigFile[配置文件] -->|Load| Config[配置组件]
-    Config -->|AppConfig| Container[核心容器]
+    App[应用 main.go] -->|显式创建| Config[配置加载]
+    App -->|显式创建| Logger[clog 日志]
+    App -->|显式创建| Meter[Metrics 指标]
     
-    App[应用层 Application] --> Container
+    App -->|显式创建| Connectors[连接器层]
+    App -->|注入 Connector| Components[组件层]
+    App -->|注入 Components| Services[业务服务层]
     
-    subgraph "Genesis Framework"
-        Container -->|Inject| Components[组件层 Components]
-        Container -->|Inject| Connectors[连接器层 Connectors]
-        Container -->|Inject| Observability[可观测性 Observability]
-        
-        Components --> Connectors
-        Components --> Observability
-        
-        subgraph "基础组件"
-            Log[clog 日志]
+    subgraph "Genesis 组件库"
+        subgraph "Level 0: Base (扁平化)"
+            Logger
             Config
-            Metrics[Metrics 指标]
+            Meter
         end
         
-        subgraph "业务组件"
-            DB[db 分库分表]
-            DLock[dlock 分布式锁]
-            Cache["缓存 (Planned)"]
-            MQ[mq 消息队列]
-        end
-        
-        subgraph "连接器"
+        subgraph "Level 1: Infrastructure"
+            Connectors
             MySQL[MySQL Connector]
             Redis[Redis Connector]
             Etcd[Etcd Connector]
             NATS[NATS Connector]
+        end
+        
+        subgraph "Level 2: Business (扁平化)"
+            Components
+            DB[db 数据库]
+            DLock[dlock 分布式锁]
+            Cache[cache 缓存]
+            MQ[mq 消息队列]
+            IDGen[idgen ID生成]
+        end
+        
+        subgraph "Level 3: Governance (扁平化)"
+            Auth[auth 认证]
+            RateLimit[ratelimit 限流]
+            Breaker[breaker 熔断]
+            Registry[registry 注册]
         end
     end
     
     Connectors --> Infra[基础设施 Infrastructure]
 ```
 
+**关键点**：没有中央容器，所有依赖在 `main.go` 中显式创建和注入。所有 L0-L3 组件均采用扁平化设计。
+
 ## 4. 核心模块概览
 
-### 4.1. 基础能力
+### 4.1. Level 0: 基础能力 (Base)
 
-* **clog (Context Logger):** 基于 `slog` 的结构化日志库，支持 Context 字段自动提取、多级命名空间。
-* **config (Config Center):** 统一的配置中心接口，从本地文件 / 环境变量 / 远程配置源加载强类型 `AppConfig`，支持热更新。
-* **telemetry (Metrics & Tracing):** 基于 OpenTelemetry 的指标与链路追踪能力，与 `clog` 集成，实现 Log–Metric–Trace 的关联。
-* **container (Core Container):** 极简的 DI 容器，负责组件编排和生命周期管理，是应用的统一入口。
+Genesis 所有组件统一使用 L0 基础组件，确保一致的可观测性和错误处理。L0 组件采用**扁平化设计**，所有公开 API 直接在 `pkg/` 根目录：
 
-### 4.2. 连接器 (Connectors)
+* **clog (Context Logger):** 基于 `slog` 的结构化日志库，支持 Context 字段自动提取、命名空间派生。所有组件通过 `WithLogger` 注入。
+
+* **config:** 统一的配置加载，从本地文件 / 环境变量加载强类型配置。
+
+* **metrics:** 基于 OpenTelemetry 的指标收集能力。所有组件通过 `WithMeter` 注入，自动埋点。
+
+* **xerrors:** 统一的错误码和错误包装器。所有组件使用 `xerrors` 定义 Sentinel Errors 和包装错误。
+
+### 4.2. Level 1: 连接器 (Connectors)
 
 位于 `pkg/connector`，提供统一的连接管理接口：
 
-* **MySQL:** 基于 GORM 的连接管理。
-* **Redis:** 基于 go-redis 的连接管理。
+* **MySQL:** 基于 GORM 的连接管理，**拥有**连接池资源。
+* **Redis:** 基于 go-redis 的连接管理，**拥有**连接池资源。
 * **Etcd:** 基于 clientv3 的连接管理。
 * **NATS:** 基于 nats.go 的连接管理。
 
-### 4.3. 业务组件 (Components)
+**资源所有权**：Connector 创建并拥有连接，必须调用 `Close()` 释放资源。
 
-位于 `pkg/` 下的独立包，提供开箱即用的能力：
+### 4.3. Level 2: 业务组件 (Components)
 
-* **db:** 集成 `gorm` 和 `sharding` 插件，支持透明的分库分表和统一事务管理。
-* **dlock:** 统一接口的分布式锁，支持 Redis 和 Etcd 后端，内置看门狗（自动续期）。
-* **mq:** 统一接口的消息队列，支持 NATS Core (即时) 和 JetStream (持久化) 模式。
+位于 `pkg/` 下的独立包，**借用** Connector 的连接：
 
-## 5. 演进路线 (Roadmap)
+* **db:** 集成 `gorm` 和 `sharding` 插件，支持分库分表。
+* **dlock:** 统一接口的分布式锁，支持 Redis 和 Etcd 后端。
+* **cache:** Redis 缓存封装。
+* **mq:** 统一接口的消息队列。
+* **idgen:** 分布式 ID 生成器。
+* **idempotency:** 幂等性控制。
 
-Genesis 将按照"在精不在多"的原则逐步演进：
+**资源所有权**：组件只借用 Connector 的 client，其 `Close()` 方法通常是 no-op。
 
-### Phase 1: 核心基座 (Current)
+### 4.4. Level 3: 治理组件 (Governance)
 
-* [x] **Log:** 结构化日志 (clog)
-* [x] **Container:** 生命周期管理与 DI
-* [x] **Connector:** 基础连接器 (MySQL, Redis, Etcd)
-* [x] **DB:** 分库分表与事务封装
-* [x] **DLock:** 分布式锁
-* [x] **Config:** 配置中心 (文件 + 环境变量 + 远程配置)
-* [x] **Telemetry:** 基于 OTel 的基础指标与链路追踪
+* **auth:** 身份认证与 JWT 处理。
+* **ratelimit:** 分布式限流。
+* **breaker:** 熔断器。
+* **registry:** 服务注册与发现。
 
-### Phase 2: 中间件集成 (Next)
+## 5. Go Native 依赖注入
 
-* [ ] **Cache:** 多级缓存接口与实现 (Local + Redis)
-* [x] **MQ:** 消息队列封装 (基于 NATS/Kafka)
-* [x] **ID Gen:** 分布式 ID 生成器 (Snowflake)
+### 5.1. 核心原则
 
-### Phase 3: 微服务治理 (Future)
+Genesis 采用 Go 原生的显式依赖注入，而非 DI 容器：
 
-* [ ] **Limit:** 分布式限流 (Rate Limit)
-* [x] **Idem:** 幂等性控制组件
-* [ ] **Registry:** 服务注册与发现
-* [ ] **Circuit Breaker:** 熔断与降级
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                    Go Native 依赖注入                            │
+├─────────────────────────────────────────────────────────────────┤
+│  1. 构造函数注入：依赖通过 New() 参数传入                         │
+│  2. 显式调用：main.go 中手写初始化代码，依赖关系一目了然           │
+│  3. defer 释放：利用 Go 的 defer 机制，自然实现 LIFO 关闭顺序     │
+│  4. 接口隔离：业务层只依赖需要的接口，而非具体实现                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-## 6. 目录结构规范
+### 5.2. 标准初始化模式
+
+```go
+// main.go - 显式、清晰、可读
+func main() {
+    ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer cancel()
+
+    // 1. 加载配置
+    cfg, _ := config.Load("config.yaml")
+
+    // 2. 初始化 Logger
+    logger, _ := clog.New(&cfg.Log)
+
+    // 3. 初始化 Telemetry (通过 metrics 等组件体现)
+    // ...
+
+    // 4. 创建 Connectors（defer 自动逆序关闭）
+    redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+    defer redisConn.Close()
+
+    mysqlConn, _ := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
+    defer mysqlConn.Close()
+
+    // 5. 创建组件（注入 Connector + Logger）
+    database, _ := db.New(mysqlConn, &cfg.DB, db.WithLogger(logger))
+    locker, _ := dlock.NewRedis(redisConn, &cfg.DLock, dlock.WithLogger(logger))
+    cacheClient, _ := cache.New(redisConn, &cfg.Cache, cache.WithLogger(logger))
+
+    // 6. 创建业务服务（注入组件接口）
+    userSvc := service.NewUserService(database, locker)
+
+    // 7. 启动服务器
+    server := api.NewServer(userSvc)
+    server.Run(ctx)
+}
+```
+
+### 5.3. 资源生命周期管理
+
+利用 Go 的 `defer` 自然实现资源管理，无需 Lifecycle 接口注册到中央容器：
+
+```go
+func main() {
+    // 创建顺序：Config -> Logger -> Connector -> Component -> Service
+    // 关闭顺序：Service -> Component -> Connector -> Logger (defer 自动逆序)
+    
+    redisConn := connector.MustNewRedis(&cfg.Redis)
+    defer redisConn.Close() // 第 2 个关闭
+    
+    mysqlConn := connector.MustNewMySQL(&cfg.MySQL)
+    defer mysqlConn.Close() // 第 1 个关闭
+    
+    // 组件借用连接，不负责连接池释放
+    dlock := dlock.MustNewRedis(redisConn, &cfg.DLock)
+    
+    server := api.NewServer(dlock)
+    defer server.Shutdown(ctx) // 第 1 个关闭
+    
+    server.Run(ctx)
+}
+```
+
+## 6. 资源所有权模型
+
+### 6.1. 核心原则
+
+**谁创建，谁负责关闭。**
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                     资源所有权模型                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   Connector (Owner)                                             │
+│   ├── 创建 *redis.Client / *gorm.DB                            │
+│   ├── 管理连接池                                                │
+│   └── Close() 释放资源  ←── 必须调用                            │
+│                                                                 │
+│   Component (Borrower)                                          │
+│   ├── Cache    ─┐                                               │
+│   ├── DLock    ─┼── 借用 Connector.GetClient()                  │
+│   ├── DB       ─┤                                               │
+│   └── MQ       ─┘                                               │
+│        │                                                        │
+│        └── Close() 通常是 no-op（不拥有资源）                      │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## 7. 目录结构规范
+
+采用扁平化结构，L2/L3 组件逐步消除 `types/` 子包：
 
 ```text
 genesis/
-├── pkg/                  # 公开 API 和接口定义
-│   ├── clog/             # 日志组件
-│   ├── connector/        # 连接器接口
-│   ├── container/        # 容器接口
-│   ├── config/           # 配置中心接口
-│   ├── telemetry/        # Metrics & Tracing 接口
-│   ├── db/               # 数据库组件
-│   ├── dlock/            # 分布式锁组件
-│   └── mq/               # 消息队列组件
-├── internal/             # 内部实现细节 (不对外暴露)
-│   ├── clog/
-│   ├── connector/
-│   ├── container/
-│   ├── config/
-│   ├── telemetry/
-│   ├── db/
-│   ├── dlock/
-│   └── mq/
-├── deploy/               # 部署依赖 (Docker Compose 等)
-├── docs/                 # 设计文档
-└── examples/             # 使用示例
+├── pkg/                      # 公开 API 和接口定义
+│   ├── auth/                 # 认证组件 (L3) - 扁平化
+│   ├── clog/                 # 日志组件 (L0) - 扁平化
+│   ├── config/               # 配置组件 (L0) - 扁平化
+│   ├── metrics/              # 指标组件 (L0) - 扁平化
+│   ├── xerrors/              # 错误处理 (L0) - 扁平化
+│   ├── connector/            # 连接器 (L1)
+│   ├── db/                   # 数据库组件 (L1)
+│   ├── dlock/                # 分布式锁 (L2) - 扁平化
+│   ├── cache/                # 缓存 (L2) - 扁平化
+│   ├── idgen/                # ID 生成 (L2) - 扁平化
+│   ├── mq/                   # 消息队列 (L2) - 扁平化
+│   ├── ratelimit/            # 限流 (L3) - 扁平化
+│   ├── breaker/              # 熔断 (L3) - 扁平化
+│   └── registry/             # 服务注册 (L3) - 扁平化
+│
+├── internal/                 # 内部实现逻辑
+│   ├── breaker/              
+│   ├── clog/                 
+│   └── ...
+│
+├── docs/                     # 设计文档
+└── examples/                 # 使用示例
 ```
 
-## 7. 组件开发规范 (Component Specification)
+**关键说明**：
 
-为了确保框架的一致性和可维护性，所有组件必须遵循 [Component Specification](specs/component-spec.md)。
+* L0 组件（clog、config、metrics、xerrors）采用扁平化设计，所有公开 API 在 pkg 根目录。
+* L2/L3 组件正在重构为扁平化结构，接口和实现在同一包中，减少 `types/` 依赖。
+* 复杂实现细节放在 `internal/` 下。
 
-### 7.1. 初始化模式 (Initialization)
+## 8. 组件开发规范 (Component Specification)
 
-Genesis 采用 **“容器优先的双模式”** 策略：
+### 8.1. 构造函数规范
 
-1. **容器模式 (Container Mode) - 生产环境推荐：**
-   * 应用通过 `Container` 统一初始化组件和连接器。
-   * `Container` 从 `config.Manager` 加载 `AppConfig`
-     （通常是 `config.Load + Unmarshal(&AppConfig)`），
-     然后创建连接器、注入 Logger / Metrics / Tracer 并管理生命周期。
-   * 业务代码只从 `Container` 获取已就绪的组件接口，而不直接调用组件的构造函数。
+```go
+// 标准签名
+func New(conn Connector, cfg *Config, opts ...Option) (Interface, error)
 
-2. **独立模式 (Standalone Mode) - 测试/脚本：**
-   * 组件在 `pkg/<component>` 下提供标准的 `New(Dep, Config, ...Option)` 工厂函数。
-   * 用于单元测试或简单工具脚本中独立实例化，不依赖 `Container`，调用方需要自行管理依赖和资源释放。
+// 规则：
+// 1. 必选参数：核心依赖 (Connector) + 配置 (Config)
+// 2. 可选参数：Logger/Meter/Tracer 通过 Option 注入
+// 3. 禁止：New 中执行阻塞 I/O
+```
 
-### 7.2. 依赖注入与可观测性
+### 8.2. Option 规范
 
-* **强制依赖注入:** 组件不得在内部创建 Logger、Connector 或配置读取器，必须通过构造函数参数或 Option 注入依赖。
-* **日志命名空间:** 组件接收 Logger 后，必须在内部派生子命名空间，例如 `user-service` -> `user-service.dlock` -> `user-service.dlock.redis`。
-* **配置分离:** 组件只定义自己的配置结构体，由上层（通常是 Container + Config 模块）构造并传入，不直接读取配置文件或环境变量。
+```go
+type options struct {
+    logger clog.Logger
+    meter  metrics.Meter
+    tracer metrics.Tracer
+}
 
-### 7.3. 代码组织结构
+type Option func(*options)
 
-```text
-pkg/component/
-├── component.go        # 统一入口：工厂函数 (New) 和类型别名导出
-├── options.go          # Option 定义 (WithLogger, WithMetrics)
-└── types/              # 类型定义
-    ├── config.go       # 配置结构体
-    ├── interface.go    # 核心接口
-    └── errors.go       # 错误定义
-internal/component/
-├── impl.go             # 核心实现
-└── ...
+func WithLogger(l clog.Logger) Option {
+    return func(o *options) {
+        o.logger = l.With("component", "dlock")
+    }
+}
+```
+
+### 8.3. 错误处理规范
+
+使用 `xerrors` 定义和包装错误：
+
+```go
+// pkg/dlock/errors.go
+var (
+    ErrLockNotHeld   = xerrors.New("dlock: lock not held")
+)
+
+// 使用时 Wrap 错误
+return xerrors.Wrapf(ErrLockTimeout, "acquire lock %s", key)
 ```

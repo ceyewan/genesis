@@ -9,7 +9,7 @@ import (
 
 	"github.com/ceyewan/genesis/pkg/breaker/types"
 	"github.com/ceyewan/genesis/pkg/clog"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
+	"github.com/ceyewan/genesis/pkg/metrics"
 )
 
 // Manager 熔断器管理器
@@ -17,8 +17,8 @@ type Manager struct {
 	cfg      types.Config
 	breakers sync.Map // key: service name, value: *circuitBreaker
 	logger   clog.Logger
-	meter    telemetrytypes.Meter
-	tracer   telemetrytypes.Tracer
+	meter    metrics.Meter
+	tracer   interface{} // TODO: 实现 Tracer 接口
 }
 
 // circuitBreaker 单个服务的熔断器实例
@@ -32,8 +32,8 @@ type circuitBreaker struct {
 }
 
 // New 创建熔断器管理器（使用 gobreaker 库）
-func New(cfg *types.Config, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) (types.Breaker, error) {
-	return NewGoBreakerAdapter(cfg, logger, meter, tracer)
+func New(cfg *types.Config, logger clog.Logger, meter metrics.Meter) (types.Breaker, error) {
+	return NewGoBreakerAdapter(cfg, logger, meter)
 }
 
 // Execute 执行受保护的函数

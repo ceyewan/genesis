@@ -7,7 +7,7 @@ import (
 
 	"github.com/ceyewan/genesis/pkg/breaker/types"
 	"github.com/ceyewan/genesis/pkg/clog"
-	telemetrytypes "github.com/ceyewan/genesis/pkg/telemetry/types"
+	metrics "github.com/ceyewan/genesis/pkg/metrics"
 	"github.com/sony/gobreaker/v2"
 )
 
@@ -16,12 +16,11 @@ type GoBreakerAdapter struct {
 	cfg      types.Config
 	breakers sync.Map // key: service name, value: *gobreaker.CircuitBreaker[any]
 	logger   clog.Logger
-	meter    telemetrytypes.Meter
-	tracer   telemetrytypes.Tracer
+	meter    metrics.Meter
 }
 
 // NewGoBreakerAdapter 创建基于 gobreaker 的适配器
-func NewGoBreakerAdapter(cfg *types.Config, logger clog.Logger, meter telemetrytypes.Meter, tracer telemetrytypes.Tracer) (*GoBreakerAdapter, error) {
+func NewGoBreakerAdapter(cfg *types.Config, logger clog.Logger, meter metrics.Meter) (*GoBreakerAdapter, error) {
 	if cfg == nil {
 		cfg = types.DefaultConfig()
 	}
@@ -30,7 +29,6 @@ func NewGoBreakerAdapter(cfg *types.Config, logger clog.Logger, meter telemetryt
 		cfg:    *cfg,
 		logger: logger,
 		meter:  meter,
-		tracer: tracer,
 	}
 
 	if logger != nil {

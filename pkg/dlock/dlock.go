@@ -51,7 +51,7 @@ func NewRedis(conn connector.RedisConnector, cfg *Config, opts ...Option) (Locke
 		o(&opt)
 	}
 
-	return internaldlock.NewRedis(conn, cfg, opt.Logger, opt.Meter, opt.Tracer)
+	return internaldlock.NewRedis(conn, cfg, opt.Logger, opt.Meter)
 }
 
 // NewEtcd 创建 Etcd 分布式锁 (独立模式)
@@ -78,5 +78,5 @@ func NewEtcd(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Locker,
 		o(&opt)
 	}
 
-	return internaldlock.NewEtcd(conn, cfg, opt.Logger, opt.Meter, opt.Tracer)
+	return internaldlock.NewEtcd(conn, cfg, opt.Logger, opt.Meter)
 }

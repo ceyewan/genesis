@@ -3,64 +3,83 @@ package main
 import (
 	"context"
 	"log"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/ceyewan/genesis/pkg/cache"
 	"github.com/ceyewan/genesis/pkg/clog"
-	clogtypes "github.com/ceyewan/genesis/pkg/clog/types"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/container"
+	"github.com/joho/godotenv"
 )
+
+// getEnvOrDefault 获取环境变量，如果不存在则返回默认值
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+// getEnvIntOrDefault 获取环境变量并转换为 int，如果不存在或转换失败则返回默认值
+func getEnvIntOrDefault(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
+	}
+	return defaultValue
+}
 
 // 用户路由信息
 type UserRoute struct {
-	UserID    string `json:"user_id" msgpack:"user_id"`
-	GatewayID string `json:"gateway_id" msgpack:"gateway_id"`
-	ServerID  string `json:"server_id" msgpack:"server_id"`
+	UserID    string `json:"user_id"`
+	GatewayID string `json:"gateway_id"`
+	ServerID  string `json:"server_id"`
 }
 
 // 会话信息
 type Session struct {
-	SessionID string    `json:"session_id" msgpack:"session_id"`
-	UserID1   string    `json:"user_id1" msgpack:"user_id1"`
-	UserID2   string    `json:"user_id2" msgpack:"user_id2"`
-	LastTime  time.Time `json:"last_time" msgpack:"last_time"`
+	SessionID string    `json:"session_id"`
+	UserID1   string    `json:"user_id1"`
+	UserID2   string    `json:"user_id2"`
+	LastTime  time.Time `json:"last_time"`
 }
 
 // 消息
 type Message struct {
-	MessageID string    `json:"message_id" msgpack:"message_id"`
-	SessionID string    `json:"session_id" msgpack:"session_id"`
-	UserID    string    `json:"user_id" msgpack:"user_id"`
-	Content   string    `json:"content" msgpack:"content"`
-	Timestamp time.Time `json:"timestamp" msgpack:"timestamp"`
-	Seq       int64     `json:"seq" msgpack:"seq"`
+	MessageID string    `json:"message_id"`
+	SessionID string    `json:"session_id"`
+	UserID    string    `json:"user_id"`
+	Content   string    `json:"content"`
+	Timestamp time.Time `json:"timestamp"`
+	Seq       int64     `json:"seq"`
 }
 
 func main() {
+	// 0. 加载环境变量（从根目录）
+	if err := godotenv.Load("/Users/ceyewan/CodeField/genesis/.env"); err != nil {
+		log.Printf("Warning: could not load .env file: %v", err)
+	}
+
 	// 初始化日志记录器
-	logger, err := clog.New(&clogtypes.Config{
+	logger, err := clog.New(&clog.Config{
 		Level:  "info",
 		Format: "console",
 		Output: "stdout",
-	}, &clogtypes.Option{
+	}, &clog.Option{
 		NamespaceParts: []string{"example", "cache", "im"},
 	})
 	if err != nil {
 		log.Fatalf("初始化日志记录器失败: %v", err)
 	}
 
-	logger.Info("=== Genesis Cache 组件示例 ===")
-	logger.Info("本示例演示 Cache 组件的两种使用模式:")
-	logger.Info("  1. 独立模式 (Standalone): 手动创建连接器和组件")
-	logger.Info("  2. 容器模式 (Container): 由 Container 统一管理")
+	logger.Info("=== Genesis Cache 组件示例 (Go Native DI) ===")
+	logger.Info("本示例演示 Cache 组件的标准使用模式:")
+	logger.Info("  1. 显式创建连接器")
+	logger.Info("  2. 显式创建缓存组件")
+	logger.Info("  3. 使用 Redis 的各种数据结构")
 	logger.Info("")
-
-	// 演示容器模式
-	containerModeExample(logger)
-
-	logger.Info("")
-	logger.Info("=== IM 场景示例 (独立模式) ===")
 
 	// 示例 1: 用户路由缓存
 	userRouteExample(logger)
@@ -72,94 +91,32 @@ func main() {
 	recentMessagesExample(logger)
 }
 
-func containerModeExample(logger clog.Logger) {
-	logger.Info("--- 容器模式示例 ---")
-
-	// 使用 Container 统一管理 Cache 组件
-	containerCfg := &container.Config{
-		Redis: &connector.RedisConfig{
-			Addr:        "127.0.0.1:6379",
-			Password:    "your_redis_password",
-			DialTimeout: 2 * time.Second,
-		},
-		Cache: &cache.Config{
-			Prefix:     "container:",
-			Serializer: "json",
-		},
-	}
-
-	c, err := container.New(containerCfg, container.WithLogger(logger))
-	if err != nil {
-		logger.Warn("跳过容器模式示例: 容器初始化失败", clog.Error(err))
-		return
-	}
-	defer c.Close()
-
-	ctx := context.Background()
-
-	// 直接使用 Container 中的 Cache
-	if c.Cache == nil {
-		logger.Warn("Cache 组件未初始化")
-		return
-	}
-
-	// 缓存用户信息
-	route := UserRoute{
-		UserID:    "user_2001",
-		GatewayID: "gateway_02",
-		ServerID:  "server_02",
-	}
-
-	err = c.Cache.Set(ctx, "user:"+route.UserID, route, 24*time.Hour)
-	if err != nil {
-		logger.Error("设置用户路由失败", clog.Error(err))
-		return
-	}
-	logger.Info("✓ 容器模式: 已缓存用户路由", clog.Any("route", route))
-
-	// 获取用户路由信息
-	var cachedRoute UserRoute
-	err = c.Cache.Get(ctx, "user:"+route.UserID, &cachedRoute)
-	if err != nil {
-		logger.Error("获取用户路由失败", clog.Error(err))
-		return
-	}
-	logger.Info("✓ 容器模式: 获取到的用户路由", clog.Any("route", cachedRoute))
-}
-
 func userRouteExample(logger clog.Logger) {
 	logger.Info("--- 示例 1: 用户路由缓存 ---")
 
-	// 1. 使用 Container 初始化 Redis 连接器
-	containerCfg := &container.Config{
-		Redis: &connector.RedisConfig{
-			Addr:        "127.0.0.1:6379",
-			Password:    "your_redis_password",
-			DialTimeout: 2 * time.Second,
-		},
-	}
-
-	c, err := container.New(containerCfg, container.WithLogger(logger))
+	// 1. 创建 Redis 连接器
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{
+		Addr:         getEnvOrDefault("REDIS_ADDR", "127.0.0.1:6379"),
+		Password:     getEnvOrDefault("REDIS_PASSWORD", ""), // 从环境变量读取密码
+		DB:           getEnvIntOrDefault("REDIS_DB", 0),
+		DialTimeout:  2 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+		PoolSize:     getEnvIntOrDefault("REDIS_POOL_SIZE", 10),
+	}, connector.WithLogger(logger))
 	if err != nil {
-		logger.Warn("跳过用户路由示例: 容器初始化失败", clog.Error(err))
+		logger.Warn("跳过用户路由示例: 连接器初始化失败", clog.Error(err))
 		return
 	}
-	defer c.Close()
-
-	redisConn, err := c.GetRedisConnector(*containerCfg.Redis)
-	if err != nil {
-		logger.Warn("跳过用户路由示例: 获取连接器失败", clog.Error(err))
-		return
-	}
+	defer redisConn.Close()
 
 	// 2. 配置缓存
 	cacheCfg := &cache.Config{
-		Prefix:             "im:route:",
-		RedisConnectorName: "default",
-		Serializer:         "json",
+		Prefix:     "im:route:",
+		Serializer: "json",
 	}
 
-	// 3. 创建缓存实例 (独立模式)
+	// 3. 创建缓存实例 (Go Native DI)
 	cacheClient, err := cache.New(redisConn, cacheCfg, cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
@@ -180,7 +137,7 @@ func userRouteExample(logger clog.Logger) {
 		logger.Error("设置用户路由失败", clog.Error(err))
 		return
 	}
-	logger.Info("已缓存用户路由", clog.Any("route", route))
+	logger.Info("✓ 已缓存用户路由", clog.Any("route", route))
 
 	// 5. 获取用户路由信息
 	var cachedRoute UserRoute
@@ -189,42 +146,35 @@ func userRouteExample(logger clog.Logger) {
 		logger.Error("获取用户路由失败", clog.Error(err))
 		return
 	}
-	logger.Info("获取到的用户路由", clog.Any("route", cachedRoute))
+	logger.Info("✓ 获取到的用户路由", clog.Any("route", cachedRoute))
 }
 
 func sessionListExample(logger clog.Logger) {
 	logger.Info("--- 示例 2: 会话列表缓存（ZSet 按时间排序）---")
 
-	// 1. 使用 Container 初始化 Redis 连接器
-	containerCfg := &container.Config{
-		Redis: &connector.RedisConfig{
-			Addr:        "127.0.0.1:6379",
-			Password:    "your_redis_password",
-			DialTimeout: 2 * time.Second,
-		},
-	}
-
-	c, err := container.New(containerCfg, container.WithLogger(logger))
+	// 1. 创建 Redis 连接器
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{
+		Addr:         getEnvOrDefault("REDIS_ADDR", "127.0.0.1:6379"),
+		Password:     getEnvOrDefault("REDIS_PASSWORD", ""), // 从环境变量读取密码
+		DB:           getEnvIntOrDefault("REDIS_DB", 0),
+		DialTimeout:  2 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+		PoolSize:     getEnvIntOrDefault("REDIS_POOL_SIZE", 10),
+	}, connector.WithLogger(logger))
 	if err != nil {
-		logger.Warn("跳过会话列表示例: 容器初始化失败", clog.Error(err))
+		logger.Warn("跳过会话列表示例: 连接器初始化失败", clog.Error(err))
 		return
 	}
-	defer c.Close()
-
-	redisConn, err := c.GetRedisConnector(*containerCfg.Redis)
-	if err != nil {
-		logger.Warn("跳过会话列表示例: 获取连接器失败", clog.Error(err))
-		return
-	}
+	defer redisConn.Close()
 
 	// 2. 配置缓存
 	cacheCfg := &cache.Config{
-		Prefix:             "im:session:",
-		RedisConnectorName: "default",
-		Serializer:         "json",
+		Prefix:     "im:session:",
+		Serializer: "json",
 	}
 
-	// 3. 创建缓存实例 (独立模式)
+	// 3. 创建缓存实例
 	cacheClient, err := cache.New(redisConn, cacheCfg, cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
@@ -262,7 +212,7 @@ func sessionListExample(logger clog.Logger) {
 			continue
 		}
 	}
-	logger.Info("已添加会话到用户会话列表", clog.Int("count", len(sessions)))
+	logger.Info("✓ 已添加会话到用户会话列表", clog.Int("count", len(sessions)))
 
 	// 5. 获取最近活跃的会话（按时间倒序）
 	var recentSessions []string
@@ -272,7 +222,7 @@ func sessionListExample(logger clog.Logger) {
 		return
 	}
 
-	logger.Info("用户最近活跃的会话", clog.Any("sessions", recentSessions))
+	logger.Info("✓ 用户最近活跃的会话", clog.Any("sessions", recentSessions))
 
 	// 6. 获取会话详细信息
 	for _, sessionID := range recentSessions {
@@ -282,43 +232,36 @@ func sessionListExample(logger clog.Logger) {
 			logger.Error("获取会话详情失败", clog.Error(err))
 			continue
 		}
-		logger.Info("会话详情", clog.String("session_id", sessionID), clog.Any("info", sessionInfo))
+		logger.Info("✓ 会话详情", clog.String("session_id", sessionID), clog.Any("info", sessionInfo))
 	}
 }
 
 func recentMessagesExample(logger clog.Logger) {
 	logger.Info("--- 示例 3: 最新消息缓存（定长列表）---")
 
-	// 1. 使用 Container 初始化 Redis 连接器
-	containerCfg := &container.Config{
-		Redis: &connector.RedisConfig{
-			Addr:        "127.0.0.1:6379",
-			Password:    "your_redis_password",
-			DialTimeout: 2 * time.Second,
-		},
-	}
-
-	c, err := container.New(containerCfg, container.WithLogger(logger))
+	// 1. 创建 Redis 连接器
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{
+		Addr:         getEnvOrDefault("REDIS_ADDR", "127.0.0.1:6379"),
+		Password:     getEnvOrDefault("REDIS_PASSWORD", ""), // 从环境变量读取密码
+		DB:           getEnvIntOrDefault("REDIS_DB", 0),
+		DialTimeout:  2 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+		PoolSize:     getEnvIntOrDefault("REDIS_POOL_SIZE", 10),
+	}, connector.WithLogger(logger))
 	if err != nil {
-		logger.Warn("跳过最新消息示例: 容器初始化失败", clog.Error(err))
+		logger.Warn("跳过最新消息示例: 连接器初始化失败", clog.Error(err))
 		return
 	}
-	defer c.Close()
-
-	redisConn, err := c.GetRedisConnector(*containerCfg.Redis)
-	if err != nil {
-		logger.Warn("跳过最新消息示例: 获取连接器失败", clog.Error(err))
-		return
-	}
+	defer redisConn.Close()
 
 	// 2. 配置缓存
 	cacheCfg := &cache.Config{
-		Prefix:             "im:message:",
-		RedisConnectorName: "default",
-		Serializer:         "json",
+		Prefix:     "im:message:",
+		Serializer: "json",
 	}
 
-	// 3. 创建缓存实例 (独立模式)
+	// 3. 创建缓存实例
 	cacheClient, err := cache.New(redisConn, cacheCfg, cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
@@ -348,7 +291,7 @@ func recentMessagesExample(logger clog.Logger) {
 		logger.Error("添加消息到定长列表失败", clog.Error(err))
 		return
 	}
-	logger.Info("已添加消息到会话消息列表", clog.Int("count", len(messages)), clog.Int("limit", 10))
+	logger.Info("✓ 已添加消息到会话消息列表", clog.Int("count", len(messages)), clog.Int("limit", 10))
 
 	// 5. 获取最近的消息
 	var recentMessages []Message
@@ -358,7 +301,7 @@ func recentMessagesExample(logger clog.Logger) {
 		return
 	}
 
-	logger.Info("会话最近的消息:")
+	logger.Info("✓ 会话最近的消息:")
 	for i, msg := range recentMessages {
 		logger.Info("  消息",
 			clog.Int("index", i+1),

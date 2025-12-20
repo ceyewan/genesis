@@ -1,20 +1,30 @@
+# config.yaml - 基础配置文件（最低优先级）
+# 设置全部信息，作为默认值
+# 优先级：环境变量 > .env 文件 > 环境特定配置 > 基础配置
+
 app:
-  name: "genesis-demo-1"
-  version: "1.0.0"
-  debug: true
+  name: "Genesis 基础应用"
+  version: "1.0.0-base"
+  environment: "base"
+  debug: false
 
-server:
-  port: 8080
-  host: "0.0.0.0"
-
-database:
-  driver: "pgsql"
-  host: "localhost"
+mysql:
+  host: "base-mysql.interna"
   port: 3306
-  username: "root"
-  password: "password"
-  database: "genesis"
+  username: "base_user"
+  password: "base_password"
+  database: "base_database"
+  charset: "utf8mb4"
+  timeout: "30s"
 
 redis:
-  addr: "localhost:6379"
+  addr: "base-redis.internal:6379"
+  password: "base_redis_password"
   db: 0
+
+clog:
+  level: "debug"
+  format: "json"
+  output: "file"
+  enable_color: false
+  add_source: true

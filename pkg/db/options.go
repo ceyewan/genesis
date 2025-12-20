@@ -2,17 +2,16 @@ package db
 
 import (
 	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/telemetry/types"
+	"github.com/ceyewan/genesis/pkg/metrics"
 )
 
 // Option DB 组件选项函数
 type Option func(*Options)
 
-// Options 选项结构（导出供 internal 使用）
+// Options 选项结构（导出供内部使用）
 type Options struct {
 	Logger clog.Logger
-	Meter  types.Meter
-	Tracer types.Tracer
+	Meter  metrics.Meter
 }
 
 // WithLogger 注入日志记录器
@@ -26,16 +25,8 @@ func WithLogger(l clog.Logger) Option {
 }
 
 // WithMeter 注入指标 Meter
-func WithMeter(m types.Meter) Option {
+func WithMeter(m metrics.Meter) Option {
 	return func(o *Options) {
 		o.Meter = m
 	}
 }
-
-// WithTracer 注入 Tracer
-func WithTracer(t types.Tracer) Option {
-	return func(o *Options) {
-		o.Tracer = t
-	}
-}
-

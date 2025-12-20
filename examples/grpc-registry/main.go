@@ -9,7 +9,6 @@ import (
 
 	"github.com/ceyewan/genesis/pkg/clog"
 	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/container"
 	"github.com/ceyewan/genesis/pkg/registry"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -23,27 +22,20 @@ func main() {
 	fmt.Println("启动命令：etcd --listen-client-urls=http://localhost:2379 --advertise-client-urls=http://localhost:2379")
 	fmt.Println()
 
-	// 1. 创建容器和 Registry
-	app, err := container.New(&container.Config{
-		Etcd: &connector.EtcdConfig{
-			Endpoints: []string{"localhost:2379"},
-		},
-	})
-	if err != nil {
-		log.Fatalf("Failed to create container: %v", err)
-	}
-	defer app.Close()
-
+	// 1. 创建 Logger
 	logger := clog.Default()
 
-	etcdConn, err := app.GetEtcdConnector(connector.EtcdConfig{
+	// 2. 创建 Etcd 连接器
+	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{
 		Endpoints: []string{"localhost:2379"},
-	})
+	}, connector.WithLogger(logger))
 	if err != nil {
-		log.Fatalf("Failed to get etcd connector: %v", err)
+		log.Fatalf("Failed to create etcd connector: %v", err)
 	}
+	defer etcdConn.Close()
 
-	reg, err := registry.New(etcdConn, registry.Config{
+	// 3. 创建 Registry 实例
+	reg, err := registry.New(etcdConn, &registry.Config{
 		Namespace:       "/genesis/services",
 		Schema:          "etcd",
 		DefaultTTL:      30 * time.Second,
@@ -55,6 +47,7 @@ func main() {
 		log.Fatalf("Failed to create registry: %v", err)
 	}
 
+	// 4. 启动 Registry
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -65,7 +58,7 @@ func main() {
 
 	serviceName := "demo-service"
 
-	// 2. 启动第一个服务实例
+	// 5. 启动第一个服务实例
 	fmt.Println("1. 启动第一个服务实例...")
 	server1, addr1 := startTestServer("server-1")
 	defer server1.Stop()
@@ -92,7 +85,7 @@ func main() {
 	// 等待服务注册生效
 	time.Sleep(500 * time.Millisecond)
 
-	// 3. 使用 gRPC resolver 创建连接
+	// 6. 使用 gRPC resolver 创建连接
 	fmt.Println("\n2. 使用 gRPC resolver 创建连接...")
 	conn, err := reg.GetConnection(ctx, serviceName)
 	if err != nil {
@@ -103,7 +96,7 @@ func main() {
 	client := grpc_health_v1.NewHealthClient(conn)
 	fmt.Println("✓ gRPC 连接已建立，使用动态服务发现")
 
-	// 4. 测试连接
+	// 7. 测试连接
 	fmt.Println("\n3. 测试连接...")
 	for i := 0; i < 3; i++ {
 		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
@@ -115,7 +108,7 @@ func main() {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// 5. 动态添加第二个服务实例
+	// 8. 动态添加第二个服务实例
 	fmt.Println("\n4. 动态添加第二个服务实例...")
 	server2, addr2 := startTestServer("server-2")
 	defer server2.Stop()
@@ -143,7 +136,7 @@ func main() {
 	fmt.Println("⏳ 等待 resolver 检测到新服务...")
 	time.Sleep(1 * time.Second)
 
-	// 6. 验证负载均衡
+	// 9. 验证负载均衡
 	fmt.Println("\n5. 验证负载均衡（现在有两个服务实例）...")
 	for i := 0; i < 6; i++ {
 		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
@@ -155,7 +148,7 @@ func main() {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// 7. 移除第一个服务实例
+	// 10. 移除第一个服务实例
 	fmt.Println("\n6. 移除第一个服务实例...")
 	err = reg.Deregister(ctx, service1.ID)
 	if err != nil {
@@ -168,7 +161,7 @@ func main() {
 	fmt.Println("⏳ 等待 resolver 检测到服务移除...")
 	time.Sleep(1 * time.Second)
 
-	// 8. 验证连接仍然可用
+	// 11. 验证连接仍然可用
 	fmt.Println("\n7. 验证连接仍然可用（只剩一个服务实例）...")
 	for i := 0; i < 3; i++ {
 		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
@@ -180,7 +173,7 @@ func main() {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// 9. 验证服务发现
+	// 12. 验证服务发现
 	fmt.Println("\n8. 验证服务发现...")
 	services, err := reg.GetService(ctx, serviceName)
 	if err != nil {
