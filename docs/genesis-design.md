@@ -36,13 +36,13 @@ Genesis 的设计遵循 Go 语言的核心哲学：
 
 ## 3. 总体架构 (Architecture)
 
-### 3.1. 三层模型
+### 3.1. 四层模型
 
 移除 DI 容器后，Genesis 简化为清晰的四层结构：
 
 | 层次 | 核心组件 | 职责 | 组织方式 |
-|:-----|:---------|:-----|:----------|
-| **Level 3: Governance** | `ratelimit`, `breaker`, `registry` | 流量治理，切面能力 | 扁平化 |
+| :----- | :--------- | :----- | :---------- |
+| **Level 3: Governance** | `auth`, `ratelimit`, `breaker`, `registry` | 流量治理，身份认证，切面能力 | 扁平化 |
 | **Level 2: Business** | `cache`, `idgen`, `dlock`, `idempotency`, `mq` | 业务能力封装 | 扁平化 |
 | **Level 1: Infrastructure** | `connector`, `db` | 连接管理，底层 I/O | 扁平化 |
 | **Level 0: Base** | `clog`, `config`, `metrics`, `xerrors` | 框架基石 | 扁平化 |
@@ -80,9 +80,11 @@ graph TD
             DLock[dlock 分布式锁]
             Cache[cache 缓存]
             MQ[mq 消息队列]
+            IDGen[idgen ID生成]
         end
         
         subgraph "Level 3: Governance (扁平化)"
+            Auth[auth 认证]
             RateLimit[ratelimit 限流]
             Breaker[breaker 熔断]
             Registry[registry 注册]
@@ -102,9 +104,9 @@ Genesis 所有组件统一使用 L0 基础组件，确保一致的可观测性�
 
 * **clog (Context Logger):** 基于 `slog` 的结构化日志库，支持 Context 字段自动提取、命名空间派生。所有组件通过 `WithLogger` 注入。
 
-* **config:** 统一的配置加载，从本地文件 / 环境变量加载强类型配置。所有组件配置结构定义在各自包中。
+* **config:** 统一的配置加载，从本地文件 / 环境变量加载强类型配置。
 
-* **metrics:** 基于 OpenTelemetry 的指标收集能力（仅支持 Metrics，不支持 Tracing）。所有组件通过 `WithMeter` 注入，自动埋点。
+* **metrics:** 基于 OpenTelemetry 的指标收集能力。所有组件通过 `WithMeter` 注入，自动埋点。
 
 * **xerrors:** 统一的错误码和错误包装器。所有组件使用 `xerrors` 定义 Sentinel Errors 和包装错误。
 
@@ -130,10 +132,11 @@ Genesis 所有组件统一使用 L0 基础组件，确保一致的可观测性�
 * **idgen:** 分布式 ID 生成器。
 * **idempotency:** 幂等性控制。
 
-**资源所有权**：组件只借用 Connector 的 client，其 `Close()` 方法是 no-op。
+**资源所有权**：组件只借用 Connector 的 client，其 `Close()` 方法通常是 no-op。
 
 ### 4.4. Level 3: 治理组件 (Governance)
 
+* **auth:** 身份认证与 JWT 处理。
 * **ratelimit:** 分布式限流。
 * **breaker:** 熔断器。
 * **registry:** 服务注册与发现。
@@ -169,9 +172,8 @@ func main() {
     // 2. 初始化 Logger
     logger, _ := clog.New(&cfg.Log)
 
-    // 3. 初始化 Telemetry
-    tel, _ := telemetry.New(&cfg.Telemetry)
-    defer tel.Shutdown(ctx)
+    // 3. 初始化 Telemetry (通过 metrics 等组件体现)
+    // ...
 
     // 4. 创建 Connectors（defer 自动逆序关闭）
     redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
@@ -194,20 +196,9 @@ func main() {
 }
 ```
 
-### 5.3. 为什么不用 DI 容器？
+### 5.3. 资源生命周期管理
 
-| 特性 | Container 模式 | Go Native 模式 |
-|------|----------------|----------------|
-| **依赖可见性** | 隐藏在 Container 内部 | main.go 中一目了然 |
-| **编译时检查** | 运行时才发现缺少依赖 | 编译时检查完整性 |
-| **测试友好** | 需要 Mock Container | 只 Mock 需要的接口 |
-| **学习成本** | 需要理解 Container 机制 | 标准 Go 代码，无需学习 |
-| **调试体验** | 堆栈包含 Container 内部 | 堆栈清晰直接 |
-| **IDE 支持** | 难以跳转到实际实现 | 完美支持 Go to Definition |
-
-### 5.4. 生命周期管理
-
-利用 Go 的 `defer` 自然实现资源管理，无需 Lifecycle 接口：
+利用 Go 的 `defer` 自然实现资源管理，无需 Lifecycle 接口注册到中央容器：
 
 ```go
 func main() {
@@ -220,8 +211,8 @@ func main() {
     mysqlConn := connector.MustNewMySQL(&cfg.MySQL)
     defer mysqlConn.Close() // 第 1 个关闭
     
+    // 组件借用连接，不负责连接池释放
     dlock := dlock.MustNewRedis(redisConn, &cfg.DLock)
-    // dlock 无状态，无需 Close
     
     server := api.NewServer(dlock)
     defer server.Shutdown(ctx) // 第 1 个关闭
@@ -252,89 +243,26 @@ func main() {
 │   ├── DB       ─┤                                               │
 │   └── MQ       ─┘                                               │
 │        │                                                        │
-│        └── Close() 是 no-op（不拥有资源）                        │
+│        └── Close() 通常是 no-op（不拥有资源）                      │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 6.2. 组件 Close() 规范
+## 7. 目录结构规范
 
-所有**借用** Connector 的组件，其 `Close()` 方法应为 **no-op**：
-
-```go
-// pkg/cache/redis.go
-func (c *redisCache) Close() error {
-    // No-op: Cache 不拥有 Redis 连接，由 Connector 管理
-    return nil
-}
-```
-
-**为什么保留 Close() 方法？**
-
-1. **接口一致性**：统一的资源清理接口
-2. **未来扩展**：组件可能需要清理内部资源（如本地缓存、后台 goroutine）
-3. **调用无害**：即使误调用也不会出错
-
-## 7. 演进路线 (Roadmap)
-
-Genesis 将按照"在精不在多"的原则逐步演进：
-
-### Phase 1: 核心基座 (Current)
-
-* [x] **Log:** 结构化日志 (clog)
-* [x] **Connector:** 基础连接器 (MySQL, Redis, Etcd)
-* [x] **DB:** 分库分表与事务封装
-* [x] **DLock:** 分布式锁
-* [x] **Config:** 配置中心 (文件 + 环境变量 + 远程配置)
-* [x] **Telemetry:** 基于 OTel 的基础指标与链路追踪
-
-### Phase 2: 中间件集成 (Next)
-
-* [ ] **Cache:** 多级缓存接口与实现 (Local + Redis)
-* [x] **MQ:** 消息队列封装 (基于 NATS/Kafka)
-* [x] **ID Gen:** 分布式 ID 生成器 (Snowflake)
-
-### Phase 3: 微服务治理 (Future)
-
-* [ ] **Limit:** 分布式限流 (Rate Limit)
-* [x] **Idem:** 幂等性控制组件
-* [ ] **Registry:** 服务注册与发现
-* [ ] **Circuit Breaker:** 熔断与降级
-
-## 8. 目录结构规范
-
-采用扁平化结构，L0/L2/L3 组件无需 `types/` 子包：
+采用扁平化结构，L2/L3 组件逐步消除 `types/` 子包：
 
 ```text
 genesis/
 ├── pkg/                      # 公开 API 和接口定义
+│   ├── auth/                 # 认证组件 (L3) - 扁平化
 │   ├── clog/                 # 日志组件 (L0) - 扁平化
-│   │   ├── clog.go           # 接口 + 工厂
-│   │   └── types/            # 仅 Option/Config 共用类型
 │   ├── config/               # 配置组件 (L0) - 扁平化
 │   ├── metrics/              # 指标组件 (L0) - 扁平化
-│   │   ├── metrics.go        # 工厂函数 + Meter 接口
-│   │   ├── types.go          # Counter/Gauge/Histogram 接口
-│   │   ├── config.go         # Config 结构体
-│   │   ├── options.go        # Option 模式
-│   │   └── label.go          # Label 定义
 │   ├── xerrors/              # 错误处理 (L0) - 扁平化
 │   ├── connector/            # 连接器 (L1)
-│   │   ├── interface.go      # 接口定义
-│   │   ├── config.go         # 配置结构
-│   │   ├── errors.go         # 错误定义
-│   │   ├── mysql.go          # MySQL 实现
-│   │   ├── redis.go          # Redis 实现
-│   │   ├── etcd.go           # Etcd 实现
-│   │   └── nats.go           # NATS 实现
 │   ├── db/                   # 数据库组件 (L1)
 │   ├── dlock/                # 分布式锁 (L2) - 扁平化
-│   │   ├── dlock.go          # 接口 + 工厂
-│   │   ├── config.go         # 配置
-│   │   ├── errors.go         # 错误
-│   │   ├── options.go        # Option
-│   │   ├── redis.go          # Redis 实现
-│   │   └── etcd.go           # Etcd 实现
 │   ├── cache/                # 缓存 (L2) - 扁平化
 │   ├── idgen/                # ID 生成 (L2) - 扁平化
 │   ├── mq/                   # 消息队列 (L2) - 扁平化
@@ -342,24 +270,24 @@ genesis/
 │   ├── breaker/              # 熔断 (L3) - 扁平化
 │   └── registry/             # 服务注册 (L3) - 扁平化
 │
-├── internal/                 # 仅保留 L1 复杂实现
-│   ├── connector/            # Connector 驱动适配器
-│   └── metrics/              # Metrics 实现细节
-│       ├── factory.go        # OTel Provider 初始化
-│       └── prometheus.go     # Prometheus Exporter
+├── internal/                 # 内部实现逻辑
+│   ├── breaker/              
+│   ├── clog/                 
+│   └── ...
 │
 ├── docs/                     # 设计文档
 └── examples/                 # 使用示例
 ```
 
 **关键说明**：
-- L0 组件（clog、config、metrics、xerrors）采用扁平化设计，所有公开 API 在 pkg 根目录
-- L1/L2/L3 组件不需要 `types/` 子包，接口和实现在同一包中
-- 复杂实现细节放在 `internal/` 下，如 OTel Provider 初始化、Prometheus Exporter
 
-## 9. 组件开发规范 (Component Specification)
+* L0 组件（clog、config、metrics、xerrors）采用扁平化设计，所有公开 API 在 pkg 根目录。
+* L2/L3 组件正在重构为扁平化结构，接口和实现在同一包中，减少 `types/` 依赖。
+* 复杂实现细节放在 `internal/` 下。
 
-### 9.1. 构造函数规范
+## 8. 组件开发规范 (Component Specification)
+
+### 8.1. 构造函数规范
 
 ```go
 // 标准签名
@@ -371,13 +299,13 @@ func New(conn Connector, cfg *Config, opts ...Option) (Interface, error)
 // 3. 禁止：New 中执行阻塞 I/O
 ```
 
-### 9.2. Option 规范
+### 8.2. Option 规范
 
 ```go
 type options struct {
     logger clog.Logger
-    meter  telemetry.Meter
-    tracer telemetry.Tracer
+    meter  metrics.Meter
+    tracer metrics.Tracer
 }
 
 type Option func(*options)
@@ -389,24 +317,7 @@ func WithLogger(l clog.Logger) Option {
 }
 ```
 
-### 9.3. 接口设计规范
-
-业务服务应依赖**最小接口**，而非具体实现：
-
-```go
-// ✅ Good: 只依赖需要的方法
-type UserRepository interface {
-    FindByID(ctx context.Context, id int64) (*User, error)
-    Save(ctx context.Context, user *User) error
-}
-
-// ❌ Bad: 依赖具体实现
-type UserService struct {
-    db *db.DB  // 具体类型，难以 Mock
-}
-```
-
-### 9.4. 错误处理规范
+### 8.3. 错误处理规范
 
 使用 `xerrors` 定义和包装错误：
 
@@ -414,31 +325,8 @@ type UserService struct {
 // pkg/dlock/errors.go
 var (
     ErrLockNotHeld   = xerrors.New("dlock: lock not held")
-    ErrLockTimeout   = xerrors.New("dlock: acquire timeout")
-    ErrAlreadyLocked = xerrors.New("dlock: already locked")
 )
 
 // 使用时 Wrap 错误
 return xerrors.Wrapf(ErrLockTimeout, "acquire lock %s", key)
 ```
-
-### 9.5. 扁平化代码组织
-
-L2/L3 组件采用扁平化结构：
-
-```text
-pkg/dlock/
-├── dlock.go       # 接口定义 + 工厂函数
-├── config.go      # Config 结构体
-├── errors.go      # Sentinel Errors
-├── options.go     # Option 函数
-├── redis.go       # type redisLocker struct (非导出)
-└── etcd.go        # type etcdLocker struct (非导出)
-```
-
-用户体验：
-
-```go
-// 简洁直接的导入
-import "github.com/ceyewan/genesis/pkg/dlock"
-locker, err := dlock.NewRedis(conn, &dlock.Config{...})

@@ -16,3 +16,39 @@
 6. **以破坏架构为耻，以遵循规范为荣**：保持 `pkg` 暴露接口、`internal` 隐藏实现的结构，不将第三方依赖泄漏到 `pkg`。
 7. **以假装理解为耻，以诚实求助为荣**：遇到不懂的概念或代码路径，坦诚指出并寻找答案。
 8. **以鲁莽提交为耻，以谨慎重构为荣**：重构前先理解上下游调用，必要时分步骤进行并记录风险。
+
+## Git 工作流
+
+### 获取信息
+
+通过 `git status` 查看当前分支状态，`git log --oneline` 查看提交历史，`git diff --cached` 查看未提交的改动，`git diff` 查看工作区与暂存区的差异，注意，不要使用交互式的命令。
+
+### 分支命名
+
+格式：`<type>/<description>[-suffix]`
+
+类型：`feature` | `fix` | `refactor` | `docs` | `chore`
+
+示例：`feature/idgen-implementation`、`fix/connection-timeout`
+
+### 提交规范
+
+格式：`<type>(<scope>): <subject>`
+
+- **类型**：feat, fix, refactor, docs, style, test, chore
+- **作用域**（可选）：如 clog, connector, cache 等
+- **主题**：祈使语气，首字母小写，无句号
+- **语言**：中文
+
+如有多个逻辑变更，提供正文（用 `-` 列举）说明"做了什么"和"为什么"。
+
+**示例**：
+
+```
+feat(clog): 添加错误堆栈跟踪和最佳实践文档
+
+- 为 Error 和 ErrorWithCode 字段实现运行时堆栈跟踪收集
+- 在设计文档中添加全面的最佳实践部分
+- 修复自定义类型与 slog 级别之间的映射不一致问题
+- 更新默认日志器配置，使用无颜色的控制台格式
+```

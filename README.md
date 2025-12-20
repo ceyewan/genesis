@@ -1,30 +1,30 @@
 # Genesis
 
-> 一个轻量级、标准化、高可扩展的 Go 微服务基座库。
+> 一个轻量级、标准化、高可扩展的 Go 微服务组件库。
 
-Genesis 旨在为 Go 微服务开发提供一套**统一的架构规范**和**开箱即用的组件集合**。它通过分层设计和依赖注入，帮助开发者快速构建健壮、可维护的微服务应用。
+Genesis 旨在为 Go 微服务开发提供一套**统一的架构规范**和**开箱即用的组件集合**。它通过显式依赖注入和扁平化设计，帮助开发者快速构建健壮、可维护的微服务应用。
+
+**Genesis 不是框架**——我们提供积木，用户自己搭建。
 
 ## ✨ 核心特性
 
-* **标准化日志 (clog):** 基于 `slog`，支持 Context 字段自动提取、多级命名空间。
-* **统一配置中心 (config):** 通过 `pkg/config` 将本地文件、环境变量和远程配置中心汇总为强类型 `AppConfig`，支持热更新。
-* **统一连接管理 (connector):** 统一管理 MySQL, Redis, Etcd 等基础设施连接，支持复用和健康检查。
-* **可观测性 (telemetry):** 基于 OpenTelemetry 的 Metrics & Tracing，与 clog 深度集成，支持全链路观测。
-* **生命周期管理 (container):** 极简的 DI 容器，确保组件有序启动和优雅停机。
-* **增强型 DB 组件:** 基于 GORM，无缝集成 `sharding` 分库分表，提供统一事务接口。
-* **分布式锁 (dlock):** 统一接口，支持 Redis/Etcd 后端，内置自动续期 (Watchdog)。
+* **标准化日志 (clog):** 基于 `slog`，支持 Context 字段自动提取、多级命名空间派生。
+* **统一配置 (config):** 强类型配置管理，支持多源加载。
+* **显式连接管理 (connector):** 统一管理 MySQL, Redis, Etcd, NATS 等基础设施连接。
+* **可观测性 (metrics):** 基于 OpenTelemetry 的指标收集，支持自动埋点。
+* **Go Native DI:** 弃用 DI 容器，拥抱原生的构造函数注入，依赖关系一目了然。
+* **增强型 DB 组件:** 基于 GORM，集成 `sharding` 分库分表。
+* **分布式锁 (dlock):** 统一接口，支持 Redis/Etcd 后端，内置自动续期。
 
 ## 📚 文档
 
 * [架构设计 (Architecture)](docs/genesis-design.md)
+* [重构计划 (Refactoring Plan)](docs/refactoring-plan.md)
 * [组件开发规范 (Component Spec)](docs/specs/component-spec.md)
-* [容器设计 (Container)](docs/container-design.md)
-* [配置中心设计 (Config)](docs/config-design.md)
-* [可观测性设计 (Telemetry)](docs/telemetry-design.md)
-* [日志库设计 (Clog)](docs/clog-design.md)
-* [连接器设计 (Connector)](docs/connector-design.md)
-* [数据库组件设计 (DB)](docs/db-design.md)
-* [分布式锁设计 (DLock)](docs/dlock-design.md)
+* [配置中心设计 (Config)](docs/foundation/config-design.md)
+* [日志库设计 (Clog)](docs/foundation/clog-design.md)
+* [连接器设计 (Connector)](docs/infrastructure/connector-design.md)
+* [分布式锁设计 (DLock)](docs/business/dlock-design.md)
 
 ## 🚀 快速开始
 
@@ -33,55 +33,56 @@ package main
 
 import (
     "context"
-    "genesis/pkg/clog"
-    "genesis/pkg/config"
-    "genesis/pkg/container"
+    "os/signal"
+    "syscall"
+
+    "github.com/ceyewan/genesis/pkg/clog"
+    "github.com/ceyewan/genesis/pkg/config"
+    "github.com/ceyewan/genesis/pkg/connector"
+    "github.com/ceyewan/genesis/pkg/db"
+    "github.com/ceyewan/genesis/pkg/dlock"
 )
 
 func main() {
-    ctx := context.Background()
+    ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer cancel()
 
-    // 1. 使用 config.Manager 加载应用配置并绑定到 AppConfig
-    mgr := config.NewManager(config.WithPaths("./config"))
-    if err := mgr.Load(ctx); err != nil {
-        panic(err)
-    }
-    var appCfg AppConfig
-    if err := mgr.Unmarshal(&appCfg); err != nil {
-        panic(err)
-    }
+    // 1. 加载配置
+    cfg, _ := config.Load("config.yaml")
 
-    // 2. 初始化应用级 Logger（附加 app namespace）
-    logger := clog.New(appCfg.Log).WithNamespace(appCfg.App.Namespace)
+    // 2. 初始化 Logger
+    logger, _ := clog.New(&cfg.Log)
 
-    // 3. 初始化容器（统一管理连接器与组件的生命周期）
-    app, err := container.New(appCfg, container.WithLogger(logger), container.WithConfigManager(mgr))
-    if err != nil {
-        panic(err)
-    }
-    defer app.Close() // 优雅停机
+    // 3. 创建连接器 (defer 自动释放资源)
+    redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+    defer redisConn.Close()
 
-    // 4. 使用组件
-    app.Log.InfoContext(ctx, "service started")
+    mysqlConn, _ := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
+    defer mysqlConn.Close()
 
-    // 使用 DB
-    var user User
-    app.DB.DB(ctx).First(&user, 1)
+    // 4. 初始化组件 (显式注入依赖)
+    database, _ := db.New(mysqlConn, &cfg.DB, db.WithLogger(logger))
+    locker, _ := dlock.NewRedis(redisConn, &cfg.DLock, dlock.WithLogger(logger))
 
-    // 使用分布式锁
-    if err := app.DLock.Lock(ctx, "resource_key"); err == nil {
-        defer app.DLock.Unlock(ctx, "resource_key")
-        // 业务逻辑...
+    // 5. 使用组件
+    logger.InfoContext(ctx, "service started")
+    
+    var user struct{ ID int64 }
+    database.DB(ctx).First(&user, 1)
+
+    if err := locker.Lock(ctx, "my_resource"); err == nil {
+        defer locker.Unlock(ctx, "my_resource")
+        // do business logic...
     }
 }
 ```
 
 ## 🗺️ 路线图 (Roadmap)
 
-* [x] **Core:** Log, Config, Telemetry, Container, Connector
-* [x] **Storage:** DB (Sharding), DLock
-* [ ] **Middleware:** Cache, MQ, ID Gen
-* [ ] **Governance:** Rate Limit, Idempotency, Registry, Circuit Breaker
+* [x] **Base (L0):** Log, Config, Metrics, XErrors
+* [x] **Infra (L1):** Connector, DB
+* [x] **Business (L2):** DLock, Cache, MQ, IDGen, Idempotency
+* [ ] **Governance (L3):** Auth (Refactoring), Rate Limit, Circuit Breaker, Registry
 
 ## 📄 License
 
