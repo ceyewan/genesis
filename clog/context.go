@@ -3,19 +3,17 @@ package clog
 import (
 	"context"
 	"strings"
-
-	"github.com/ceyewan/genesis/clog/types"
 )
 
-// extractContextFields 从 context 中提取配置的字段，并添加到 LogBuilder 中。
-func extractContextFields(ctx context.Context, option *types.Option, builder *types.LogBuilder) {
-	if ctx == nil || option == nil || len(option.ContextFields) == 0 {
+// extractContextFields 从 context 中提取配置的字段，并添加到 map 中。
+func extractContextFields(ctx context.Context, options *options, data map[string]any) {
+	if ctx == nil || options == nil || len(options.contextFields) == 0 {
 		return
 	}
 
-	prefix := option.ContextPrefix
+	prefix := options.contextPrefix
 
-	for _, cf := range option.ContextFields {
+	for _, cf := range options.contextFields {
 		val := ctx.Value(cf.Key)
 
 		if val == nil {
@@ -43,7 +41,7 @@ func extractContextFields(ctx context.Context, option *types.Option, builder *ty
 			if !strings.HasPrefix(fieldName, prefix) {
 				fieldName = prefix + fieldName
 			}
-			builder.Data[fieldName] = extractedVal
+			data[fieldName] = extractedVal
 		}
 	}
 }

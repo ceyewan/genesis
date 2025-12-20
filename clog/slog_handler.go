@@ -1,4 +1,4 @@
-package slogadapter
+package clog
 
 import (
 	"bytes"
@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/ceyewan/genesis/clog/types"
 )
 
 // clogHandler 封装了底层的 slog.Handler，并处理 Source 路径裁剪和动态级别调整。
@@ -22,14 +20,21 @@ type clogHandler struct {
 	sourceRoot string
 }
 
-// NewHandler 创建并返回一个适配 clog 配置的 slog.Handler。
-func NewHandler(config *types.Config, option *types.Option) (slog.Handler, error) {
+// newHandler 创建并返回一个适配 clog 配置的 slog.Handler（内部使用）。
+func newHandler(config *Config, options *options) (slog.Handler, error) {
 	var w io.Writer
 	switch strings.ToLower(config.Output) {
 	case "stdout":
 		w = os.Stdout
 	case "stderr":
 		w = os.Stderr
+	case "buffer":
+		// 测试专用，使用缓冲区
+		if options.buffer != nil {
+			w = options.buffer
+		} else {
+			return nil, fmt.Errorf("buffer output requires options.buffer to be set")
+		}
 	default:
 		// 假设是文件路径
 		f, err := os.OpenFile(config.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -143,19 +148,19 @@ func NewHandler(config *types.Config, option *types.Option) (slog.Handler, error
 }
 
 // SetLevel 动态调整日志级别
-func (h *clogHandler) SetLevel(level types.Level) error {
-	// 根据types.Level映射到slog.Level
+func (h *clogHandler) SetLevel(level Level) error {
+	// 根据Level映射到slog.Level
 	var slogLevel slog.Level
 	switch level {
-	case types.DebugLevel:
+	case DebugLevel:
 		slogLevel = slog.LevelDebug
-	case types.InfoLevel:
+	case InfoLevel:
 		slogLevel = slog.LevelInfo
-	case types.WarnLevel:
+	case WarnLevel:
 		slogLevel = slog.LevelWarn
-	case types.ErrorLevel:
+	case ErrorLevel:
 		slogLevel = slog.LevelError
-	case types.FatalLevel:
+	case FatalLevel:
 		slogLevel = slog.LevelError + 4
 	}
 
@@ -312,9 +317,7 @@ func (h *coloredTextHandler) colorizeOutput(output string, level slog.Level) str
 			result.WriteString(fmt.Sprintf("%s%s%s%s%s%s%s%s\t", levelColor, key, ansiReset, levelColor, "=", ansiReset, levelStr, ansiReset))
 		case "caller":
 			// caller：处理 genesis 前缀去掉，key 和 = 符号暗淡
-			if strings.HasPrefix(value, "genesis/") {
-				value = strings.TrimPrefix(value, "genesis/")
-			}
+			value = strings.TrimPrefix(value, "genesis/")
 			result.WriteString(fmt.Sprintf("%s%s%s%s%s%s%s", ansiDim, key, ansiReset, ansiDim, "=", ansiReset, value))
 		case "msg":
 			// 消息：根据日志级别着色，key 和 = 符号同色

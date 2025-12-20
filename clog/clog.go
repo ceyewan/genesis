@@ -1,87 +1,47 @@
 package clog
 
-import (
-	"fmt"
+import "fmt"
 
-	"github.com/ceyewan/genesis/clog/types"
-	"github.com/ceyewan/genesis/internal/clog"
-)
-
-// 重新导出types包中的类型，方便使用
-type (
-	Logger       = types.Logger
-	Config       = types.Config
-	Option       = types.Option
-	Field        = types.Field
-	Level        = types.Level
-	LogBuilder   = types.LogBuilder
-	ContextField = types.ContextField
-)
-
-// 重新导出级别常量
-const (
-	DebugLevel = types.DebugLevel
-	InfoLevel  = types.InfoLevel
-	WarnLevel  = types.WarnLevel
-	ErrorLevel = types.ErrorLevel
-	FatalLevel = types.FatalLevel
-)
-
-// 重新导出字段构造函数
-var (
-	String        = types.String
-	Int           = types.Int
-	Int64         = types.Int64
-	Float64       = types.Float64
-	Bool          = types.Bool
-	Duration      = types.Duration
-	Time          = types.Time
-	Any           = types.Any
-	Error         = types.Error
-	ErrorWithCode = types.ErrorWithCode
-	RequestID     = types.RequestID
-	UserID        = types.UserID
-	TraceID       = types.TraceID
-	Component     = types.Component
-	ParseLevel    = types.ParseLevel
-)
-
-// New 创建一个新的Logger实例
-func New(config *Config, option *Option) (Logger, error) {
+// New 创建一个新的 Logger 实例
+//
+// config 为日志基本配置，opts 为函数式选项。
+//
+// 基本使用：
+//
+//	logger, _ := clog.New(&clog.Config{
+//	    Level:  "info",
+//	    Format: "console",
+//	    Output: "stdout",
+//	})
+//
+// 使用选项：
+//
+//	logger, _ := clog.New(&clog.Config{Level: "info"},
+//	    clog.WithNamespace("my-service"),
+//	    clog.WithStandardContext(),
+//	)
+//
+// 参数：
+//
+//	config - 日志配置，如果为 nil 会使用默认配置
+//	opts   - 函数式选项列表，用于命名空间、Context 字段等配置
+//
+// 返回：
+//
+//	Logger - 日志实例
+//	error  - 配置验证错误
+func New(config *Config, opts ...Option) (Logger, error) {
 	if config == nil {
 		config = &Config{}
 	}
-	if option == nil {
-		option = &Option{}
-	}
 
-	if err := config.Validate(); err != nil {
+	if err := config.validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
-	option.SetDefaults()
+	// 应用选项
+	options := applyOptions(opts...)
 
-	// 调用internal包的实现
-	return clog.NewLogger(config, option)
-}
-
-// Default 创建一个默认配置的Logger
-func Default() Logger {
-	logger, _ := New(&Config{
-		Level:       "info",
-		Format:      "console",
-		Output:      "stdout",
-		AddSource:   true,  // 默认启用caller信息
-		EnableColor: false, // 默认不启用颜色
-	}, &Option{})
-	return logger
-}
-
-// Must 类似New，但在出错时panic
-func Must(config *Config, option *Option) Logger {
-	logger, err := New(config, option)
-	if err != nil {
-		panic(err)
-	}
-	return logger
+	// 调用内部实现
+	return newLogger(config, options)
 }

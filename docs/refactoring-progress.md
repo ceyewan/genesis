@@ -36,9 +36,9 @@
 ### Level 0: Base
 
 - [x] **clog**:
-  - 代码已对齐 `slog`
+  - 代码已对齐 `slog`，采用扁平化结构
   - 示例位于 `examples/clog`
-  - 文档 `docs/foundation/clog-design.md` 已同步
+  - 文档 `clog/README.md` 已更新，包含完整 API 参考
 - [x] **config**:
   - 代码支持强类型绑定
   - 示例位于 `examples/config`
@@ -82,7 +82,8 @@
 
 ## 重构标准规范 (DoD)
 
-- **扁平化**: 消除 `pkg/*/types`，导出类型直接在 `pkg/*` 下。
+- **扁平化**: 消除 `types` 子包，导出类型直接在组件根目录下。
 - **显式 DI**: 构造函数 `New(conn, cfg, ...opts)`。
 - **资源所有权**: 组件 `Close()` 为 no-op（借用模式）。
 - **示例一致性**: `examples/` 必须能够直接运行并展示核心用法。
+- **文档完整性**: 组件 README.md 包含完整的使用示例和 API 参考。
