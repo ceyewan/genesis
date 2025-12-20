@@ -9,12 +9,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/ceyewan/genesis/pkg/clog"
-	clogtypes "github.com/ceyewan/genesis/pkg/clog/types"
-	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/ratelimit"
-	"github.com/ceyewan/genesis/pkg/ratelimit/adapter"
-	"github.com/ceyewan/genesis/pkg/ratelimit/types"
+	"github.com/ceyewan/genesis/clog"
+	clogtypes "github.com/ceyewan/genesis/clog/types"
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/ratelimit"
+	"github.com/ceyewan/genesis/ratelimit/adapter"
+	"github.com/ceyewan/genesis/ratelimit/types"
 )
 
 func main() {

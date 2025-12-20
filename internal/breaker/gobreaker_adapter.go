@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/breaker/types"
-	"github.com/ceyewan/genesis/pkg/clog"
-	metrics "github.com/ceyewan/genesis/pkg/metrics"
+	"github.com/ceyewan/genesis/breaker/types"
+	"github.com/ceyewan/genesis/clog"
+	metrics "github.com/ceyewan/genesis/metrics"
 	"github.com/sony/gobreaker/v2"
 )
 

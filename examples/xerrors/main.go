@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ceyewan/genesis/pkg/xerrors"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 func main() {

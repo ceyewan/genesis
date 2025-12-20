@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/metrics"
+	"github.com/ceyewan/genesis/metrics"
 	"github.com/gin-gonic/gin"
 )
 

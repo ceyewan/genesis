@@ -9,10 +9,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/ceyewan/genesis/pkg/breaker"
-	"github.com/ceyewan/genesis/pkg/breaker/adapter"
-	"github.com/ceyewan/genesis/pkg/breaker/types"
-	"github.com/ceyewan/genesis/pkg/clog"
+	"github.com/ceyewan/genesis/breaker"
+	"github.com/ceyewan/genesis/breaker/adapter"
+	"github.com/ceyewan/genesis/breaker/types"
+	"github.com/ceyewan/genesis/clog"
 )
 
 // 模拟的 gRPC 服务定义（实际使用时需要导入真实的 protobuf 定义）

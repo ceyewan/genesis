@@ -36,11 +36,11 @@ import (
     "os/signal"
     "syscall"
 
-    "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/config"
-    "github.com/ceyewan/genesis/pkg/connector"
-    "github.com/ceyewan/genesis/pkg/db"
-    "github.com/ceyewan/genesis/pkg/dlock"
+    "github.com/ceyewan/genesis/clog"
+    "github.com/ceyewan/genesis/config"
+    "github.com/ceyewan/genesis/connector"
+    "github.com/ceyewan/genesis/db"
+    "github.com/ceyewan/genesis/dlock"
 )
 
 func main() {

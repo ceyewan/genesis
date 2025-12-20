@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/idempotency/types"
 	"github.com/ceyewan/genesis/internal/idempotency/store"
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/idempotency/types"
-	metrics "github.com/ceyewan/genesis/pkg/metrics"
+	metrics "github.com/ceyewan/genesis/metrics"
 )
 
 // Idempotent 幂等组件实现

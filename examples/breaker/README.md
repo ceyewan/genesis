@@ -35,8 +35,8 @@ go run grpc_example.go
 
 ```go
 import (
-    "github.com/ceyewan/genesis/pkg/breaker"
-    "github.com/ceyewan/genesis/pkg/breaker/types"
+    "github.com/ceyewan/genesis/breaker"
+    "github.com/ceyewan/genesis/breaker/types"
 )
 
 b, err := breaker.New(&types.Config{

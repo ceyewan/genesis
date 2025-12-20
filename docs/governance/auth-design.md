@@ -137,7 +137,7 @@ func (c *Config) SetDefaults() {
 
 ```go
 // pkg/auth/errors.go
-import "github.com/ceyewan/genesis/pkg/xerrors"
+import "github.com/ceyewan/genesis/xerrors"
 
 var (
     ErrInvalidToken     = xerrors.New("auth: invalid token")
@@ -168,9 +168,9 @@ func Must(cfg *Config, opts ...Option) Authenticator
 ```go
 // pkg/auth/options.go
 import (
-    "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/metrics"
-    "github.com/ceyewan/genesis/pkg/connector"
+    "github.com/ceyewan/genesis/clog"
+    "github.com/ceyewan/genesis/metrics"
+    "github.com/ceyewan/genesis/connector"
 )
 
 type options struct {

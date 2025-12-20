@@ -8,10 +8,10 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/dlock/types"
-	"github.com/ceyewan/genesis/pkg/metrics"
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/dlock/types"
+	"github.com/ceyewan/genesis/metrics"
 )
 
 type EtcdLocker struct {

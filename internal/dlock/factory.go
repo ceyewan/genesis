@@ -3,12 +3,12 @@ package dlock
 import (
 	"fmt"
 
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/dlock/types"
 	"github.com/ceyewan/genesis/internal/dlock/etcd"
 	"github.com/ceyewan/genesis/internal/dlock/redis"
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/dlock/types"
-	"github.com/ceyewan/genesis/pkg/metrics"
+	"github.com/ceyewan/genesis/metrics"
 )
 
 // NewRedis 创建 Redis 分布式锁

@@ -40,10 +40,10 @@ import (
     "os/signal"
     "syscall"
 
-    "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/config"
-    "github.com/ceyewan/genesis/pkg/connector"
-    "github.com/ceyewan/genesis/pkg/dlock"
+    "github.com/ceyewan/genesis/clog"
+    "github.com/ceyewan/genesis/config"
+    "github.com/ceyewan/genesis/connector"
+    "github.com/ceyewan/genesis/dlock"
 )
 
 func main() {
@@ -101,7 +101,7 @@ Genesis 采用四层扁平化架构：
 #### 基本用法
 
 ```go
-import "github.com/ceyewan/genesis/pkg/clog"
+import "github.com/ceyewan/genesis/clog"
 
 // 创建默认 Logger
 logger := clog.Default()
@@ -190,7 +190,7 @@ logger.Error("business logic error",
 `config` 组件提供统一的配置管理能力，支持多源加载（YAML/JSON、环境变量、.env）和热更新。
 
 ```go
-import "github.com/ceyewan/genesis/pkg/config"
+import "github.com/ceyewan/genesis/config"
 
 // 快捷方式：创建并加载配置
 loader := config.MustLoad(
@@ -351,7 +351,7 @@ MYAPP_CLOG_LEVEL=debug
 `xerrors` 是 Genesis 的统一错误处理组件，提供标准化的错误创建、包装和检查能力。
 
 ```go
-import "github.com/ceyewan/genesis/pkg/xerrors"
+import "github.com/ceyewan/genesis/xerrors"
 ```
 
 #### Sentinel Errors
@@ -490,7 +490,7 @@ var (
 `connector` 是 Genesis 基础设施层的核心组件，负责管理与外部服务（MySQL、Redis、Etcd、NATS）的原始连接。提供类型安全的客户端访问、健康检查与连接监控。
 
 ```go
-import "github.com/ceyewan/genesis/pkg/connector"
+import "github.com/ceyewan/genesis/connector"
 
 // Redis 连接
 redisConn, err := connector.NewRedis(&connector.RedisConfig{
@@ -618,7 +618,7 @@ connector.WithMeter(meter)    // 注入指标收集
 基于 GORM 的数据库组件，支持分库分表和统一事务接口。
 
 ```go
-import "github.com/ceyewan/genesis/pkg/db"
+import "github.com/ceyewan/genesis/db"
 
 database, err := db.New(mysqlConn, &cfg.DB,
     db.WithLogger(logger),
@@ -641,7 +641,7 @@ err := database.Transaction(ctx, func(tx *gorm.DB) error {
 分布式锁组件，支持 Redis 和 Etcd 后端，内置自动续期。
 
 ```go
-import "github.com/ceyewan/genesis/pkg/dlock"
+import "github.com/ceyewan/genesis/dlock"
 
 // Redis 分布式锁
 locker, err := dlock.NewRedis(redisConn, &cfg.DLock,
@@ -670,7 +670,7 @@ if err := locker.Lock(ctx, "resource_key"); err == nil {
 统一缓存接口，支持多种后端。
 
 ```go
-import "github.com/ceyewan/genesis/pkg/cache"
+import "github.com/ceyewan/genesis/cache"
 
 cacheClient, err := cache.New(redisConn, &cfg.Cache,
     cache.WithLogger(logger),
@@ -693,7 +693,7 @@ err = cacheClient.Delete(ctx, "user:123")
 `idgen` 组件提供多种 ID 生成策略，包括雪花算法、UUID 和基于 Redis 的序列号生成器。
 
 ```go
-import "github.com/ceyewan/genesis/pkg/idgen"
+import "github.com/ceyewan/genesis/idgen"
 ```
 
 #### Snowflake ID 生成器
@@ -812,7 +812,7 @@ orderBatch, _ := orderGen.NextBatch(ctx, "daily", 1000) // [1000, 2000, ..., 100
 `mq` 组件基于 NATS 实现，支持 Core 和 JetStream 两种模式，提供高性能的消息发布订阅能力。
 
 ```go
-import "github.com/ceyewan/genesis/pkg/mq"
+import "github.com/ceyewan/genesis/mq"
 ```
 
 #### 基本使用
@@ -929,7 +929,7 @@ userData := response.Data()
 `auth` 组件提供 JWT（JSON Web Token）身份认证能力，支持 Token 生成、验证和刷新。
 
 ```go
-import "github.com/ceyewan/genesis/pkg/auth"
+import "github.com/ceyewan/genesis/auth"
 
 // 创建认证器配置
 cfg := &auth.Config{
@@ -1085,7 +1085,7 @@ if err != nil {
 ### 快速开始
 
 ```go
-import "github.com/ceyewan/genesis/pkg/registry"
+import "github.com/ceyewan/genesis/registry"
 
 // 创建 Etcd 连接器
 etcdConn, _ := connector.NewEtcd(&connector.EtcdConfig{

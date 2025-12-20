@@ -3,7 +3,7 @@ package clog
 import (
 	"strings"
 
-	"github.com/ceyewan/genesis/pkg/clog/types"
+	"github.com/ceyewan/genesis/clog/types"
 )
 
 const NamespaceKey = "namespace"

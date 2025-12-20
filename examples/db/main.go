@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/db"
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/db"
 	"github.com/joho/godotenv"
 	"gorm.io/gorm"
 )

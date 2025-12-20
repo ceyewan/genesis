@@ -174,8 +174,8 @@ func WithTracer(tracer telemetry.Tracer) Option
 
 ```go
 import (
-    "github.com/ceyewan/genesis/pkg/idgen"
-    "github.com/ceyewan/genesis/pkg/connector"
+    "github.com/ceyewan/genesis/idgen"
+    "github.com/ceyewan/genesis/connector"
 )
 
 // 1. 创建连接器 (Redis 模式需要)
@@ -213,8 +213,8 @@ fmt.Printf("Generated UUID: %s\n", uuid)
 
 ```go
 import (
-    "github.com/ceyewan/genesis/pkg/idgen"
-    "github.com/ceyewan/genesis/pkg/connector"
+    "github.com/ceyewan/genesis/idgen"
+    "github.com/ceyewan/genesis/connector"
 )
 
 // 1. 创建 Redis 连接器
@@ -245,8 +245,8 @@ batchSeqs, _ := gen.NextBatch(ctx, "alice", 5)  // [3, 4, 5, 6, 7]
 
 ```go
 import (
-    "github.com/ceyewan/genesis/pkg/container"
-    "github.com/ceyewan/genesis/pkg/idgen"
+    "github.com/ceyewan/genesis/container"
+    "github.com/ceyewan/genesis/idgen"
 )
 
 // 1. 创建 Container

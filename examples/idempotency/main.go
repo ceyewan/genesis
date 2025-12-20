@@ -9,11 +9,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/ceyewan/genesis/pkg/clog"
-	clogtypes "github.com/ceyewan/genesis/pkg/clog/types"
-	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/idempotency"
-	"github.com/ceyewan/genesis/pkg/idempotency/adapter"
+	"github.com/ceyewan/genesis/clog"
+	clogtypes "github.com/ceyewan/genesis/clog/types"
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/idempotency"
+	"github.com/ceyewan/genesis/idempotency/adapter"
 )
 
 func main() {

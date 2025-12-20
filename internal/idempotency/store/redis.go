@@ -8,8 +8,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/idempotency/types"
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/idempotency/types"
 )
 
 // Record 存储在 Redis 中的幂等记录结构

@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/config"
+	"github.com/ceyewan/genesis/config"
 )
 
 // AppConfig 应用配置结构体

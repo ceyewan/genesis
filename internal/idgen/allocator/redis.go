@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/connector"
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 )
 
 // RedisAllocator Redis 分配器

@@ -7,8 +7,8 @@ import (
 	"runtime"
 	"time"
 
-	slogadapter "github.com/ceyewan/genesis/internal/clog/slog"
-	"github.com/ceyewan/genesis/pkg/clog/types"
+	slogadapter "github.com/ceyewan/genesis/clog/internal/clog/slog"
+	"github.com/ceyewan/genesis/clog/types"
 )
 
 // loggerImpl 是Logger接口的具体实现

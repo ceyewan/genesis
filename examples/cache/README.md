@@ -141,7 +141,7 @@ pkg/cache/
 
 | 特性 | 旧版本 | 新版本 |
 |------|--------|--------|
-| 导入路径 | `github.com/ceyewan/genesis/pkg/cache/types` | `github.com/ceyewan/genesis/pkg/cache` |
+| 导入路径 | `github.com/ceyewan/genesis/cache/types` | `github.com/ceyewan/genesis/cache` |
 | 依赖注入 | Container 模式 | Go Native DI 模式 |
 | 资源管理 | 不明确 | Connector 拥有连接，Cache 为 no-op |
 | 目录结构 | `cache/types/` 子包 | 扁平化单层结构 |

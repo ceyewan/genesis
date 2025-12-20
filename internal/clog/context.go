@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/ceyewan/genesis/pkg/clog/types"
+	"github.com/ceyewan/genesis/clog/types"
 )
 
 // extractContextFields 从 context 中提取配置的字段，并添加到 LogBuilder 中。

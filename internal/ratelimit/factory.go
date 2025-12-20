@@ -3,12 +3,12 @@ package ratelimit
 import (
 	"fmt"
 
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/internal/ratelimit/distributed"
 	"github.com/ceyewan/genesis/internal/ratelimit/standalone"
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/connector"
-	metrics "github.com/ceyewan/genesis/pkg/metrics"
-	"github.com/ceyewan/genesis/pkg/ratelimit/types"
+	metrics "github.com/ceyewan/genesis/metrics"
+	"github.com/ceyewan/genesis/ratelimit/types"
 )
 
 // New 创建限流器实例

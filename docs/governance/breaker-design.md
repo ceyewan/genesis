@@ -288,7 +288,7 @@ import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/codes"
     "google.golang.org/grpc/status"
-    "github.com/ceyewan/genesis/pkg/breaker/types"
+    "github.com/ceyewan/genesis/breaker/types"
 )
 
 // UnaryClientInterceptor 创建 gRPC 客户端熔断拦截器
@@ -408,8 +408,8 @@ func defaultInterceptorConfig() *interceptorConfig {
 package breaker
 
 import (
-    "github.com/ceyewan/genesis/pkg/breaker/types"
-    "github.com/ceyewan/genesis/pkg/clog"
+    "github.com/ceyewan/genesis/breaker/types"
+    "github.com/ceyewan/genesis/clog"
     internalbreaker "github.com/ceyewan/genesis/internal/breaker"
 )
 
@@ -477,8 +477,8 @@ func validatePolicy(p *types.Policy) error {
 package breaker
 
 import (
-    "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/telemetry/types"
+    "github.com/ceyewan/genesis/clog"
+    "github.com/ceyewan/genesis/telemetry/types"
 )
 
 type options struct {
@@ -532,9 +532,9 @@ import (
     "context"
     "time"
 
-    "github.com/ceyewan/genesis/pkg/breaker"
-    "github.com/ceyewan/genesis/pkg/breaker/types"
-    "github.com/ceyewan/genesis/pkg/clog"
+    "github.com/ceyewan/genesis/breaker"
+    "github.com/ceyewan/genesis/breaker/types"
+    "github.com/ceyewan/genesis/clog"
 )
 
 func main() {
@@ -604,10 +604,10 @@ import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
 
-    "github.com/ceyewan/genesis/pkg/breaker"
-    "github.com/ceyewan/genesis/pkg/breaker/adapter"
-    "github.com/ceyewan/genesis/pkg/breaker/types"
-    "github.com/ceyewan/genesis/pkg/clog"
+    "github.com/ceyewan/genesis/breaker"
+    "github.com/ceyewan/genesis/breaker/adapter"
+    "github.com/ceyewan/genesis/breaker/types"
+    "github.com/ceyewan/genesis/clog"
 )
 
 func main() {

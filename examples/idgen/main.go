@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/idgen"
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/idgen"
 )
 
 func main() {
@@ -87,7 +87,7 @@ func snowflakeRedisExample() {
 		},
 		Addr:         "127.0.0.1:6379",
 		Password:     os.Getenv("GENESIS_REDIS_PASSWORD"), // 从环境变量读取密码
-		DialTimeout:  2 * time.Second,                    // 快速失败
+		DialTimeout:  2 * time.Second,                     // 快速失败
 		ReadTimeout:  2 * time.Second,
 		WriteTimeout: 2 * time.Second,
 	}
@@ -282,8 +282,8 @@ func sequenceExample() {
 	fmt.Println("\n=== 业务流水号场景 ===")
 	businessCfg := &idgen.SequenceConfig{
 		KeyPrefix: "business:seq",
-		Step:      1000, // 步长 1000
-		MaxValue:  9999, // 最大值限制
+		Step:      1000,           // 步长 1000
+		MaxValue:  9999,           // 最大值限制
 		TTL:       24 * time.Hour, // 1天过期
 	}
 

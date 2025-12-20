@@ -178,8 +178,8 @@ return xerrors.Wrap(err, "failed")  // ✅ 清楚失败原因
 
 ```go
 import (
-    "github.com/ceyewan/genesis/pkg/xerrors"
-    "github.com/ceyewan/genesis/pkg/clog"
+    "github.com/ceyewan/genesis/xerrors"
+    "github.com/ceyewan/genesis/clog"
 )
 
 result, err := service.DoSomething(ctx)

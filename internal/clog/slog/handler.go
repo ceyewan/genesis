@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/clog/types"
+	"github.com/ceyewan/genesis/clog/types"
 )
 
 // clogHandler 封装了底层的 slog.Handler，并处理 Source 路径裁剪和动态级别调整。

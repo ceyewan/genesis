@@ -7,8 +7,8 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/connector"
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 )
 
 // EtcdAllocator Etcd 分配器

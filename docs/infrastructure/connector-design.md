@@ -181,7 +181,7 @@ type NATSConfig struct {
 
 ```go
 // pkg/connector/errors.go
-import "github.com/ceyewan/genesis/pkg/xerrors"
+import "github.com/ceyewan/genesis/xerrors"
 
 // Sentinel Errors
 var (
@@ -223,8 +223,8 @@ func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error)
 ```go
 // pkg/connector/options.go
 import (
-    "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/metrics"
+    "github.com/ceyewan/genesis/clog"
+    "github.com/ceyewan/genesis/metrics"
 )
 
 type options struct {
@@ -523,7 +523,7 @@ func main() {
 **现在**：所有内容在 `pkg/connector/` 下，用户只需一个导入：
 
 ```go
-import "github.com/ceyewan/genesis/pkg/connector"
+import "github.com/ceyewan/genesis/connector"
 
 conn, _ := connector.NewRedis(&connector.RedisConfig{...})
 ```

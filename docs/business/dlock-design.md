@@ -146,8 +146,8 @@ func WithTTL(d time.Duration) LockOption {
 package dlock
 
 import (
-    "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/telemetry/types"
+    "github.com/ceyewan/genesis/clog"
+    "github.com/ceyewan/genesis/telemetry/types"
 )
 
 // Option 组件初始化选项函数
@@ -307,9 +307,9 @@ import (
     "context"
     "time"
 
-    "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/connector"
-    "github.com/ceyewan/genesis/pkg/dlock"
+    "github.com/ceyewan/genesis/clog"
+    "github.com/ceyewan/genesis/connector"
+    "github.com/ceyewan/genesis/dlock"
 )
 
 func main() {
@@ -356,10 +356,10 @@ import (
     "context"
     "time"
 
-    "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/connector"
-    "github.com/ceyewan/genesis/pkg/container"
-    "github.com/ceyewan/genesis/pkg/dlock"
+    "github.com/ceyewan/genesis/clog"
+    "github.com/ceyewan/genesis/connector"
+    "github.com/ceyewan/genesis/container"
+    "github.com/ceyewan/genesis/dlock"
 )
 
 func main() {

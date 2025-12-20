@@ -7,10 +7,10 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/connector"
-	metrics "github.com/ceyewan/genesis/pkg/metrics"
-	"github.com/ceyewan/genesis/pkg/ratelimit/types"
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
+	metrics "github.com/ceyewan/genesis/metrics"
+	"github.com/ceyewan/genesis/ratelimit/types"
 )
 
 // luaScript 令牌桶算法的 Lua 脚本

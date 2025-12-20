@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/breaker/types"
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/metrics"
+	"github.com/ceyewan/genesis/breaker/types"
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/metrics"
 )
 
 // Manager 熔断器管理器

@@ -8,9 +8,9 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/ceyewan/genesis/pkg/clog"
-	metrics "github.com/ceyewan/genesis/pkg/metrics"
-	"github.com/ceyewan/genesis/pkg/ratelimit/types"
+	"github.com/ceyewan/genesis/clog"
+	metrics "github.com/ceyewan/genesis/metrics"
+	"github.com/ceyewan/genesis/ratelimit/types"
 )
 
 // limiterWrapper 包装 rate.Limiter 并记录最后访问时间

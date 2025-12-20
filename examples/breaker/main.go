@@ -6,9 +6,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/breaker"
-	"github.com/ceyewan/genesis/pkg/breaker/types"
-	"github.com/ceyewan/genesis/pkg/clog"
+	"github.com/ceyewan/genesis/breaker"
+	"github.com/ceyewan/genesis/breaker/types"
+	"github.com/ceyewan/genesis/clog"
 )
 
 func main() {

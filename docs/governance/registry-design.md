@@ -173,7 +173,7 @@ type Config struct {
 
 package registry
 
-import "github.com/ceyewan/genesis/pkg/xerrors"
+import "github.com/ceyewan/genesis/xerrors"
 
 var (
     // ErrServiceNotFound 服务不存在
@@ -197,8 +197,8 @@ var (
 package registry
 
 import (
-    "github.com/ceyewan/genesis/pkg/clog"
-    metrics "github.com/ceyewan/genesis/pkg/metrics"
+    "github.com/ceyewan/genesis/clog"
+    metrics "github.com/ceyewan/genesis/metrics"
 )
 
 // Option 组件初始化选项函数
@@ -366,10 +366,10 @@ import (
     "sync"
     "time"
 
-    "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/connector"
-    "github.com/ceyewan/genesis/pkg/metrics"
-    "github.com/ceyewan/genesis/pkg/xerrors"
+    "github.com/ceyewan/genesis/clog"
+    "github.com/ceyewan/genesis/connector"
+    "github.com/ceyewan/genesis/metrics"
+    "github.com/ceyewan/genesis/xerrors"
     clientv3 "go.etcd.io/etcd/client/v3"
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
@@ -484,9 +484,9 @@ import (
     "context"
     "time"
 
-    "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/connector"
-    "github.com/ceyewan/genesis/pkg/registry"
+    "github.com/ceyewan/genesis/clog"
+    "github.com/ceyewan/genesis/connector"
+    "github.com/ceyewan/genesis/registry"
 )
 
 func main() {
@@ -552,8 +552,8 @@ import (
     "context"
     "time"
 
-    "github.com/ceyewan/genesis/pkg/config"
-    "github.com/ceyewan/genesis/pkg/container"
+    "github.com/ceyewan/genesis/config"
+    "github.com/ceyewan/genesis/container"
 )
 
 func main() {

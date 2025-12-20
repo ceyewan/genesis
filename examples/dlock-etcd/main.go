@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/clog"
-	clogtypes "github.com/ceyewan/genesis/pkg/clog/types"
-	"github.com/ceyewan/genesis/pkg/connector"
-	"github.com/ceyewan/genesis/pkg/dlock"
+	"github.com/ceyewan/genesis/clog"
+	clogtypes "github.com/ceyewan/genesis/clog/types"
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/dlock"
 )
 
 func main() {

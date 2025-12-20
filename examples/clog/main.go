@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/clog"
+	"github.com/ceyewan/genesis/clog"
 )
 
 // 自定义错误类型

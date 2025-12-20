@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/cache"
-	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/connector"
+	"github.com/ceyewan/genesis/cache"
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/joho/godotenv"
 )
 

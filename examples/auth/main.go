@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ceyewan/genesis/pkg/auth"
-	"github.com/ceyewan/genesis/pkg/clog"
+	"github.com/ceyewan/genesis/auth"
+	"github.com/ceyewan/genesis/clog"
 )
 
 func main() {
