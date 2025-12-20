@@ -15,6 +15,7 @@
   - [db - 数据库组件](#db---数据库组件)
   - [dlock - 分布式锁](#dlock---分布式锁)
   - [cache - 缓存组件](#cache---缓存组件)
+  - [idgen - ID 生成器](#idgen---id-生成器)
   - [auth - 身份认证](#auth---身份认证)
 - [开发模式](#开发模式)
 - [最佳实践](#最佳实践)
@@ -684,6 +685,125 @@ found, err := cacheClient.Get(ctx, "user:123", &result)
 // 删除缓存
 err = cacheClient.Delete(ctx, "user:123")
 ```
+
+### idgen - ID 生成器
+
+`idgen` 组件提供多种 ID 生成策略，包括雪花算法、UUID 和基于 Redis 的序列号生成器。
+
+```go
+import "github.com/ceyewan/genesis/pkg/idgen"
+```
+
+#### Snowflake ID 生成器
+
+分布式唯一 ID 生成器，支持多种 WorkerID 分配策略：
+
+```go
+// 静态 WorkerID
+snowflakeCfg := &idgen.SnowflakeConfig{
+    Method:       "static",
+    WorkerID:     1,
+    DatacenterID: 1,
+}
+
+gen, err := idgen.NewSnowflake(snowflakeCfg, nil, nil)
+id, _ := gen.Int64()
+```
+
+#### UUID 生成器
+
+支持 v4（随机）和 v7（时间排序）两种格式：
+
+```go
+// UUID v4
+v4Cfg := &idgen.UUIDConfig{Version: "v4"}
+v4Gen, _ := idgen.NewUUID(v4Cfg)
+fmt.Printf("UUID v4: %s\n", v4Gen.String())
+
+// UUID v7 (时间排序)
+v7Cfg := &idgen.UUIDConfig{Version: "v7"}
+v7Gen, _ := idgen.NewUUID(v7Cfg)
+fmt.Printf("UUID v7: %s\n", v7Gen.String())
+```
+
+#### 序列号生成器（基于 Redis INCR）
+
+基于 Redis 的分布式序列号生成器，为不同业务场景提供独立的递增 ID：
+
+```go
+// 创建序列号生成器
+seqCfg := &idgen.SequenceConfig{
+    KeyPrefix: "im:msg_seq", // 键前缀
+    Step:      1,           // 步长（默认1）
+    MaxValue:  0,           // 最大值限制（0表示不限制）
+    TTL:       time.Hour,   // 过期时间（0表示永不过期）
+}
+
+seqGen, err := idgen.NewSequence(seqCfg, redisConn, idgen.WithLogger(logger))
+
+// 为不同用户生成消息序号
+ctx := context.Background()
+aliceMsg1, _ := seqGen.Next(ctx, "alice")    // Alice的消息序号: 1
+aliceMsg2, _ := seqGen.Next(ctx, "alice")    // Alice的消息序号: 2
+bobMsg1, _ := seqGen.Next(ctx, "bob")        // Bob的消息序号: 1
+
+// 批量生成序列号
+batchSeqs, _ := seqGen.NextBatch(ctx, "alice", 5) // [3, 4, 5, 6, 7]
+```
+
+#### 配置选项
+
+**SnowflakeConfig**：
+- `Method` - WorkerID 分配方式："static" | "ip_24" | "redis" | "etcd"
+- `WorkerID` - 手动指定的 WorkerID（method="static" 时）
+- `DatacenterID` - 数据中心 ID
+- `KeyPrefix` - Redis/Etcd 键前缀
+- `TTL` - 租约 TTL 秒数
+
+**SequenceConfig**：
+- `KeyPrefix` - 键前缀
+- `Step` - 步长（默认 1）
+- `MaxValue` - 最大值限制（0 表示不限制）
+- `TTL` - Redis 键过期时间（0 表示永不过期）
+
+#### 常见使用场景
+
+**IM 消息序列号**：
+```go
+// 为每个用户维护独立的消息序号
+msgCfg := &idgen.SequenceConfig{
+    KeyPrefix: "im:msg_seq",
+    Step:      1,
+    TTL:       time.Hour, // 1小时无活动后过期
+}
+
+msgGen, _ := idgen.NewSequence(msgCfg, redisConn)
+
+// Alice 发送消息
+aliceSeq1, _ := msgGen.Next(ctx, "alice") // 1
+aliceSeq2, _ := msgGen.Next(ctx, "alice") // 2
+
+// Bob 发送消息
+bobSeq1, _ := msgGen.Next(ctx, "bob")     // 1 (独立序列)
+```
+
+**业务流水号生成**：
+```go
+// 订单流水号
+orderCfg := &idgen.SequenceConfig{
+    KeyPrefix: "business:order",
+    Step:      1000,    // 步长1000，预分配段
+    MaxValue:  999999,  // 最大999999
+    TTL:       24 * time.Hour,
+}
+
+orderGen, _ := idgen.NewSequence(orderCfg, redisConn)
+
+// 批量获取流水号段
+orderBatch, _ := orderGen.NextBatch(ctx, "daily", 1000) // [1000, 2000, ..., 1000000]
+```
+
+> **详细信息**：参阅 [示例代码](examples/idgen) 了解完整的用法
 
 ### auth - 身份认证
 

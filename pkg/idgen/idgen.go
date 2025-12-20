@@ -32,7 +32,7 @@ type Int64Generator interface {
 
 // Config 是 ID 生成器的通用配置
 type Config struct {
-	// Mode 指定生成器模式: "snowflake" | "uuid"
+	// Mode 指定生成器模式: "snowflake" | "uuid" | "sequence"
 	Mode string `yaml:"mode" json:"mode"`
 
 	// Snowflake 雪花算法配置 (Mode="snowflake" 时必填)
@@ -40,6 +40,9 @@ type Config struct {
 
 	// UUID UUID 配置 (Mode="uuid" 时必填)
 	UUID *UUIDConfig `yaml:"uuid" json:"uuid"`
+
+	// Sequence 序列号生成器配置 (Mode="sequence" 时必填)
+	Sequence *SequenceConfig `yaml:"sequence" json:"sequence"`
 }
 
 // SnowflakeConfig 雪花算法配置
@@ -182,3 +185,4 @@ func NewUUID(cfg *UUIDConfig, opts ...Option) (Generator, error) {
 
 	return newUUID(cfg, opt.Logger, opt.Meter, opt.Tracer)
 }
+

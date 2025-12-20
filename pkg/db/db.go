@@ -16,7 +16,6 @@ type database struct {
 	client *gorm.DB
 	logger clog.Logger
 	meter  metrics.Meter
-	tracer interface{} // 暂时使用 interface{}，后续可以定义 Tracer 接口
 }
 
 // DB 定义了数据库组件的核心能力
@@ -90,7 +89,6 @@ func New(conn connector.MySQLConnector, cfg *Config, opts ...Option) (DB, error)
 		client: gormDB,
 		logger: opt.Logger,
 		meter:  opt.Meter,
-		tracer: opt.Tracer,
 	}, nil
 }
 
