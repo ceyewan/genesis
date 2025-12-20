@@ -27,7 +27,7 @@
 | **auth** | L3 | [x] | [x] | [x] | [x] | ✅ 完成 |
 | **ratelimit** | L3 | [ ] | [ ] | [ ] | [ ] | ⏳ 待重构 |
 | **breaker** | L3 | [ ] | [ ] | [ ] | [ ] | ⏳ 待重构 |
-| **registry** | L3 | [ ] | [ ] | [ ] | [ ] | ⏳ 待重构 |
+| **registry** | L3 | [x] | [x] | [ ] | [x] | ✅ 完成 |
 
 ---
 
@@ -70,6 +70,13 @@
   - [x] 示例更新 (examples/auth)
   - [x] 更新 `docs/governance/auth-design.md`
   - [x] 生成 API 文档
+- [x] **registry**:
+  - [x] 代码重构 (pkg/registry)
+  - [x] 示例更新 (examples/registry, examples/grpc-registry)
+  - [x] 生成 API 文档
+  - [x] 删除 types 子包，实现扁平化结构
+  - [x] 完整 Etcd 实现迁移，避免循环依赖
+  - [x] 完整 gRPC resolver 集成
 
 ---
 

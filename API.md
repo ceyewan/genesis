@@ -17,6 +17,7 @@
   - [cache - 缓存组件](#cache---缓存组件)
   - [idgen - ID 生成器](#idgen---id-生成器)
   - [mq - 消息队列](#mq---消息队列)
+  - [registry - 服务注册发现](#registry---服务注册发现)
   - [auth - 身份认证](#auth---身份认证)
 - [开发模式](#开发模式)
 - [最佳实践](#最佳实践)
@@ -1076,6 +1077,260 @@ if err != nil {
 ```
 
 > **详细信息**：参阅 [auth 设计文档](docs/governance/auth-design.md) 和 [示例代码](examples/auth)
+
+## Registry - 服务注册发现
+
+基于 Etcd 的服务注册发现组件，提供完整的微服务治理能力，包括服务注册、发现、健康检查和动态 gRPC 解析。
+
+### 快速开始
+
+```go
+import "github.com/ceyewan/genesis/pkg/registry"
+
+// 创建 Etcd 连接器
+etcdConn, _ := connector.NewEtcd(&connector.EtcdConfig{
+    Endpoints: []string{"localhost:2379"},
+    DialTimeout: 5 * time.Second,
+}, connector.WithLogger(logger))
+defer etcdConn.Close()
+
+// 建立连接
+ctx := context.Background()
+if err := etcdConn.Connect(ctx); err != nil {
+    panic(err)
+}
+
+// 创建注册中心
+reg, _ := registry.New(etcdConn, &registry.Config{
+    Namespace: "/genesis/services",
+    DefaultTTL: 30 * time.Second,
+}, registry.WithLogger(logger))
+defer reg.Close()
+
+// 启动服务
+reg.Start(ctx)
+
+// 注册服务实例
+instance := &registry.ServiceInstance{
+    ID:        "user-service-001",
+    Name:      "user-service",
+    Version:   "v1.0.0",
+    Endpoints: []string{"grpc://localhost:9001", "http://localhost:9002"},
+    Metadata: map[string]string{
+        "region": "us-west-1",
+        "zone":   "zone-a",
+    },
+}
+_ = reg.Register(ctx, instance, 30*time.Second)
+```
+
+### 接口定义
+
+```go
+type Registry interface {
+    // 注册服务实例
+    Register(ctx context.Context, service *ServiceInstance, ttl time.Duration) error
+
+    // 注销服务实例
+    Deregister(ctx context.Context, serviceID string) error
+
+    // 获取服务实例列表
+    GetService(ctx context.Context, serviceName string) ([]*ServiceInstance, error)
+
+    // 监听服务变化
+    Watch(ctx context.Context, serviceName string) (<-chan ServiceEvent, error)
+
+    // 获取 gRPC 连接
+    GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
+
+    // 生命周期管理
+    Start(ctx context.Context) error
+    Stop(ctx context.Context) error
+    Phase() int
+}
+```
+
+### 服务实例
+
+```go
+type ServiceInstance struct {
+    ID        string            // 服务实例唯一标识
+    Name      string            // 服务名称
+    Version   string            // 服务版本
+    Endpoints []string          // 服务端点列表
+    Metadata  map[string]string // 元数据信息
+}
+
+type ServiceEvent struct {
+    Type    EventType        // 事件类型
+    Service *ServiceInstance // 服务实例
+}
+
+type EventType int
+const (
+    EventTypePut EventType = iota // 服务注册/更新
+    EventTypeDelete               // 服务下线
+)
+```
+
+### 配置选项
+
+```go
+type Config struct {
+    Namespace        string        // 命名空间前缀
+    Schema          string        // gRPC resolver scheme
+    DefaultTTL      time.Duration // 默认租约时间
+    RetryInterval   time.Duration // 重试间隔
+    EnableCache     bool          // 是否启用缓存
+    CacheExpiration time.Duration // 缓存过期时间
+}
+```
+
+### 服务发现
+
+```go
+// 获取服务实例
+instances, err := reg.GetService(ctx, "user-service")
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, instance := range instances {
+    fmt.Printf("ID: %s, Endpoints: %v\n", instance.ID, instance.Endpoints)
+}
+```
+
+### 实时监听
+
+```go
+// 监听服务变化
+eventCh, err := reg.Watch(ctx, "user-service")
+if err != nil {
+    log.Fatal(err)
+}
+
+go func() {
+    for event := range eventCh {
+        switch event.Type {
+        case registry.EventTypePut:
+            fmt.Printf("服务注册: %s\n", event.Service.ID)
+        case registry.EventTypeDelete:
+            fmt.Printf("服务下线: %s\n", event.Service.ID)
+        }
+    }
+}()
+```
+
+### gRPC 动态发现
+
+```go
+// 直接获取 gRPC 连接，自动处理服务发现和负载均衡
+conn, err := reg.GetConnection(ctx, "user-service",
+    grpc.WithBlock(),
+    grpc.WithTimeout(5*time.Second),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer conn.Close()
+
+// 创建 gRPC 客户端
+client := pb.NewUserServiceClient(conn)
+resp, err := client.GetUser(ctx, &pb.GetUserRequest{UserId: "123"})
+```
+
+### 高级功能
+
+**自定义命名空间**:
+
+```go
+reg, _ := registry.New(etcdConn, &registry.Config{
+    Namespace: "/myapp/services", // 自定义命名空间
+    Schema:   "myapp",           // gRPC resolver scheme
+})
+```
+
+**健康检查与自动续期**:
+
+```go
+// 服务注册后会自动通过租约进行健康检查
+// 如果服务崩溃，租约过期后自动从注册中心移除
+
+// 手动注销
+_ = reg.Deregister(ctx, "user-service-001")
+```
+
+**服务元数据**:
+
+```go
+instance := &registry.ServiceInstance{
+    ID:      "api-gateway-001",
+    Name:    "api-gateway",
+    Metadata: map[string]string{
+        "version":     "v2.1.0",
+        "region":      "us-east-1",
+        "zone":        "zone-b",
+        "weight":      "10",        // 负载均衡权重
+        "protocol":    "grpc",
+        "health_path": "/health",
+    },
+}
+```
+
+**缓存机制**:
+
+```go
+reg, _ := registry.New(etcdConn, &registry.Config{
+    EnableCache:     true,
+    CacheExpiration: 30 * time.Second,
+})
+
+// 启用缓存后，服务发现会优先从本地缓存读取
+// 减少对 Etcd 的访问压力
+```
+
+### 错误处理
+
+```go
+// 使用 xerrors 进行错误处理
+switch {
+case errors.Is(err, registry.ErrServiceNotFound):
+    fmt.Println("服务不存在")
+case errors.Is(err, registry.ErrServiceAlreadyRegistered):
+    fmt.Println("服务已注册")
+case errors.Is(err, registry.ErrInvalidServiceInstance):
+    fmt.Println("服务实例无效")
+default:
+    fmt.Printf("其他错误: %v\n", err)
+}
+```
+
+### 最佳实践
+
+1. **服务命名**: 使用有意义的服务名，如 `user-service`、`order-service`
+2. **实例 ID**: 使用 `服务名-主机名-端口` 格式确保唯一性
+3. **端点协议**: 明确指定协议前缀 `grpc://`、`http://`、`https://`
+4. **元数据**: 利用元数据进行服务描述和路由决策
+5. **优雅关闭**: 在应用退出时主动注销服务
+
+### gRPC 集成
+
+Registry 完整集成了 gRPC 的 resolver 机制，支持：
+
+- **动态服务发现**: 自动发现服务实例变化
+- **负载均衡**: 在多个实例间进行负载分配
+- **故障转移**: 自动剔除不可用实例
+- **连接池管理**: 复用 gRPC 连接
+
+```go
+// 使用自定义 scheme 创建连接
+target := "etcd:///user-service"  // 格式: scheme:///service-name
+conn, err := grpc.Dial(target, grpc.WithDefaultServiceConfig(`{
+    "loadBalancingConfig": [{"round_robin":{}}]
+}`))
+```
+
+> **详细信息**：参阅 [registry 设计文档](docs/governance/registry-design.md) 和 [示例代码](examples/registry)、[gRPC 示例](examples/grpc-registry)
 
 ## 开发模式
 

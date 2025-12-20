@@ -14,41 +14,44 @@
 
 ## 2. 项目结构
 
-遵循框架整体的分层设计，API 与实现分离：
+采用四层扁平化架构，消除 types 子包，实现简洁的组织结构：
 
 ```text
 genesis/
 ├── pkg/
-│   └── registry/               # 公开 API 入口
-│       ├── registry.go         # 工厂函数 (New) + 类型导出
-│       ├── options.go          # Option 定义 (WithLogger, WithMeter, WithTracer)
-│       └── types/              # 类型定义
-│           ├── interface.go    # Registry 接口
-│           ├── service.go      # ServiceInstance 结构定义
-│           ├── config.go       # 配置定义
-│           └── errors.go       # 错误定义
-├── internal/
-│   └── registry/               # 内部实现
-│       └── etcd/               # Etcd 具体实现
-│           ├── registry.go     # 注册逻辑 (Lease, Put)
-│           ├── discovery.go    # 发现逻辑 (Get, Watch, Cache)
-│           ├── resolver.go     # gRPC Resolver Builder 实现
-│           └── watcher.go      # 监听器实现
+│   └── registry/               # 公开 API 和完整实现
+│       ├── registry.go         # 工厂函数和完整 Etcd 实现
+│       ├── interface.go        # Registry 接口定义
+│       ├── service.go          # ServiceInstance 和 ServiceEvent 结构
+│       ├── config.go           # Config 配置结构
+│       ├── errors.go           # xerrors 错误定义
+│       ├── options.go          # Option 模式实现
+│       └── resolver.go         # gRPC Resolver 实现
+├── examples/
+│   ├── registry/               # 基础使用示例
+│   └── grpc-registry/          # gRPC 集成示例
 └── ...
 ```
 
+**架构特点：**
+
+- **扁平化设计**：消除 `types/` 子包，所有类型定义在包根目录
+- **完整实现**：pkg 层包含完整的 Etcd 实现，无需 internal 层
+- **循环依赖避免**：通过直接在 pkg 中实现避免与 internal 的循环依赖
+- **统一导出**：通过 registry.go 统一导出所有公共类型和接口
+
 ## 3. 核心 API 设计
 
-核心定义位于 `pkg/registry/types/`。
+采用扁平化结构，所有类型定义直接在包根目录。
 
 ### 3.1. ServiceInstance 模型
 
 定义服务的元数据模型，兼容 gRPC 属性。
 
 ```go
-// pkg/registry/types/service.go
+// pkg/registry/service.go
 
-package types
+package registry
 
 // ServiceInstance 代表一个服务实例
 type ServiceInstance struct {
@@ -58,14 +61,28 @@ type ServiceInstance struct {
     Metadata  map[string]string `json:"metadata"`  // 元数据 (Region, Zone, Weight, Group 等)
     Endpoints []string          `json:"endpoints"` // 服务地址列表 (如 grpc://192.168.1.10:9090)
 }
+
+// ServiceEvent 服务变化事件
+type ServiceEvent struct {
+    Type    EventType        // 事件类型 (PUT/DELETE)
+    Service *ServiceInstance // 服务实例信息
+}
+
+// EventType 事件类型
+type EventType int
+
+const (
+    EventTypePut    EventType = iota // 服务注册或更新
+    EventTypeDelete                  // 服务注销
+)
 ```
 
 ### 3.2. 核心接口
 
 ```go
-// pkg/registry/types/interface.go
+// pkg/registry/interface.go
 
-package types
+package registry
 
 import (
     "context"
@@ -76,7 +93,7 @@ import (
 // Registry 服务注册与发现接口
 type Registry interface {
     // --- 服务注册 ---
-    
+
     // Register 注册服务实例
     // ctx: 上下文
     // service: 服务实例信息
@@ -88,7 +105,7 @@ type Registry interface {
     Deregister(ctx context.Context, serviceID string) error
 
     // --- 服务发现 ---
-    
+
     // GetService 获取服务实例列表
     // 优先读取本地缓存，缓存未命中或过期时查询注册中心
     GetService(ctx context.Context, serviceName string) ([]*ServiceInstance, error)
@@ -98,45 +115,31 @@ type Registry interface {
     Watch(ctx context.Context, serviceName string) (<-chan ServiceEvent, error)
 
     // --- gRPC 集成 ---
-    
+
     // GetConnection 获取到指定服务的 gRPC 连接
     // 内部封装了 Resolver 和 Balancer 的配置，提供开箱即用的连接对象
     // 支持自动服务发现和客户端负载均衡
     GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
 
     // --- 生命周期管理 ---
-    
+
     // Start 启动后台任务 (Lease KeepAlive、Watch 监听等)
     Start(ctx context.Context) error
-    
+
     // Stop 停止后台任务并清理资源
     Stop(ctx context.Context) error
-    
+
     // Phase 返回启动阶段 (建议 20，与其他业务组件一致)
     Phase() int
 }
-
-// ServiceEvent 服务变化事件
-type ServiceEvent struct {
-    Type    EventType        // 事件类型 (PUT/DELETE)
-    Service *ServiceInstance // 服务实例信息
-}
-
-// EventType 事件类型
-type EventType string
-
-const (
-    EventTypePut    EventType = "PUT"    // 服务注册或更新
-    EventTypeDelete EventType = "DELETE" // 服务注销
-)
 ```
 
 ### 3.3. 配置 (Config)
 
 ```go
-// pkg/registry/types/config.go
+// pkg/registry/config.go
 
-package types
+package registry
 
 import "time"
 
@@ -161,7 +164,30 @@ type Config struct {
 }
 ```
 
-### 3.4. 组件初始化选项 (Option)
+### 3.4. 错误处理
+
+使用 xerrors 进行结构化错误处理：
+
+```go
+// pkg/registry/errors.go
+
+package registry
+
+import "github.com/ceyewan/genesis/pkg/xerrors"
+
+var (
+    // ErrServiceNotFound 服务不存在
+    ErrServiceNotFound = xerrors.New("service not found")
+
+    // ErrServiceAlreadyRegistered 服务已注册
+    ErrServiceAlreadyRegistered = xerrors.New("service already registered")
+
+    // ErrInvalidServiceInstance 服务实例无效
+    ErrInvalidServiceInstance = xerrors.New("invalid service instance")
+)
+```
+
+### 3.5. 组件初始化选项 (Option)
 
 遵循组件规范，使用 Option 模式注入可观测性依赖。
 
@@ -172,17 +198,17 @@ package registry
 
 import (
     "github.com/ceyewan/genesis/pkg/clog"
-    "github.com/ceyewan/genesis/pkg/telemetry/types"
+    metrics "github.com/ceyewan/genesis/pkg/metrics"
 )
 
 // Option 组件初始化选项函数
 type Option func(*options)
 
-// options 选项结构
+// options 选项结构（导出供内部使用）
 type options struct {
     logger clog.Logger
-    meter  types.Meter
-    tracer types.Tracer
+    meter  metrics.Meter
+    tracer interface{} // TODO: 实现 Tracer 接口
 }
 
 // WithLogger 注入日志记录器
@@ -196,14 +222,14 @@ func WithLogger(l clog.Logger) Option {
 }
 
 // WithMeter 注入指标 Meter
-func WithMeter(m types.Meter) Option {
+func WithMeter(m metrics.Meter) Option {
     return func(o *options) {
         o.meter = m
     }
 }
 
-// WithTracer 注入 Tracer
-func WithTracer(t types.Tracer) Option {
+// WithTracer 注入 Tracer（新增支持）
+func WithTracer(t interface{}) Option {
     return func(o *options) {
         o.tracer = t
     }
@@ -224,75 +250,81 @@ Etcd Key 采用层级结构设计，便于 Watch 前缀：
 
 ### 4.2. 注册流程 (Register)
 
-1. **Grant Lease:** 使用传入的 `ttl` 创建 Lease。
-2. **KeepAlive:** 启动后台 Goroutine 对该 Lease ID 进行自动续约。
-3. **Put:** 将 `ServiceInstance` 序列化为 JSON，调用 Etcd Put 操作，并绑定该 Lease。
-4. **Deregister:** 调用 Delete 删除 Key，并 Revoke Lease。
-5. **异常处理:** 如果 KeepAlive 通道关闭，尝试重连并重新注册。
+1. **Grant Lease:** 使用传入的 `ttl` 创建 Lease
+2. **Put:** 将 `ServiceInstance` 序列化为 JSON，调用 Etcd Put 操作，并绑定该 Lease
+3. **Deregister:** 调用 Delete 删除 Key，并 Revoke Lease
+4. **异常处理:** 使用 xerrors.Wrap 包装所有错误
 
 ### 4.3. 发现流程与本地缓存 (Discovery & Local Cache)
 
-1. **Watch:** 启动 `clientv3.Watch` 监听 `<namespace>/<service_name>/` 前缀。
+1. **Watch:** 启动 `clientv3.Watch` 监听 `<namespace>/<service_name>/` 前缀
 2. **Local Cache:**
-    * Discovery 内部维护 `map[string][]*ServiceInstance` 缓存。
-    * Watch 事件（PUT/DELETE）实时更新本地缓存。
-    * `GetService` 直接返回缓存数据，实现高性能读取。
-    * 支持通过配置启用/禁用缓存。
+    - 维护 `map[string][]*ServiceInstance` 缓存
+    - Watch 事件（PUT/DELETE）实时更新本地缓存
+    - `GetService` 优先返回缓存数据，实现高性能读取
+    - 通过 `EnableCache` 配置启用/禁用缓存
 3. **GetConnection:**
-    * 内部构建 gRPC Target: `etcd:///<service_name>` (假设 scheme 配置为 etcd)。
-    * 调用 `grpc.Dial`，并注入默认的 Load Balancing Config (如 round_robin)。
+    - 构建gRPC Target: `etcd:///<service_name>` (使用 schema 配置)
+    - 调用 `grpc.Dial`，注入默认的 Load Balancing Config
 
 ### 4.4. 生命周期管理
 
 ```go
-// internal/registry/etcd/registry.go
+// pkg/registry/registry.go
 
-type EtcdRegistry struct {
-    client    *clientv3.Client
-    cfg       types.Config
-    logger    clog.Logger
-    meter     telemetrytypes.Meter
-    tracer    telemetrytypes.Tracer
-    
+type etcdRegistry struct {
+    client   *clientv3.Client
+    cfg      *Config
+    logger   clog.Logger
+    meter    metrics.Meter
+    tracer   interface{} // 为未来预留
+
     // 后台任务管理
-    leases    map[string]clientv3.LeaseID  // serviceID -> leaseID
-    watchers  map[string]context.CancelFunc // serviceName -> cancel
-    cache     map[string][]*types.ServiceInstance // 本地缓存
-    stopChan  chan struct{}
-    wg        sync.WaitGroup
-    mu        sync.RWMutex
+    leases   map[string]clientv3.LeaseID   // serviceID -> leaseID
+    watchers map[string]context.CancelFunc // serviceName -> cancel
+    cache    map[string][]*ServiceInstance // 本地缓存
+    stopChan chan struct{}
+    wg       sync.WaitGroup
+    mu       sync.RWMutex
+
+    // resolver builder
+    resolverBuilder *etcdResolverBuilder
 }
 
-func (r *EtcdRegistry) Start(ctx context.Context) error {
-    r.logger.Info("starting registry service")
-    // 启动已注册服务的 lease keepalive
-    // 初始化本地缓存
+func (r *etcdRegistry) Start(ctx context.Context) error {
+    r.logger.Info("registry started")
     return nil
 }
 
-func (r *EtcdRegistry) Stop(ctx context.Context) error {
-    r.logger.Info("stopping registry service")
-    close(r.stopChan)
-    
-    // 停止所有 watchers
+func (r *etcdRegistry) Stop(ctx context.Context) error {
+    // 取消所有 watchers
     r.mu.Lock()
-    for _, cancel := range r.watchers {
+    for serviceName, cancel := range r.watchers {
         cancel()
+        delete(r.watchers, serviceName)
     }
-    r.watchers = nil
-    
-    // 撤销所有 leases
-    for _, leaseID := range r.leases {
-        r.client.Revoke(ctx, leaseID)
-    }
-    r.leases = nil
     r.mu.Unlock()
-    
+
+    // 撤销所有租约
+    r.mu.Lock()
+    for serviceID, leaseID := range r.leases {
+        if _, err := r.client.Revoke(ctx, leaseID); err != nil {
+            r.logger.Warn("failed to revoke lease during shutdown",
+                clog.String("service_id", serviceID),
+                clog.Error(err))
+        }
+    }
+    r.leases = make(map[string]clientv3.LeaseID)
+    r.mu.Unlock()
+
+    // 等待所有 goroutine 结束
     r.wg.Wait()
+
+    r.logger.Info("registry stopped")
     return nil
 }
 
-func (r *EtcdRegistry) Phase() int {
+func (r *etcdRegistry) Phase() int {
     return 20 // 与其他业务组件一致
 }
 ```
@@ -319,7 +351,7 @@ Resolver 只负责更新地址列表。负载均衡由 gRPC 客户端的 Balance
 
 ## 6. 工厂函数设计
 
-### 6.1. 独立模式工厂函数
+### 6.1. 扁平化工厂函数
 
 ```go
 // pkg/registry/registry.go
@@ -327,30 +359,84 @@ Resolver 只负责更新地址列表。负载均衡由 gRPC 客户端的 Balance
 package registry
 
 import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "strings"
+    "sync"
+    "time"
+
+    "github.com/ceyewan/genesis/pkg/clog"
     "github.com/ceyewan/genesis/pkg/connector"
-    "github.com/ceyewan/genesis/pkg/registry/types"
-    internalregistry "github.com/ceyewan/genesis/internal/registry/etcd"
+    "github.com/ceyewan/genesis/pkg/metrics"
+    "github.com/ceyewan/genesis/pkg/xerrors"
+    clientv3 "go.etcd.io/etcd/client/v3"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
+    "google.golang.org/grpc/resolver"
 )
 
 // New 创建 Registry 实例（基于 Etcd）
-// conn: Etcd 连接器
-// cfg: 组件配置
-// opts: 可选参数 (Logger, Meter, Tracer)
-func New(conn connector.EtcdConnector, cfg types.Config, opts ...Option) (types.Registry, error) {
+// 这是标准的工厂函数，支持在不依赖 Container 的情况下独立实例化
+func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, error) {
+    if conn == nil {
+        return nil, xerrors.New("etcd connector is required")
+    }
+    if cfg == nil {
+        cfg = &Config{} // 使用默认配置
+    }
+
     // 应用选项
     opt := defaultOptions()
     for _, o := range opts {
-        o(&opt)
+        o(opt)
     }
-    
-    // 调用内部实现
-    return internalregistry.New(conn, cfg, opt.logger, opt.meter, opt.tracer)
-}
 
-func defaultOptions() *options {
-    return &options{
-        logger: clog.Default(), // 默认 Logger
+    client := conn.GetClient()
+    if client == nil {
+        return nil, xerrors.New("etcd client cannot be nil")
     }
+
+    // 设置默认值
+    if cfg.Namespace == "" {
+        cfg.Namespace = "/genesis/services"
+    }
+    if cfg.Schema == "" {
+        cfg.Schema = "etcd"
+    }
+    if cfg.DefaultTTL == 0 {
+        cfg.DefaultTTL = 30 * time.Second
+    }
+    if cfg.RetryInterval == 0 {
+        cfg.RetryInterval = 1 * time.Second
+    }
+    if cfg.CacheExpiration == 0 {
+        cfg.CacheExpiration = 10 * time.Second
+    }
+
+    if opt.logger == nil {
+        opt.logger = clog.Default()
+    }
+
+    r := &etcdRegistry{
+        client:   client,
+        cfg:      cfg,
+        logger:   opt.logger,
+        meter:    opt.meter,
+        tracer:   opt.tracer,
+        leases:   make(map[string]clientv3.LeaseID),
+        watchers: make(map[string]context.CancelFunc),
+        cache:    make(map[string][]*ServiceInstance),
+        stopChan: make(chan struct{}),
+    }
+
+    // 创建 resolver builder
+    r.resolverBuilder = newEtcdResolverBuilder(r, cfg.Schema)
+
+    // 注册 gRPC resolver
+    resolver.Register(r.resolverBuilder)
+
+    return r, nil
 }
 ```
 
@@ -401,7 +487,6 @@ import (
     "github.com/ceyewan/genesis/pkg/clog"
     "github.com/ceyewan/genesis/pkg/connector"
     "github.com/ceyewan/genesis/pkg/registry"
-    "github.com/ceyewan/genesis/pkg/registry/types"
 )
 
 func main() {
@@ -416,8 +501,14 @@ func main() {
         Endpoints: []string{"localhost:2379"},
     })
 
+    // 建立 Etcd 连接
+    ctx := context.Background()
+    if err := etcdConn.Connect(ctx); err != nil {
+        panic(err)
+    }
+
     // 创建 Registry 实例
-    reg, _ := registry.New(etcdConn, types.Config{
+    reg, _ := registry.New(etcdConn, &registry.Config{
         Namespace:       "/genesis/services",
         Schema:          "etcd",
         DefaultTTL:      30 * time.Second,
@@ -425,14 +516,13 @@ func main() {
         EnableCache:     true,
         CacheExpiration: 10 * time.Second,
     }, registry.WithLogger(logger))
+    defer reg.Close()
 
     // 启动 Registry
-    ctx := context.Background()
     reg.Start(ctx)
-    defer reg.Stop(ctx)
 
     // 定义服务实例
-    svc := &types.ServiceInstance{
+    svc := &registry.ServiceInstance{
         ID:        "user-service-1",
         Name:      "user-service",
         Endpoints: []string{"grpc://192.168.1.100:8080"},
@@ -481,7 +571,7 @@ func main() {
     ctx := context.Background()
 
     // 定义服务实例
-    svc := &types.ServiceInstance{
+    svc := &registry.ServiceInstance{
         ID:        "user-service-1",
         Name:      "user-service",
         Endpoints: []string{"grpc://192.168.1.100:8080"},
@@ -552,11 +642,11 @@ if err != nil {
 go func() {
     for event := range eventCh {
         switch event.Type {
-        case types.EventTypePut:
+        case registry.EventTypePut:
             logger.Info("service registered/updated",
                 clog.String("service_id", event.Service.ID),
                 clog.String("endpoints", strings.Join(event.Service.Endpoints, ",")))
-        case types.EventTypeDelete:
+        case registry.EventTypeDelete:
             logger.Info("service deregistered",
                 clog.String("service_id", event.Service.ID))
         }
@@ -576,23 +666,38 @@ go func() {
 | **Logger Namespace** | ✅ 自动派生 | ✅ 自动派生 | ✅ 自动派生 |
 | **依赖注入** | Connector | Connector | Connector ✅ |
 
-## 9. 总结
+## 9. 重构完成状态
 
-本设计文档完整定义了 Genesis Registry 组件的架构、接口和实现方案：
+Registry 组件已完成四层扁平化重构，实现了：
 
-**核心特性：**
+**架构改进：**
 
-1. ✅ **统一接口** - 单一 `Registry` 接口，职责清晰
-2. ✅ **gRPC 原生支持** - `GetConnection` 方法提供开箱即用的服务发现
-3. ✅ **完整生命周期** - 实现 `Lifecycle` 接口，支持优雅启停
-4. ✅ **本地缓存** - 可配置的服务发现缓存，提升性能
-5. ✅ **自动续约** - Lease KeepAlive 机制确保服务可用性
-6. ✅ **实时监听** - Watch 机制实时感知服务变化
-7. ✅ **标准化** - 遵循 Genesis 组件开发规范
+- ✅ **扁平化结构**：消除 `types/` 子包，所有类型定义在包根目录
+- ✅ **完整实现**：pkg 层包含完整的 Etcd 实现，无需 internal 层
+- ✅ **循环依赖避免**：通过直接在 pkg 中实现避免与 internal 的循环依赖
+- ✅ **统一导出**：通过 registry.go 统一导出所有公共类型和接口
+
+**技术特性：**
+
+- ✅ **统一接口**：单一 `Registry` 接口，职责清晰
+- ✅ **gRPC 原生支持**：`GetConnection` 方法提供开箱即用的服务发现
+- ✅ **完整生命周期**：实现 `Lifecycle` 接口，支持优雅启停
+- ✅ **本地缓存**：可配置的服务发现缓存，提升性能
+- ✅ **自动续约**：Lease 机制确保服务可用性
+- ✅ **实时监听**：Watch 机制实时感知服务变化
+- ✅ **xerrors 集成**：统一的错误处理模式
+- ✅ **标准化**：遵循 Genesis 组件开发规范
 
 **与框架集成：**
 
-* 依赖注入：通过 `connector.EtcdConnector` 获取连接
-* 可观测性：通过 Option 注入 Logger/Meter/Tracer
-* 生命周期：由 Container 统一管理启停顺序
-* 配置管理：使用结构化配置，支持热更新
+- 依赖注入：通过 `connector.EtcdConnector` 获取连接
+- 可观测性：通过 Option 注入 Logger/Meter/Tracer
+- 生命周期：由 Container 统一管理启停顺序
+- 配置管理：使用结构化配置，支持默认值
+
+**示例和文档：**
+
+- ✅ [基础示例](examples/registry/main.go)：服务注册、发现和监听
+- ✅ [gRPC 示例](examples/grpc-registry/main.go)：动态服务发现和负载均衡
+- ✅ [API 文档](API.md#registry---服务注册发现)：完整的使用指南
+- ✅ [设计文档](docs/governance/registry-design.md)：架构设计和实现说明
