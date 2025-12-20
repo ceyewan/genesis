@@ -1,4 +1,4 @@
-package types
+package registry
 
 import (
 	"context"
@@ -49,17 +49,3 @@ type Registry interface {
 	// Phase 返回启动阶段 (建议 20，与其他业务组件一致)
 	Phase() int
 }
-
-// ServiceEvent 服务变化事件
-type ServiceEvent struct {
-	Type    EventType        // 事件类型 (PUT/DELETE)
-	Service *ServiceInstance // 服务实例信息
-}
-
-// EventType 事件类型
-type EventType string
-
-const (
-	EventTypePut    EventType = "PUT"    // 服务注册或更新
-	EventTypeDelete EventType = "DELETE" // 服务注销
-)

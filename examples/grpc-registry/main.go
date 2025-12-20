@@ -35,7 +35,7 @@ func main() {
 	defer etcdConn.Close()
 
 	// 3. 创建 Registry 实例
-	reg, err := registry.New(etcdConn, registry.Config{
+	reg, err := registry.New(etcdConn, &registry.Config{
 		Namespace:       "/genesis/services",
 		Schema:          "etcd",
 		DefaultTTL:      30 * time.Second,

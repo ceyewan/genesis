@@ -1,22 +1,21 @@
-package etcd
+package registry
 
 import (
 	"context"
 	"strings"
 
 	"github.com/ceyewan/genesis/pkg/clog"
-	"github.com/ceyewan/genesis/pkg/registry/types"
 	"google.golang.org/grpc/resolver"
 )
 
 // etcdResolverBuilder 实现 gRPC resolver.Builder 接口
 type etcdResolverBuilder struct {
-	registry *EtcdRegistry
+	registry *etcdRegistry
 	scheme   string
 }
 
 // newEtcdResolverBuilder 创建 resolver builder
-func newEtcdResolverBuilder(registry *EtcdRegistry, scheme string) *etcdResolverBuilder {
+func newEtcdResolverBuilder(registry *etcdRegistry, scheme string) *etcdResolverBuilder {
 	return &etcdResolverBuilder{
 		registry: registry,
 		scheme:   scheme,
@@ -51,7 +50,7 @@ func (b *etcdResolverBuilder) Scheme() string {
 
 // etcdResolver 实现 gRPC resolver.Resolver 接口
 type etcdResolver struct {
-	registry    *EtcdRegistry
+	registry    *etcdRegistry
 	serviceName string
 	cc          resolver.ClientConn
 	closeCh     chan struct{}
@@ -156,7 +155,7 @@ func parseEndpoint(endpoint string) string {
 }
 
 // serviceInstanceToAddresses 将服务实例转换为 gRPC 地址列表
-func serviceInstanceToAddresses(instances []*types.ServiceInstance) []resolver.Address {
+func serviceInstanceToAddresses(instances []*ServiceInstance) []resolver.Address {
 	var addrs []resolver.Address
 	for _, instance := range instances {
 		for _, endpoint := range instance.Endpoints {
