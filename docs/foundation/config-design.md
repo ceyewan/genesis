@@ -77,11 +77,14 @@ type Config struct {
 // New 创建 Loader 实例
 func New(opts ...Option) (Loader, error)
 
-// Load 快捷函数：创建 Loader 并立即加载配置
-func Load(path string, opts ...Option) (Loader, error)
+// Load 创建 Loader 实例并立即加载配置
+func Load(opts ...Option) (Loader, error)
 
 // MustLoad 类似 Load，但出错时 panic（仅用于初始化）
-func MustLoad(path string, opts ...Option) Loader
+func MustLoad(opts ...Option) Loader
+
+// NewLoader 创建 Loader 实例（内部实现）
+func NewLoader(opts ...Option) (Loader, error)
 ```
 
 ## 5. Option 模式
@@ -114,9 +117,9 @@ func WithEnvPrefix(prefix string) Option
 
 ## 7. 环境变量规则
 
-- **前缀**: 默认为 `GENESIS`（可通过 `WithEnvPrefix` 修改）
-- **分隔符**: 使用下划线 `_` 替代层级点 `.`
-- **格式**: `{PREFIX}_{SECTION}_{KEY}`（全大写）
+* **前缀**: 默认为 `GENESIS`（可通过 `WithEnvPrefix` 修改）
+* **分隔符**: 使用下划线 `_` 替代层级点 `.`
+* **格式**: `{PREFIX}_{SECTION}_{KEY}`（全大写）
 
 **示例**: YAML `mysql.host` → 环境变量 `GENESIS_MYSQL_HOST`
 
@@ -200,10 +203,18 @@ func main() {
     ctx := context.Background()
 
     // 1. 加载配置（最先）
-    loader := config.MustLoad("config.yaml",
+    loader, err := config.New(
+        config.WithConfigName("config"),
         config.WithConfigPaths("./config", "/etc/myapp"),
         config.WithEnvPrefix("MYAPP"),
     )
+    if err != nil {
+        panic(err)
+    }
+
+    if err := loader.Load(ctx); err != nil {
+        panic(err)
+    }
 
     var cfg AppConfig
     if err := loader.Unmarshal(&cfg); err != nil {
@@ -267,13 +278,41 @@ loader.Unmarshal(&cfg)
 ### 11.2 快捷方式
 
 ```go
-loader := config.MustLoad("./config/config.yaml")
+// 一步创建并加载配置
+loader := config.MustLoad(
+    config.WithConfigName("config"),
+    config.WithConfigPaths("./config"),
+)
 
 var cfg AppConfig
-loader.Unmarshal(&cfg)
+if err := loader.Unmarshal(&cfg); err != nil {
+    panic(err)
+}
 ```
 
-### 11.3 部分解析
+### 11.3 标准使用方式
+
+```go
+loader, err := config.New(
+    config.WithConfigName("config"),
+    config.WithConfigPaths("./config"),
+)
+if err != nil {
+    panic(err)
+}
+
+// 加载配置
+if err := loader.Load(ctx); err != nil {
+    panic(err)
+}
+
+var cfg AppConfig
+if err := loader.Unmarshal(&cfg); err != nil {
+    panic(err)
+}
+```
+
+### 11.4 部分解析
 
 ```go
 var mysqlCfg connector.MySQLConfig
@@ -284,6 +323,6 @@ loader.UnmarshalKey("mysql", &mysqlCfg)
 
 当前使用 `spf13/viper` 作为核心实现：
 
-- **初始化流程**：New → Load → Unmarshal
-- **热更新**：利用 Viper 的 `WatchConfig` + `fsnotify`
-- **环境变量**：自动绑定 `{PREFIX}_{KEY}` 格式
+* **初始化流程**：New → Load → Unmarshal
+* **热更新**：利用 Viper 的 `WatchConfig` + `fsnotify`
+* **环境变量**：自动绑定 `{PREFIX}_{KEY}` 格式

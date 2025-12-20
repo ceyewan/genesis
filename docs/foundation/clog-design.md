@@ -136,7 +136,7 @@ func WithNamespaceJoiner(joiner string) Option
 ### 6.1 层级结构
 
 | 层级 | 格式 | 示例 |
-|------|------|------|
+| ------ | ------ | ------ |
 | 应用级 | `<app>` | `user-service` |
 | 组件级 | `<app>.<component>` | `user-service.dlock` |
 | 子模块级 | `<app>.<component>.<sub>` | `user-service.dlock.redis` |

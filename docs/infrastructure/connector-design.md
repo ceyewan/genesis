@@ -120,37 +120,58 @@ func (c *BaseConfig) SetDefaults() {
 // RedisConfig Redis 连接配置
 type RedisConfig struct {
     BaseConfig   `mapstructure:",squash"`
-    Addr         string `mapstructure:"addr"`
-    Password     string `mapstructure:"password"`
-    DB           int    `mapstructure:"db"`
-    PoolSize     int    `mapstructure:"pool_size"`
-    MinIdleConns int    `mapstructure:"min_idle_conns"`
+    Addr         string        `mapstructure:"addr"`           // 连接地址，如 "127.0.0.1:6379"
+    Password     string        `mapstructure:"password"`       // 认证密码（可选）
+    DB           int           `mapstructure:"db"`             // 数据库编号（默认0）
+    PoolSize     int           `mapstructure:"pool_size"`      // 连接池大小（默认10）
+    MinIdleConns int           `mapstructure:"min_idle_conns"` // 最小空闲连接数（默认5）
+    DialTimeout  time.Duration `mapstructure:"dial_timeout"`   // 连接超时（默认5s）
+    ReadTimeout  time.Duration `mapstructure:"read_timeout"`   // 读取超时（默认3s）
+    WriteTimeout time.Duration `mapstructure:"write_timeout"`  // 写入超时（默认3s）
 }
 
 // MySQLConfig MySQL 连接配置
 type MySQLConfig struct {
     BaseConfig      `mapstructure:",squash"`
-    DSN             string `mapstructure:"dsn"`
-    MaxOpenConns    int    `mapstructure:"max_open_conns"`
-    MaxIdleConns    int    `mapstructure:"max_idle_conns"`
-    ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
+    DSN             string        `mapstructure:"dsn"`               // 完整 DSN（可选，优先级最高）
+    Host            string        `mapstructure:"host"`              // 主机地址
+    Port            int           `mapstructure:"port"`              // 端口
+    Username        string        `mapstructure:"username"`          // 用户名
+    Password        string        `mapstructure:"password"`          // 密码
+    Database        string        `mapstructure:"database"`          // 数据库名
+    Charset         string        `mapstructure:"charset"`           // 字符集
+    Timeout         time.Duration `mapstructure:"timeout"`           // 连接超时（向后兼容）
+    MaxIdleConns    int           `mapstructure:"max_idle_conns"`    // 最大空闲连接数
+    MaxOpenConns    int           `mapstructure:"max_open_conns"`    // 最大打开连接数
+    MaxLifetime     time.Duration `mapstructure:"max_lifetime"`      // 连接最大生命周期（向后兼容）
+    ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"` // 连接最大生命周期
 }
 
 // EtcdConfig Etcd 连接配置
 type EtcdConfig struct {
-    BaseConfig   `mapstructure:",squash"`
-    Endpoints    []string `mapstructure:"endpoints"`
-    DialTimeout  time.Duration `mapstructure:"dial_timeout"`
-    Username     string `mapstructure:"username"`
-    Password     string `mapstructure:"password"`
+    BaseConfig       `mapstructure:",squash"`
+    Endpoints        []string      `mapstructure:"endpoints"`          // 连接地址
+    Username         string        `mapstructure:"username"`           // 认证用户（可选）
+    Password         string        `mapstructure:"password"`           // 认证密码（可选）
+    DialTimeout      time.Duration `mapstructure:"dial_timeout"`       // 连接超时（默认5s）
+    Timeout          time.Duration `mapstructure:"timeout"`            // 连接超时（向后兼容）
+    KeepAliveTime    time.Duration `mapstructure:"keep_alive_time"`    // 心跳间隔（默认10s）
+    KeepAliveTimeout time.Duration `mapstructure:"keep_alive_timeout"` // 心跳超时（默认3s）
 }
 
 // NATSConfig NATS 连接配置
 type NATSConfig struct {
-    BaseConfig      `mapstructure:",squash"`
-    URL             string `mapstructure:"url"`
-    MaxReconnects   int    `mapstructure:"max_reconnects"`
-    ReconnectWait   time.Duration `mapstructure:"reconnect_wait"`
+    BaseConfig    `mapstructure:",squash"`
+    URL           string        `mapstructure:"url"`            // 连接地址，如 "nats://127.0.0.1:4222"
+    Name          string        `mapstructure:"name"`           // 客户端名称（可选）
+    Username      string        `mapstructure:"username"`       // 用户名（可选）
+    Password      string        `mapstructure:"password"`       // 密码（可选）
+    Token         string        `mapstructure:"token"`          // 令牌（可选）
+    Timeout       time.Duration `mapstructure:"timeout"`        // 连接超时（向后兼容）
+    MaxReconnects int           `mapstructure:"max_reconnects"` // 最大重连次数（默认60）
+    ReconnectWait time.Duration `mapstructure:"reconnect_wait"` // 重连等待时间（默认2s）
+    PingInterval  time.Duration `mapstructure:"ping_interval"`  // ping间隔（默认2m）
+    MaxPingsOut   int           `mapstructure:"max_pings_out"`  // 最大未响应ping数（默认2）
 }
 ```
 
@@ -191,11 +212,9 @@ func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error)
 func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error)
 func NewEtcd(cfg *EtcdConfig, opts ...Option) (EtcdConnector, error)
 func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error)
-
-// Must 版本（panic on error）
-func MustNewRedis(cfg *RedisConfig, opts ...Option) RedisConnector
-func MustNewMySQL(cfg *MySQLConfig, opts ...Option) MySQLConnector
 ```
+
+**注意**：当前不提供 `MustNew*` 系列函数，请使用标准工厂函数并处理错误。
 
 ### 5.2. Option 模式
 
@@ -227,6 +246,10 @@ func WithMeter(m metrics.Meter) Option {
     }
 }
 ```
+
+**当前支持的选项**：
+- `WithLogger(logger clog.Logger)` - 注入日志器
+- `WithMeter(meter metrics.Meter)` - 注入指标收集器
 
 ## 6. 实现示例
 
@@ -504,31 +527,41 @@ import "github.com/ceyewan/genesis/pkg/connector"
 conn, _ := connector.NewRedis(&connector.RedisConfig{...})
 ```
 
-### 10.3. Connect vs NewWithConnect
+### 10.3. Connect 模式
 
-两种模式都支持：
+当前只支持分步模式：
 
 ```go
-// 模式 1：分步（推荐，可处理连接错误）
+// 推荐模式：分步创建和连接（推荐，可分别处理配置错误和连接错误）
 conn, err := connector.NewRedis(&cfg)
 if err != nil { /* 配置错误 */ }
 if err := conn.Connect(ctx); err != nil { /* 连接错误 */ }
-
-// 模式 2：一步到位
-conn, err := connector.NewRedisAndConnect(ctx, &cfg)
 ```
+
+**设计理念**：
+- 分离配置验证和连接建立
+- 允许调用方在合适的时机建立连接
+- 提供更清晰的错误处理
 
 ## 11. 可观测性
 
 ### 11.1. 日志
 
-每个连接器接收 Logger 并派生命名空间：
+每个连接器接收 Logger 并自动添加 "connector" 命名空间：
 
 ```go
+// WithLogger 的实现
+func WithLogger(logger clog.Logger) Option {
+    return func(o *options) {
+        o.logger = logger.WithNamespace("connector")
+    }
+}
+
+// 在连接器中使用
 func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
     // ...
-    c.logger = opt.logger.With("connector", "redis", "name", cfg.Name)
-    // 输出: {"connector":"redis", "name":"primary", "msg":"connected"}
+    // logger 现在已经有 "connector" 命名空间
+    // 输出: {"namespace":"connector", "connector":"redis", "name":"primary", "msg":"connected"}
 }
 ```
 
@@ -539,7 +572,7 @@ func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
 ```go
 redisConn, _ := connector.NewRedis(&cfg.Redis,
     connector.WithLogger(logger),
-    connector.WithMeter(tel.Meter()),
+    connector.WithMeter(meter),
 )
 ```
 

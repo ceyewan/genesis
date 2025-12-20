@@ -24,7 +24,7 @@
 | **idgen** | L2 | [x] | [x] | [x] | [x] | ✅ 完成 |
 | **mq** | L2 | [x] | [x] | [x] | [x] | ✅ 完成 |
 | **idempotency** | L2 | [x] | [x] | [x] | [x] | ✅ 完成 |
-| **auth** | L3 | [x] | [x] | [ ] | [ ] | 🔄 进行中 |
+| **auth** | L3 | [x] | [x] | [x] | [x] | ✅ 完成 |
 | **ratelimit** | L3 | [ ] | [ ] | [ ] | [ ] | ⏳ 待重构 |
 | **breaker** | L3 | [ ] | [ ] | [ ] | [ ] | ⏳ 待重构 |
 | **registry** | L3 | [ ] | [ ] | [ ] | [ ] | ⏳ 待重构 |
@@ -65,11 +65,11 @@
 
 ### Level 3: Governance
 
-- [-] **auth**:
+- [x] **auth**:
   - [x] 代码重构 (pkg/auth)
   - [x] 示例更新 (examples/auth)
-  - [ ] 更新 `docs/governance/auth-design.md`
-  - [ ] 生成 API 文档
+  - [x] 更新 `docs/governance/auth-design.md`
+  - [x] 生成 API 文档
 
 ---
 
