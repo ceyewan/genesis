@@ -11,26 +11,22 @@
 
 ## 2. 目录结构规范
 
-为了提升易用性并减少导入路径深度，Genesis 采用扁平化或准扁平化结构：
-
-- **Level 1 (Infrastructure):** 保持 `pkg/` (对外 API) + `internal/` (复杂实现) 的分离。
-- **Level 2 / Level 3 (Business / Governance):** 采用扁平化的 `pkg/<component>/` 结构。原本位于 `types/` 子包的 `Config`, `Interface`, `Errors` 应移至包根目录。
+Genesis 采用完全扁平化结构，所有组件直接放在根目录，不使用 `pkg/` 或 `types/` 子包：
 
 建议的目录结构示例：
 
 ```text
-# 对于 L2 / L3 组件（扁平化）
-pkg/<component>/
+# 对于所有组件（扁平化）
+<component>/
 ├── <component>.go      # 工厂函数 (New)、导出接口、Sentinel Errors
 ├── config.go           # Config 结构体定义
 ├── options.go          # Option 模式定义 (WithLogger, WithMeter 等)
 ├── <impl>.go           # 非导出实现
-└── adapter/            # (可选) 协议适配器（如 Gin 中间件）
+├── adapter/            # (可选) 协议适配器（如 Gin 中间件）
+└── README.md           # 组件使用文档
 
-# 对于 L1 基础设施
-pkg/<component>/
-├── interface.go        # 导出接口与配置定义
-└── internal/           # 内部驱动逻辑、复杂实现
+# internal/ 目录用于内部实现
+internal/<component>/
 ```
 
 ## 3. 初始化规范

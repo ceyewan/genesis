@@ -8,23 +8,25 @@ Genesis 旨在为 Go 微服务开发提供一套**统一的架构规范**和**�
 
 ## ✨ 核心特性
 
-* **标准化日志 (clog):** 基于 `slog`，支持 Context 字段自动提取、多级命名空间派生。
-* **统一配置 (config):** 强类型配置管理，支持多源加载。
-* **显式连接管理 (connector):** 统一管理 MySQL, Redis, Etcd, NATS 等基础设施连接。
-* **可观测性 (metrics):** 基于 OpenTelemetry 的指标收集，支持自动埋点。
-* **Go Native DI:** 弃用 DI 容器，拥抱原生的构造函数注入，依赖关系一目了然。
-* **增强型 DB 组件:** 基于 GORM，集成 `sharding` 分库分表。
-* **分布式锁 (dlock):** 统一接口，支持 Redis/Etcd 后端，内置自动续期。
+* **四层扁平化架构:** 清晰的分层设计，职责明确
+* **Go Native DI:** 显式依赖注入，依赖关系一目了然
+* **标准化组件:** 统一的 API 设计和使用模式
+* **生产级就绪:** 完整的错误处理、日志、指标和可观测性
+
+## 🏗️ 架构概览
+
+| 层次 | 核心组件 | 职责 |
+| :----- | :--------- | :----- |
+| **Level 3: Governance** | `auth`, `ratelimit`, `breaker`, `registry` | 流量治理，身份认证，切面能力 |
+| **Level 2: Business** | `cache`, `idgen`, `dlock`, `mq` | 业务能力封装 |
+| **Level 1: Infrastructure** | `connector`, `db` | 连接管理，底层 I/O |
+| **Level 0: Base** | `clog`, `config`, `metrics`, `xerrors` | 框架基石 |
 
 ## 📚 文档
 
-* [架构设计 (Architecture)](docs/genesis-design.md)
-* [重构计划 (Refactoring Plan)](docs/refactoring-plan.md)
-* [组件开发规范 (Component Spec)](docs/specs/component-spec.md)
-* [配置中心设计 (Config)](docs/foundation/config-design.md)
-* [日志库设计 (Clog)](docs/foundation/clog-design.md)
-* [连接器设计 (Connector)](docs/infrastructure/connector-design.md)
-* [分布式锁设计 (DLock)](docs/business/dlock-design.md)
+* [架构设计](docs/genesis-design.md) - 总体架构和设计理念
+* [重构计划](docs/refactoring-plan.md) - 重构执行计划
+* [组件开发规范](docs/component-spec.md) - 组件开发规范
 
 ## 🚀 快速开始
 
@@ -62,11 +64,11 @@ func main() {
 
     // 4. 初始化组件 (显式注入依赖)
     database, _ := db.New(mysqlConn, &cfg.DB, db.WithLogger(logger))
-    locker, _ := dlock.NewRedis(redisConn, &cfg.DLock, dlock.WithLogger(logger))
+    locker, _ := dlock.New(redisConn, &cfg.DLock, dlock.WithLogger(logger))
 
     // 5. 使用组件
     logger.InfoContext(ctx, "service started")
-    
+
     var user struct{ ID int64 }
     database.DB(ctx).First(&user, 1)
 
@@ -77,12 +79,54 @@ func main() {
 }
 ```
 
-## 🗺️ 路线图 (Roadmap)
+## 🔧 组件列表
 
-* [x] **Base (L0):** Log, Config, Metrics, XErrors
-* [x] **Infra (L1):** Connector, DB
-* [x] **Business (L2):** DLock, Cache, MQ, IDGen, Idempotency
-* [ ] **Governance (L3):** Auth (Refactoring), Rate Limit, Circuit Breaker, Registry
+### Level 0 - 基础设施
+* **[clog](./clog)** - 标准化日志库，基于 slog，支持 Context 和 Namespace
+* **[config](./config)** - 统一配置管理，支持多源加载
+* **[metrics](./metrics)** - 基于 OpenTelemetry 的指标收集
+* **[xerrors](./xerrors)** - 增强型错误处理
+
+### Level 1 - 连接管理
+* **[connector](./connector)** - 统一连接管理器，支持 MySQL/Redis/Etcd/NATS
+* **[db](./db)** - 基于 GORM 的数据库组件，支持分库分表
+
+### Level 2 - 业务组件
+
+* **[cache](./cache)** - 统一缓存接口，支持 Redis
+* **[dlock](./dlock)** - 分布式锁，支持 Redis/Etcd，内置自动续期
+* **[idgen](./idgen)** - ID 生成器，支持 Snowflake/UUID
+* **[mq](./mq)** - 消息队列组件，支持 NATS
+
+### Level 3 - 流量治理
+
+* **[auth](./auth)** - 认证授权组件
+* **[ratelimit](./ratelimit)** - 限流组件
+* **[breaker](./breaker)** - 熔断器组件
+* **[registry](./registry)** - 服务注册发现
+
+## 📖 使用示例
+
+```bash
+# 查看所有可用示例
+make examples
+
+# 运行特定组件示例
+make example-cache
+make example-dlock
+
+# 运行所有示例
+make example-all
+```
+
+## 🗺️ 版本状态
+
+### v0.1.0 (即将发布)
+
+* **Base (L0):** clog, config, metrics, xerrors
+* **Infrastructure (L1):** connector, db
+* **Business (L2):** cache, dlock, idgen, mq
+* **Governance (L3):** auth, ratelimit, breaker, registry
 
 ## 📄 License
 
