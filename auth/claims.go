@@ -1,77 +1,25 @@
 package auth
 
 import (
-	"time"
+	"github.com/golang-jwt/jwt/v5"
 )
 
-// Claims JWT 声明
+// Claims 定义了 JWT 载荷结构。
+//
+// 它内嵌了 jwt.RegisteredClaims 以支持标准声明（如 exp, sub, iss 等），
+// 同时扩展了 Genesis 框架常用的业务字段。
+//
+// 字段说明：
+//   - Subject: 用户 ID (对应 sub)
+//   - Username: 用户名 (对应 uname)
+//   - Roles: 角色列表 (对应 roles)
+//   - Extra: 扩展字段 (对应 extra)
 type Claims struct {
-	// 标准声明
-	UserID    string         `json:"sub"` // 用户ID
-	Username  string         `json:"uname,omitempty"`
-	Roles     []string       `json:"roles,omitempty"`
-	Extra     map[string]any `json:"extra,omitempty"`
-	Issuer    string         `json:"iss,omitempty"`
-	Audience  []string       `json:"aud,omitempty"`
-	ExpiresAt *time.Time     `json:"exp,omitempty"`
-	IssuedAt  *time.Time     `json:"iat,omitempty"`
-	NotBefore *time.Time     `json:"nbf,omitempty"`
-}
+	// 标准声明 (包含 Subject, Issuer, ExpiresAt 等)
+	jwt.RegisteredClaims
 
-// ClaimsOption Claims 配置选项
-type ClaimsOption func(*Claims)
-
-// NewClaims 创建 Claims
-func NewClaims(userID string, opts ...ClaimsOption) *Claims {
-	claims := &Claims{
-		UserID: userID,
-		Extra:  make(map[string]any),
-	}
-	for _, opt := range opts {
-		opt(claims)
-	}
-	return claims
-}
-
-// WithUsername 设置用户名
-func WithUsername(username string) ClaimsOption {
-	return func(c *Claims) {
-		c.Username = username
-	}
-}
-
-// WithRoles 设置角色
-func WithRoles(roles ...string) ClaimsOption {
-	return func(c *Claims) {
-		c.Roles = append(c.Roles, roles...)
-	}
-}
-
-// WithExtra 设置额外字段
-func WithExtra(key string, value any) ClaimsOption {
-	return func(c *Claims) {
-		c.Extra[key] = value
-	}
-}
-
-// WithExpiration 设置过期时间
-func WithExpiration(d time.Duration) ClaimsOption {
-	return func(c *Claims) {
-		expiresAt := time.Now().Add(d)
-		c.ExpiresAt = &expiresAt
-	}
-}
-
-// WithIssuer 设置签发者
-func WithIssuer(issuer string) ClaimsOption {
-	return func(c *Claims) {
-		c.Issuer = issuer
-	}
-}
-
-// WithAudience 设置接收者
-func WithAudience(audience ...string) ClaimsOption {
-	return func(c *Claims) {
-		c.Audience = audience
-	}
+	// 业务扩展声明
+	Username string         `json:"uname,omitempty"` // 用户名
+	Roles    []string       `json:"roles,omitempty"` // 角色列表
+	Extra    map[string]any `json:"extra,omitempty"` // 扩展信息
 }

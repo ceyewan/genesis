@@ -11,6 +11,7 @@ import (
 
 	"github.com/ceyewan/genesis/auth"
 	"github.com/ceyewan/genesis/clog"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func main() {
@@ -31,7 +32,7 @@ func main() {
 		Output:      "stdout",
 		AddSource:   false,
 		EnableColor: true,
-	}, &clog.Option{})
+	})
 	if err != nil {
 		log.Fatalf("create logger: %v", err)
 	}
@@ -63,10 +64,13 @@ func main() {
 		}
 
 		// 创建 Claims
-		claims := auth.NewClaims(req.UserID,
-			auth.WithUsername(req.Username),
-			auth.WithRoles("user"),
-		)
+		claims := &auth.Claims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Subject: req.UserID,
+			},
+			Username: req.Username,
+			Roles:    []string{"user"},
+		}
 
 		// 生成 Token
 		token, err := authenticator.GenerateToken(r.Context(), claims)
@@ -113,7 +117,7 @@ func main() {
 
 		// 返回用户信息
 		response := map[string]interface{}{
-			"user_id":  claims.UserID,
+			"user_id":  claims.Subject,
 			"username": claims.Username,
 			"roles":    claims.Roles,
 		}

@@ -1,11 +1,22 @@
+// Package auth 提供基于 JWT 的认证能力。
+//
+// 遵循 Genesis L3 治理层规范，支持：
+//   - Token 生成、验证与刷新
+//   - Gin 中间件集成
+//   - 基于角色的访问控制 (RBAC)
+//   - 多种 Token 提取方式 (Header, Cookie, Query)
+//
+// 基本使用：
+//
+//	authenticator, _ := auth.New(&auth.Config{SecretKey: "..."})
+//	token, _ := authenticator.GenerateToken(ctx, &auth.Claims{
+//	    RegisteredClaims: jwt.RegisteredClaims{Subject: "user-123"},
+//	})
 package auth
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +25,7 @@ import (
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // Authenticator 认证器接口
@@ -43,7 +55,7 @@ func New(cfg *Config, opts ...Option) (Authenticator, error) {
 		return nil, ErrInvalidConfig
 	}
 
-	cfg.SetDefaults()
+	cfg.setDefaults()
 
 	o := defaultOptions()
 	for _, opt := range opts {
@@ -60,15 +72,6 @@ func New(cfg *Config, opts ...Option) (Authenticator, error) {
 	}
 
 	return auth, nil
-}
-
-// Must 类似 New，但出错时 panic
-func Must(cfg *Config, opts ...Option) Authenticator {
-	auth, err := New(cfg, opts...)
-	if err != nil {
-		panic(err)
-	}
-	return auth
 }
 
 // validate 验证配置
@@ -94,33 +97,29 @@ func (a *jwtAuth) GenerateToken(ctx context.Context, claims *Claims) (string, er
 
 	// 设置标准声明
 	if claims.ExpiresAt == nil {
-		expiresAt := time.Now().Add(a.config.AccessTokenTTL)
-		claims.ExpiresAt = &expiresAt
+		claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(a.config.AccessTokenTTL))
 	}
 	if claims.IssuedAt == nil {
-		issuedAt := time.Now()
-		claims.IssuedAt = &issuedAt
+		claims.IssuedAt = jwt.NewNumericDate(time.Now())
 	}
 	if claims.Issuer == "" && a.config.Issuer != "" {
 		claims.Issuer = a.config.Issuer
 	}
 
-	// 编码 header
-	header := map[string]string{"alg": "HS256", "typ": "JWT"}
-	headerBytes, _ := json.Marshal(header)
-	headerEncoded := base64.RawURLEncoding.EncodeToString(headerBytes)
+	// 选择签名方法
+	method := jwt.GetSigningMethod(a.config.SigningMethod)
+	if method == nil {
+		// 默认使用 HS256
+		method = jwt.SigningMethodHS256
+	}
 
-	// 编码 payload
-	payloadBytes, _ := json.Marshal(claims)
-	payloadEncoded := base64.RawURLEncoding.EncodeToString(payloadBytes)
+	token := jwt.NewWithClaims(method, claims)
+	tokenString, err := token.SignedString([]byte(a.config.SecretKey))
+	if err != nil {
+		return "", xerrors.Wrap(err, "failed to sign token")
+	}
 
-	// 生成签名
-	message := headerEncoded + "." + payloadEncoded
-	signature := a.sign([]byte(message))
-
-	token := message + "." + signature
-
-	a.options.logger.Info("token generated", clog.String("user_id", claims.UserID))
+	a.options.logger.Info("token generated", clog.String("user_id", claims.Subject))
 
 	// Metrics: Token 生成成功
 	if counter := a.options.GetCounter("auth_tokens_generated_total", "Total number of tokens generated"); counter != nil {
@@ -132,63 +131,54 @@ func (a *jwtAuth) GenerateToken(ctx context.Context, claims *Claims) (string, er
 		histogram.Record(ctx, time.Since(start).Seconds())
 	}
 
-	return token, nil
+	return tokenString, nil
 }
 
 // ValidateToken 验证 Token
-func (a *jwtAuth) ValidateToken(ctx context.Context, token string) (*Claims, error) {
+func (a *jwtAuth) ValidateToken(ctx context.Context, tokenString string) (*Claims, error) {
 	start := time.Now()
 
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		// Metrics: 验证失败 - 格式错误
-		if counter := a.options.GetCounter("auth_tokens_validated_total", "Total number of tokens validated"); counter != nil {
-			counter.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", "invalid_format"))
-		}
-		return nil, ErrInvalidToken
-	}
-
-	headerEncoded, payloadEncoded, signatureEncoded := parts[0], parts[1], parts[2]
-
-	// 验证签名
-	expectedSignature := a.sign([]byte(headerEncoded + "." + payloadEncoded))
-	if !hmac.Equal([]byte(signatureEncoded), []byte(expectedSignature)) {
-		// Metrics: 验证失败 - 签名无效
-		if counter := a.options.GetCounter("auth_tokens_validated_total", "Total number of tokens validated"); counter != nil {
-			counter.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", "invalid_signature"))
-		}
-		return nil, ErrInvalidSignature
-	}
-
-	// 解码 payload
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(payloadEncoded)
-	if err != nil {
-		// Metrics: 验证失败 - 解码错误
-		if counter := a.options.GetCounter("auth_tokens_validated_total", "Total number of tokens validated"); counter != nil {
-			counter.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", "decode_error"))
-		}
-		return nil, ErrInvalidToken
-	}
-
 	claims := &Claims{}
-	if err := json.Unmarshal(payloadBytes, claims); err != nil {
-		// Metrics: 验证失败 - JSON 解析错误
-		if counter := a.options.GetCounter("auth_tokens_validated_total", "Total number of tokens validated"); counter != nil {
-			counter.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", "json_error"))
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		// 验证签名算法
+		if token.Method.Alg() != a.config.SigningMethod {
+			// 如果配置中未指定或不匹配，尝试默认 HS256
+			if a.config.SigningMethod == "" {
+				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, ErrInvalidSignature
+				}
+			} else {
+				return nil, ErrInvalidSignature
+			}
 		}
-		return nil, ErrInvalidClaims
+		return []byte(a.config.SecretKey), nil
+	})
+
+	if err != nil {
+		var errType string
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			errType = "expired"
+			err = ErrExpiredToken
+		} else if errors.Is(err, jwt.ErrTokenSignatureInvalid) {
+			errType = "invalid_signature"
+			err = ErrInvalidSignature
+		} else {
+			errType = "invalid_token"
+			err = ErrInvalidToken
+		}
+
+		// Metrics: 验证失败
+		if counter := a.options.GetCounter("auth_tokens_validated_total", "Total number of tokens validated"); counter != nil {
+			counter.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", errType))
+		}
+		return nil, err
 	}
 
-	// 检查过期时间
-	if claims.ExpiresAt != nil && time.Now().After(*claims.ExpiresAt) {
-		// Metrics: 验证失败 - Token 过期
-		if counter := a.options.GetCounter("auth_tokens_validated_total", "Total number of tokens validated"); counter != nil {
-			counter.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", "expired"))
-		}
-		return nil, ErrExpiredToken
+	if !token.Valid {
+		return nil, ErrInvalidToken
 	}
 
-	a.options.logger.Info("token validated", clog.String("user_id", claims.UserID))
+	a.options.logger.Info("token validated", clog.String("user_id", claims.Subject))
 
 	// Metrics: 验证成功
 	if counter := a.options.GetCounter("auth_tokens_validated_total", "Total number of tokens validated"); counter != nil {
@@ -214,6 +204,10 @@ func (a *jwtAuth) RefreshToken(ctx context.Context, token string) (string, error
 		return "", err
 	}
 
+	// 更新过期时间和签发时间
+	claims.ExpiresAt = nil
+	claims.IssuedAt = nil
+
 	// 使用相同的 claims，重新生成 token
 	newToken, err := a.GenerateToken(ctx, claims)
 	if err != nil {
@@ -224,7 +218,7 @@ func (a *jwtAuth) RefreshToken(ctx context.Context, token string) (string, error
 		return "", err
 	}
 
-	a.options.logger.Info("token refreshed", clog.String("user_id", claims.UserID))
+	a.options.logger.Info("token refreshed", clog.String("user_id", claims.Subject))
 
 	// Metrics: 刷新成功
 	if counter := a.options.GetCounter("auth_tokens_refreshed_total", "Total number of tokens refreshed"); counter != nil {
@@ -232,13 +226,6 @@ func (a *jwtAuth) RefreshToken(ctx context.Context, token string) (string, error
 	}
 
 	return newToken, nil
-}
-
-// sign 生成签名
-func (a *jwtAuth) sign(message []byte) string {
-	h := hmac.New(sha256.New, []byte(a.config.SecretKey))
-	h.Write(message)
-	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 
 // ExtractToken 从请求中提取 token（导出用于中间件）

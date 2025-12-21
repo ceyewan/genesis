@@ -102,11 +102,3 @@ func GetClaims(c *gin.Context) (*Claims, bool) {
 	return claims.(*Claims), true
 }
 
-// MustGetClaims 从 Gin Context 获取 Claims，不存在时 panic
-func MustGetClaims(c *gin.Context) *Claims {
-	claims, ok := GetClaims(c)
-	if !ok {
-		panic("auth: claims not found in context")
-	}
-	return claims
-}

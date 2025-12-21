@@ -19,8 +19,8 @@ type Config struct {
 	TokenHeadName string `mapstructure:"token_head_name"` // Header 前缀: Bearer
 }
 
-// SetDefaults 设置默认值
-func (c *Config) SetDefaults() {
+// setDefaults 设置默认值
+func (c *Config) setDefaults() {
 	if c.SigningMethod == "" {
 		c.SigningMethod = "HS256"
 	}
