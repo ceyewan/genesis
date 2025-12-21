@@ -1,132 +1,179 @@
+// Package breaker 提供了熔断器组件，专注于 gRPC 客户端的故障隔离与自动恢复。
+//
+// breaker 是 Genesis 治理层的核心组件，它提供了：
+// - 基于 gobreaker 的熔断器实现
+// - 服务级粒度的熔断管理（按目标服务名独立熔断）
+// - 自动故障隔离和自动恢复（通过半开状态探测）
+// - 灵活的降级策略（快速失败或自定义降级逻辑）
+// - gRPC Interceptor 无侵入集成
+// - 与 L0 基础组件（日志、指标）的深度集成
+//
+// ## 基本使用
+//
+//	// 创建熔断器
+//	brk, _ := breaker.New(&breaker.Config{
+//		MaxRequests:         5,
+//		Interval:            60 * time.Second,
+//		Timeout:             30 * time.Second,
+//		FailureRatio:        0.6,
+//		MinimumRequests:     10,
+//	}, breaker.WithLogger(logger))
+//
+//	// 使用 gRPC Interceptor
+//	conn, _ := grpc.Dial(
+//		"localhost:9001",
+//		grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
+//	)
+//
+// ## 降级策略
+//
+//	// 自定义降级逻辑
+//	brk, _ := breaker.New(cfg,
+//		breaker.WithLogger(logger),
+//		breaker.WithFallback(func(ctx context.Context, serviceName string, err error) error {
+//			// 返回缓存数据或默认值
+//			return nil
+//		}),
+//	)
+//
+// ## 可观测性
+//
+// 通过注入 Logger 和 Meter 实现统一的日志和指标收集：
+//
+//	brk, _ := breaker.New(cfg,
+//		breaker.WithLogger(logger),
+//		breaker.WithMeter(meter),
+//	)
 package breaker
 
 import (
-	"fmt"
+	"context"
+	"time"
 
-	"github.com/ceyewan/genesis/breaker/types"
 	"github.com/ceyewan/genesis/clog"
-	internalbreaker "github.com/ceyewan/genesis/internal/breaker"
+	"google.golang.org/grpc"
 )
 
 // ========================================
-// 类型导出 (Type Exports)
+// 接口定义 (Interface Definitions)
 // ========================================
 
-// Breaker 接口别名
-type Breaker = types.Breaker
+// Breaker 熔断器核心接口
+type Breaker interface {
+	// Execute 执行受熔断保护的函数
+	// serviceName: 服务名称（用于服务级熔断）
+	// fn: 要执行的函数
+	// 返回: 函数执行结果和错误
+	Execute(ctx context.Context, serviceName string, fn func() (interface{}, error)) (interface{}, error)
 
-// Config 配置别名
-type Config = types.Config
+	// UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器
+	UnaryClientInterceptor() grpc.UnaryClientInterceptor
 
-// Policy 策略别名
-type Policy = types.Policy
+	// StreamClientInterceptor 返回 gRPC 流式调用客户端拦截器
+	StreamClientInterceptor() grpc.StreamClientInterceptor
 
-// State 状态别名
-type State = types.State
+	// State 获取指定服务的熔断器状态
+	State(serviceName string) (State, error)
+}
 
-// 状态常量导出
+// State 熔断器状态
+type State int
+
 const (
-	StateClosed   = types.StateClosed
-	StateOpen     = types.StateOpen
-	StateHalfOpen = types.StateHalfOpen
+	// StateClosed 闭合状态（正常）
+	StateClosed State = iota
+	// StateHalfOpen 半开状态（探测恢复）
+	StateHalfOpen
+	// StateOpen 打开状态（熔断中）
+	StateOpen
 )
 
-// 错误导出
-var (
-	ErrOpenState       = types.ErrOpenState
-	ErrTooManyRequests = types.ErrTooManyRequests
-	ErrInvalidConfig   = types.ErrInvalidConfig
-)
+// String 返回状态的字符串表示
+func (s State) String() string {
+	switch s {
+	case StateClosed:
+		return "closed"
+	case StateHalfOpen:
+		return "half_open"
+	case StateOpen:
+		return "open"
+	default:
+		return "unknown"
+	}
+}
+
+// ========================================
+// 配置定义 (Configuration)
+// ========================================
+
+// Config 熔断器配置
+type Config struct {
+	// MaxRequests 半开状态下允许通过的最大请求数（默认：1）
+	// 用于探测服务是否恢复
+	MaxRequests uint32 `json:"max_requests" yaml:"max_requests"`
+
+	// Interval 闭合状态下的统计周期（默认：0，不清空统计）
+	// 设置后会定期清空计数器
+	Interval time.Duration `json:"interval" yaml:"interval"`
+
+	// Timeout 打开状态持续时间（默认：60s）
+	// 超时后进入半开状态进行探测
+	Timeout time.Duration `json:"timeout" yaml:"timeout"`
+
+	// FailureRatio 失败率阈值（默认：0.6，即 60%）
+	// 当失败率超过此值时触发熔断
+	FailureRatio float64 `json:"failure_ratio" yaml:"failure_ratio"`
+
+	// MinimumRequests 触发熔断的最小请求数（默认：10）
+	// 请求数少于此值时不会触发熔断
+	MinimumRequests uint32 `json:"minimum_requests" yaml:"minimum_requests"`
+}
 
 // ========================================
 // 工厂函数 (Factory Functions)
 // ========================================
 
-// New 创建熔断器实例 (独立模式)
-// 这是标准的工厂函数，支持在不依赖 Container 的情况下独立实例化
+// New 创建熔断器实例
+// 这是标准的工厂函数，支持在不依赖其他容器的情况下独立实例化
 //
 // 参数:
 //   - cfg: 熔断器配置
-//   - opts: 可选参数 (Logger, Meter, Tracer)
+//   - opts: 可选参数 (Logger, Meter, Fallback)
 //
 // 使用示例:
 //
-//	// 创建熔断器
-//	b, _ := breaker.New(&breaker.Config{
-//	    Default: breaker.Policy{
-//	        FailureThreshold:    0.5,  // 50% 失败率触发熔断
-//	        WindowSize:          100,
-//	        MinRequests:         10,
-//	        OpenTimeout:         30 * time.Second,
-//	        HalfOpenMaxRequests: 3,
-//	    },
-//	    Services: map[string]breaker.Policy{
-//	        "user.v1.UserService": {
-//	            FailureThreshold: 0.3, // 用户服务更敏感
-//	            WindowSize:       50,
-//	        },
-//	    },
+//	brk, _ := breaker.New(&breaker.Config{
+//		MaxRequests:     5,
+//		Interval:        60 * time.Second,
+//		Timeout:         30 * time.Second,
+//		FailureRatio:    0.6,
+//		MinimumRequests: 10,
 //	}, breaker.WithLogger(logger))
 func New(cfg *Config, opts ...Option) (Breaker, error) {
-	// 使用默认配置
 	if cfg == nil {
-		cfg = types.DefaultConfig()
-	}
-
-	// 验证配置
-	if err := validateConfig(cfg); err != nil {
-		return nil, err
+		return nil, ErrConfigNil
 	}
 
 	// 应用选项
-	opt := &Options{
-		Logger: clog.Default(), // 默认 Logger
-	}
+	opt := options{}
 	for _, o := range opts {
-		o(opt)
+		o(&opt)
 	}
 
-	// 派生 Logger (添加 "breaker" namespace)
-	if opt.Logger != nil {
-		opt.Logger = opt.Logger.With(clog.String("component", "breaker"))
+	// 派生 Logger（添加 component 字段）
+	logger := opt.logger
+	if logger != nil {
+		logger = logger.With(clog.String("component", "breaker"))
 	}
 
-	return internalbreaker.New(cfg, opt.Logger, opt.Meter)
-}
-
-// validateConfig 验证配置
-func validateConfig(cfg *Config) error {
-	// 验证默认策略
-	if err := validatePolicy(&cfg.Default); err != nil {
-		return fmt.Errorf("invalid default policy: %w", err)
+	if logger != nil {
+		logger.Info("creating circuit breaker",
+			clog.Int("max_requests", int(cfg.MaxRequests)),
+			clog.Duration("interval", cfg.Interval),
+			clog.Duration("timeout", cfg.Timeout),
+			clog.Float64("failure_ratio", cfg.FailureRatio),
+			clog.Int("minimum_requests", int(cfg.MinimumRequests)))
 	}
 
-	// 验证服务级策略
-	for name, policy := range cfg.Services {
-		if err := validatePolicy(&policy); err != nil {
-			return fmt.Errorf("invalid policy for service %s: %w", name, err)
-		}
-	}
-
-	return nil
-}
-
-// validatePolicy 验证策略
-func validatePolicy(p *Policy) error {
-	if p.FailureThreshold < 0 || p.FailureThreshold > 1 {
-		return fmt.Errorf("failure threshold must be between 0 and 1, got %f", p.FailureThreshold)
-	}
-	if p.WindowSize <= 0 {
-		return fmt.Errorf("window size must be positive, got %d", p.WindowSize)
-	}
-	if p.MinRequests < 0 {
-		return fmt.Errorf("min requests must be non-negative, got %d", p.MinRequests)
-	}
-	if p.OpenTimeout <= 0 {
-		return fmt.Errorf("open timeout must be positive, got %v", p.OpenTimeout)
-	}
-	if p.HalfOpenMaxRequests <= 0 {
-		return fmt.Errorf("half open max requests must be positive, got %d", p.HalfOpenMaxRequests)
-	}
-	return nil
+	return newBreaker(cfg, logger, opt.meter, opt.fallback)
 }

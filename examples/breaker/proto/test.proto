@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package test;
+
+option go_package = "github.com/ceyewan/genesis/examples/breaker/proto;proto";
+
+// TestService 测试服务定义
+service TestService {
+  // Call 普通调用方法
+  rpc Call(CallRequest) returns (CallResponse);
+  
+  // StreamCall 流式调用方法
+  rpc StreamCall(stream StreamRequest) returns (stream StreamResponse);
+}
+
+// CallRequest 调用请求
+message CallRequest {
+  string message = 1;
+  bool should_fail = 2;  // 是否应该失败（用于模拟故障）
+}
+
+// CallResponse 调用响应
+message CallResponse {
+  string message = 1;
+  string server_id = 2;
+  int64 timestamp = 3;
+}
+
+// StreamRequest 流式请求
+message StreamRequest {
+  string message = 1;
+}
+
+// StreamResponse 流式响应
+message StreamResponse {
+  string message = 1;
+  int64 timestamp = 2;
+}
+

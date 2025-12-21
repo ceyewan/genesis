@@ -26,7 +26,7 @@
 | **idempotency** | L2 | [x] | [x] | [x] | [x] | ✅ 完成 |
 | **auth** | L3 | [x] | [x] | [x] | [x] | ✅ 完成 |
 | **ratelimit** | L3 | [x] | [x] | [x] | [x] | ✅ 完成 |
-| **breaker** | L3 | [ ] | [ ] | [ ] | [ ] | ⏳ 待重构 |
+| **breaker** | L3 | [x] | [x] | [x] | [x] | ✅ 完成 |
 | **registry** | L3 | [x] | [x] | [ ] | [x] | ✅ 完成 |
 
 ---
