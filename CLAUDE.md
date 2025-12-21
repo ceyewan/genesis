@@ -83,6 +83,80 @@ cache, _ := cache.New(redisConn, &cfg.Cache, cache.WithLogger(logger))
 - **Component** - 借用Connector，Close()通常是no-op
 - **应用层** - 通过defer实现LIFO关闭顺序
 
+### 基础设施组件使用规范
+
+**⚠️ 重要原则：Genesis 所有组件必须使用 L0 基础设施组件**
+
+Genesis 提供 4 个 L0 基础组件作为一切组件的基石。所有其他组件必须使用这些基础设施，禁止直接调用标准库。
+
+#### 四个基础组件
+
+1. **日志 (clog)** - 必须使用，禁止 `log.Printf`/`fmt.Printf`
+2. **配置 (config)** - 必须使用，禁止直接解析环境变量
+3. **错误 (xerrors)** - 必须使用，禁止 `errors.New`/`fmt.Errorf`
+4. **指标 (metrics)** - 必须使用，禁止直接使用 Prometheus 客户端
+
+#### 标准使用模式
+
+```go
+// ✅ 正确：使用 Genesis 基础组件
+import "github.com/ceyewan/genesis/{clog,config,xerrors,metrics}"
+
+// 组件接受依赖注入
+func NewCache(conn redis.Conn, opts ...Option) (*Cache, error) {
+    cache := &Cache{conn: conn}
+    for _, opt := range opts { opt(cache) }
+
+    // 默认值使用基础组件
+    if cache.logger == nil {
+        cache.logger = clog.Must(&clog.Config{Level: "info"})
+    }
+    return cache, nil
+}
+
+// 记录日志
+cache.logger.Info("cache miss", clog.String("key", key))
+
+// 错误处理
+return nil, xerrors.Wrap(err, "connection failed")
+
+// 配置解析
+var cfg Config
+loader.UnmarshalKey("cache", &cfg)
+
+// 指标记录
+cache.hits.Inc(ctx, metrics.L("type", "user"))
+```
+
+```go
+// ❌ 禁止：直接使用标准库
+import ("log"; "errors"; "fmt"; "os")
+
+log.Printf("cache miss: %s", key)        // ❌
+return fmt.Errorf("failed: %w", err)     // ❌
+os.Getenv("CACHE_PREFIX")                // ❌
+```
+
+#### 依赖注入选项
+
+```go
+type Option func(*Cache)
+
+func WithLogger(logger clog.Logger) Option {
+    return func(c *Cache) { c.logger = logger }
+}
+
+func WithMeter(meter metrics.Meter) Option {
+    return func(c *Cache) { c.meter = meter }
+}
+
+// 使用示例
+cache, err := cache.New(redisConn, cfg,
+    cache.WithLogger(logger),  // 注入日志
+    cache.WithMeter(meter),    // 注入指标
+)
+```
+
 ## 重构进度追踪
 
 当前项目正在从原型架构迁移到四层扁平化架构。详细进度请参考 `docs/refactoring-progress.md`。

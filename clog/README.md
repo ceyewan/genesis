@@ -1,16 +1,18 @@
-# clog 结构化日志组件
+[![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/clog.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/clog)
 
-## 1. 概述
+# clog - Genesis 结构化日志组件
 
 `clog` 是 Genesis 框架的结构化日志组件，基于 Go 标准库 `log/slog` 构建。
 
-* **所属层级**：L0 (Base) — 框架基石，被所有上层组件依赖
-* **核心职责**：提供统一的结构化日志接口，支持命名空间派生和 Context 字段提取
-* **设计原则**：
-  * 抽象接口，不暴露底层实现（slog）
-  * 支持层级命名空间，适配微服务架构
-  * 零外部依赖（仅依赖 Go 标准库）
-  * 采用函数式选项模式，符合 Genesis 标准
+## 特性
+
+- **所属层级**：L0 (Base) — 框架基石，被所有上层组件依赖
+- **核心职责**：提供统一的结构化日志接口，支持命名空间派生和 Context 字段提取
+- **设计原则**：
+  - 抽象接口，不暴露底层实现（slog）
+  - 支持层级命名空间，适配微服务架构
+  - 零外部依赖（仅依赖 Go 标准库）
+  - 采用函数式选项模式，符合 Genesis 标准
 
 ## 2. 目录结构
 

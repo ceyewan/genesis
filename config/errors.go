@@ -20,7 +20,7 @@ func WrapValidationError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return xerrors.Wrapf(err, "validation failed")
+	return xerrors.Wrap(xerrors.ErrInvalidInput, err.Error())
 }
 
 // WrapLoadError 包装加载错误

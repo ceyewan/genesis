@@ -1,3 +1,40 @@
+// Package metrics 为 Genesis 框架提供统一的指标收集能力。
+// 基于 OpenTelemetry 标准构建，提供简洁的 Counter、Gauge、Histogram 指标接口，
+// 并内置 Prometheus HTTP 服务器用于指标暴露。
+//
+// 架构说明：
+//   - 属于 Genesis 四层架构中的 L0（Base）层
+//   - 完全扁平化设计，无 types/ 子包
+//   - 基于 OpenTelemetry 标准，确保与云原生生态兼容
+//   - 内置 Prometheus HTTP 服务器，支持指标自动暴露
+//
+// 快速开始：
+//
+//	cfg := &metrics.Config{
+//	    Enabled:     true,
+//	    ServiceName: "my-service",
+//	    Version:     "v1.0.0",
+//	    Port:        9090,
+//	    Path:        "/metrics",
+//	}
+//
+//	meter, err := metrics.New(cfg)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer meter.Shutdown(ctx)
+//
+//	// 创建指标
+//	counter, _ := meter.Counter("http_requests_total", "HTTP 请求总数")
+//	histogram, _ := meter.Histogram("request_duration_seconds", "请求耗时（秒）")
+//
+// 使用示例：
+//
+//	// 带标签增加计数器
+//	counter.Inc(ctx, metrics.L("method", "GET"), metrics.L("status", "200"))
+//
+//	// 记录直方图值
+//	histogram.Record(ctx, 0.123, metrics.L("endpoint", "/api/users"))
 package metrics
 
 import (
@@ -7,6 +44,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/ceyewan/genesis/clog"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
@@ -22,8 +61,40 @@ import (
 // 工厂函数
 // ============================================================================
 
-// New 创建 Meter 实例
-// 返回值实现 Meter 接口，用于创建和记录指标
+// New 创建一个新的 Meter 实例
+// Meter 是指标的创建工厂，用于创建 Counter、Gauge、Histogram 等指标实例
+//
+// 如果 cfg.Enabled 为 false，将返回一个 noop Meter，所有操作都是空操作
+// 如果 cfg.Enabled 为 true，将：
+//  1. 创建 OpenTelemetry MeterProvider 和 Prometheus Exporter
+//  2. 设置服务资源信息（ServiceName 和 Version）
+//  3. 启动 Prometheus HTTP 服务器（如果 Port 和 Path 都设置）
+//  4. 返回可用的 Meter 实例
+//
+// 参数：
+//
+//	cfg  - 指标系统配置，不能为 nil
+//	opts - 可选配置项，目前支持 WithLogger
+//
+// 返回：
+//
+//	Meter - 指标创建工厂实例
+//	error - 创建过程中的错误，如果成功则为 nil
+//
+// 使用示例：
+//
+//	cfg := &metrics.Config{
+//	    Enabled:     true,
+//	    ServiceName: "my-service",
+//	    Version:     "v1.0.0",
+//	    Port:        9090,
+//	    Path:        "/metrics",
+//	}
+//
+//	meter, err := metrics.New(cfg)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 func New(cfg *Config, opts ...Option) (Meter, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is required")
@@ -37,6 +108,15 @@ func New(cfg *Config, opts ...Option) (Meter, error) {
 	options := &options{}
 	for _, opt := range opts {
 		opt(options)
+	}
+
+	// 如果没有提供 logger，使用默认值
+	if options.logger == nil {
+		defaultLogger, _ := clog.New(&clog.Config{
+			Level:  "info",
+			Format: "console",
+		})
+		options.logger = defaultLogger.WithNamespace("metrics")
 	}
 
 	// 创建资源
@@ -93,8 +173,29 @@ func New(cfg *Config, opts ...Option) (Meter, error) {
 	}, nil
 }
 
-// Must 类似 New，但出错时 panic
-// 仅用于初始化阶段
+// Must 创建 Meter 实例，出错时 panic
+// 这是 New 的便捷版本，适用于应用程序初始化阶段
+// 如果创建失败，会直接 panic 并终止程序
+//
+// 注意：此函数应该只在程序主函数或 init() 中使用，
+// 不应该在可以被恢复的业务逻辑中使用
+//
+// 参数：
+//
+//	cfg  - 指标系统配置，不能为 nil
+//	opts - 可选配置项，目前支持 WithLogger
+//
+// 返回：
+//
+//	Meter - 指标创建工厂实例，如果出错则 panic
+//
+// 使用示例：
+//
+//	meter := metrics.Must(&metrics.Config{
+//	    Enabled:     true,
+//	    ServiceName: "my-service",
+//	    Version:     "v1.0.0",
+//	})
 func Must(cfg *Config, opts ...Option) Meter {
 	m, err := New(cfg, opts...)
 	if err != nil {

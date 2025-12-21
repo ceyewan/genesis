@@ -44,7 +44,7 @@ status:
 	@echo "查看服务状态..."
 	@docker compose -f docker-compose.dev.yml ps
 
-// 显示所有示例
+# 显示所有示例
 examples:
 	@echo "列出所有示例:"
 	@for d in examples/*; do if [ -f "$d/main.go" ]; then echo "  - $(basename $d)"; fi; done

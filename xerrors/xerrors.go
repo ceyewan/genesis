@@ -1,5 +1,41 @@
-// xerrors 包为 Genesis 提供标准化的错误处理工具。
+// Package xerrors 为 Genesis 框架提供标准化的错误处理工具。
 // 这是一个基础包，不依赖于 Genesis 的其他组件。
+//
+// 特性：
+//   - 零依赖设计：不依赖任何 Genesis 组件，避免循环依赖
+//   - 错误链兼容：完全兼容 Go 1.13+ 的 errors.Is、errors.As、errors.Unwrap
+//   - Sentinel Errors：提供 10 个预定义的通用错误类型
+//   - 错误码支持：机器可读的错误码，便于 API 错误映射
+//   - 泛型支持：Go 1.18+ 的泛型 Must 函数
+//   - 智能错误聚合：Collector 和 Combine 支持多错误处理
+//
+// 基本使用：
+//
+//	// 错误包装
+//	file, err := os.Open("config.yaml")
+//	if err != nil {
+//		return nil, xerrors.Wrap(err, "open config file")
+//	}
+//
+//	// 带错误码的错误
+//	user, err := getUserFromDB(123)
+//	if err != nil {
+//		return nil, xerrors.WithCode(err, "USER_NOT_FOUND")
+//	}
+//
+//	// Sentinel Errors 检查
+//	result, err := cache.Get(ctx, key)
+//	if errors.Is(err, cache.ErrCacheMiss) {
+//		// 缓存未命中，从数据库加载
+//		result, err = db.FindByID(ctx, id)
+//	}
+//
+//	// 错误码提取
+//	err := someOperation()
+//	code := xerrors.GetCode(err)
+//	if code != "" {
+//		return HTTPError(codeToHTTPStatus(code), code)
+//	}
 package xerrors
 
 import (

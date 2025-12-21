@@ -26,8 +26,8 @@ type loader struct {
 	oldValues map[string]interface{}
 }
 
-// NewLoader 创建一个新的配置加载器
-func NewLoader(opts ...Option) (Loader, error) {
+// newLoader 创建一个新的配置加载器（内部使用）
+func newLoader(opts ...Option) (Loader, error) {
 	options := defaultOptions()
 	for _, o := range opts {
 		o(options)

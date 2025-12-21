@@ -1,3 +1,33 @@
+// Package clog 为 Genesis 框架提供基于 slog 的结构化日志组件。
+// 支持 Context 字段提取和命名空间管理。
+//
+// 特性：
+//   - 抽象接口，不暴露底层实现（slog）
+//   - 支持层级命名空间，适配微服务架构
+//   - 零外部依赖（仅依赖 Go 标准库）
+//   - 采用函数式选项模式，符合 Genesis 标准
+//   - 支持多种错误字段：Error、ErrorWithCode、ErrorWithStack
+//
+// 基本使用：
+//
+//	logger, _ := clog.New(&clog.Config{
+//	    Level:  "info",
+//	    Format: "console",
+//	    Output: "stdout",
+//	})
+//	logger.Info("Hello, World!", clog.String("key", "value"))
+//
+// 使用函数式选项：
+//
+//	logger, _ := clog.New(&clog.Config{Level: "info"},
+//	    clog.WithNamespace("my-service", "api"),
+//	    clog.WithStandardContext(), // 自动提取 trace_id, user_id, request_id
+//	)
+//
+// 带 Context 的日志：
+//
+//	ctx := context.WithValue(context.Background(), "trace-id", "abc123")
+//	logger.InfoContext(ctx, "Request processed")
 package clog
 
 import "context"

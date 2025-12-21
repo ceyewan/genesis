@@ -176,7 +176,7 @@ func TestLoggerFields(t *testing.T) {
 		Float64("float_field", 3.14),
 		Bool("bool_field", true),
 		Time("time_field", testTime),
-		Error(err),
+		ErrorWithStack(err),
 	)
 
 	output := buf.String()
