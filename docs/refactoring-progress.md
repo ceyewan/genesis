@@ -25,7 +25,7 @@
 | **mq** | L2 | [x] | [x] | [x] | [x] | ✅ 完成 |
 | **idempotency** | L2 | [x] | [x] | [x] | [x] | ✅ 完成 |
 | **auth** | L3 | [x] | [x] | [x] | [x] | ✅ 完成 |
-| **ratelimit** | L3 | [ ] | [ ] | [ ] | [ ] | ⏳ 待重构 |
+| **ratelimit** | L3 | [x] | [x] | [x] | [x] | ✅ 完成 |
 | **breaker** | L3 | [ ] | [ ] | [ ] | [ ] | ⏳ 待重构 |
 | **registry** | L3 | [x] | [x] | [ ] | [x] | ✅ 完成 |
 
@@ -70,6 +70,14 @@
   - [x] 示例更新 (examples/auth)
   - [x] 更新 `docs/governance/auth-design.md`
   - [x] 生成 API 文档
+- [x] **ratelimit**:
+  - [x] 代码重构 (ratelimit/)
+  - [x] 扁平化结构：删除 types/、adapter/ 子包，删除 internal/ratelimit
+  - [x] 创建 standalone.go 和 distributed.go（非导出实现）
+  - [x] 中间件迁移到 middleware.go（参考 auth 组件）
+  - [x] 示例更新 (examples/ratelimit)
+  - [x] 更新 `ratelimit/README.md`
+  - [x] 验证编译通过
 - [x] **registry**:
   - [x] 代码重构 (pkg/registry)
   - [x] 示例更新 (examples/registry, examples/grpc-registry)

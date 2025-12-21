@@ -1,12 +1,10 @@
-package adapter
+package ratelimit
 
 import (
 	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/ceyewan/genesis/ratelimit/types"
 )
 
 // GinMiddleware 创建 Gin 限流中间件
@@ -19,16 +17,16 @@ import (
 // 使用示例:
 //
 //	r := gin.New()
-//	r.Use(adapter.GinMiddleware(limiter,
+//	r.Use(ratelimit.GinMiddleware(limiter,
 //	    nil, // 使用默认的 IP 作为 key
-//	    func(c *gin.Context) types.Limit {
-//	        return types.Limit{Rate: 10, Burst: 20} // 10 QPS
+//	    func(c *gin.Context) ratelimit.Limit {
+//	        return ratelimit.Limit{Rate: 10, Burst: 20} // 10 QPS
 //	    },
 //	))
 func GinMiddleware(
-	limiter types.Limiter,
+	limiter Limiter,
 	keyFunc func(*gin.Context) string,
-	limitFunc func(*gin.Context) types.Limit,
+	limitFunc func(*gin.Context) Limit,
 ) gin.HandlerFunc {
 	if keyFunc == nil {
 		// 默认使用客户端 IP 作为限流键
@@ -80,11 +78,11 @@ func GinMiddleware(
 //
 // 使用示例:
 //
-//	r.Use(adapter.GinMiddlewareWithHeaders(limiter, nil, limitFunc))
+//	r.Use(ratelimit.GinMiddlewareWithHeaders(limiter, nil, limitFunc))
 func GinMiddlewareWithHeaders(
-	limiter types.Limiter,
+	limiter Limiter,
 	keyFunc func(*gin.Context) string,
-	limitFunc func(*gin.Context) types.Limit,
+	limitFunc func(*gin.Context) Limit,
 ) gin.HandlerFunc {
 	if keyFunc == nil {
 		keyFunc = func(c *gin.Context) string {
@@ -132,10 +130,10 @@ func GinMiddlewareWithHeaders(
 // 使用示例:
 //
 //	r.Use(authMiddleware) // 设置 userID 到 context
-//	r.Use(adapter.GinMiddlewarePerUser(limiter, limitFunc))
+//	r.Use(ratelimit.GinMiddlewarePerUser(limiter, limitFunc))
 func GinMiddlewarePerUser(
-	limiter types.Limiter,
-	limitFunc func(*gin.Context) types.Limit,
+	limiter Limiter,
+	limitFunc func(*gin.Context) Limit,
 ) gin.HandlerFunc {
 	return GinMiddleware(limiter, func(c *gin.Context) string {
 		// 从 context 获取用户 ID
@@ -154,15 +152,15 @@ func GinMiddlewarePerUser(
 //
 // 使用示例:
 //
-//	rules := map[string]types.Limit{
+//	rules := map[string]ratelimit.Limit{
 //	    "/api/login": {Rate: 5, Burst: 10},    // 登录接口限流更严格
 //	    "/api/data":  {Rate: 100, Burst: 200}, // 数据接口限流较宽松
 //	}
-//	r.Use(adapter.GinMiddlewarePerPath(limiter, rules, defaultLimit))
+//	r.Use(ratelimit.GinMiddlewarePerPath(limiter, rules, defaultLimit))
 func GinMiddlewarePerPath(
-	limiter types.Limiter,
-	pathLimits map[string]types.Limit,
-	defaultLimit types.Limit,
+	limiter Limiter,
+	pathLimits map[string]Limit,
+	defaultLimit Limit,
 ) gin.HandlerFunc {
 	return GinMiddleware(
 		limiter,
@@ -170,7 +168,7 @@ func GinMiddlewarePerPath(
 			// 组合 IP 和路径作为限流键
 			return c.ClientIP() + ":" + c.Request.URL.Path
 		},
-		func(c *gin.Context) types.Limit {
+		func(c *gin.Context) Limit {
 			// 根据路径返回对应的限流规则
 			if limit, ok := pathLimits[c.Request.URL.Path]; ok {
 				return limit
@@ -181,6 +179,6 @@ func GinMiddlewarePerPath(
 }
 
 // formatLimit 格式化限流规则为字符串
-func formatLimit(limit types.Limit) string {
+func formatLimit(limit Limit) string {
 	return fmt.Sprintf("rate=%.2f, burst=%d", limit.Rate, limit.Burst)
 }

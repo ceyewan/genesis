@@ -1,4 +1,4 @@
-package distributed
+package ratelimit
 
 import (
 	"context"
@@ -9,8 +9,7 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	metrics "github.com/ceyewan/genesis/metrics"
-	"github.com/ceyewan/genesis/ratelimit/types"
+	"github.com/ceyewan/genesis/metrics"
 )
 
 // luaScript 令牌桶算法的 Lua 脚本
@@ -61,8 +60,8 @@ else
 end
 `
 
-// Limiter 分布式限流器实现
-type Limiter struct {
+// distributedLimiter 分布式限流器实现（非导出）
+type distributedLimiter struct {
 	client *redis.Client
 	prefix string
 	logger clog.Logger
@@ -70,28 +69,23 @@ type Limiter struct {
 	script *redis.Script
 }
 
-// New 创建分布式限流器
-func New(
-	cfg *types.Config,
+// newDistributed 创建分布式限流器（内部函数）
+func newDistributed(
+	cfg *DistributedConfig,
 	redisConn connector.RedisConnector,
 	logger clog.Logger,
 	meter metrics.Meter,
-) (*Limiter, error) {
+) (Limiter, error) {
 	if redisConn == nil {
 		return nil, fmt.Errorf("redis connector is nil")
 	}
 
-	prefix := cfg.Distributed.Prefix
+	prefix := cfg.Prefix
 	if prefix == "" {
 		prefix = "ratelimit:"
 	}
 
-	// 派生 Logger
-	if logger != nil {
-		logger = logger.WithNamespace("ratelimit.distributed")
-	}
-
-	l := &Limiter{
+	l := &distributedLimiter{
 		client: redisConn.GetClient(),
 		prefix: prefix,
 		logger: logger,
@@ -107,18 +101,18 @@ func New(
 }
 
 // Allow 尝试获取 1 个令牌
-func (l *Limiter) Allow(ctx context.Context, key string, limit types.Limit) (bool, error) {
+func (l *distributedLimiter) Allow(ctx context.Context, key string, limit Limit) (bool, error) {
 	return l.AllowN(ctx, key, limit, 1)
 }
 
 // AllowN 尝试获取 N 个令牌
-func (l *Limiter) AllowN(ctx context.Context, key string, limit types.Limit, n int) (bool, error) {
+func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit, n int) (bool, error) {
 	if key == "" {
-		return false, types.ErrKeyEmpty
+		return false, ErrKeyEmpty
 	}
 
 	if limit.Rate <= 0 || limit.Burst <= 0 {
-		return false, types.ErrInvalidLimit
+		return false, ErrInvalidLimit
 	}
 
 	if n <= 0 {
@@ -173,7 +167,7 @@ func (l *Limiter) AllowN(ctx context.Context, key string, limit types.Limit, n i
 
 // Wait 阻塞等待直到获取 1 个令牌
 // 注意：分布式模式不支持 Wait 操作
-func (l *Limiter) Wait(ctx context.Context, key string, limit types.Limit) error {
+func (l *distributedLimiter) Wait(ctx context.Context, key string, limit Limit) error {
 	// 分布式环境下 Wait 难以精确实现且代价高昂
-	return types.ErrNotSupported
+	return ErrNotSupported
 }

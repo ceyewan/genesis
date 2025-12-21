@@ -1,4 +1,4 @@
-package standalone
+package ratelimit
 
 import (
 	"context"
@@ -9,8 +9,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/ceyewan/genesis/clog"
-	metrics "github.com/ceyewan/genesis/metrics"
-	"github.com/ceyewan/genesis/ratelimit/types"
+	"github.com/ceyewan/genesis/metrics"
 )
 
 // limiterWrapper 包装 rate.Limiter 并记录最后访问时间
@@ -20,27 +19,22 @@ type limiterWrapper struct {
 	mu       sync.Mutex
 }
 
-// Limiter 单机限流器实现
-type Limiter struct {
-	cfg      *types.Config
+// standaloneLimiter 单机限流器实现（非导出）
+type standaloneLimiter struct {
+	cfg      *StandaloneConfig
 	logger   clog.Logger
 	meter    metrics.Meter
 	limiters sync.Map // map[string]*limiterWrapper
 	stopCh   chan struct{}
 }
 
-// New 创建单机限流器
-func New(
-	cfg *types.Config,
+// newStandalone 创建单机限流器（内部函数）
+func newStandalone(
+	cfg *StandaloneConfig,
 	logger clog.Logger,
 	meter metrics.Meter,
-) (*Limiter, error) {
-	// 派生 Logger
-	if logger != nil {
-		logger = logger.WithNamespace("ratelimit.standalone")
-	}
-
-	l := &Limiter{
+) (Limiter, error) {
+	l := &standaloneLimiter{
 		cfg:    cfg,
 		logger: logger,
 		meter:  meter,
@@ -48,12 +42,12 @@ func New(
 	}
 
 	// 启动清理 goroutine
-	cleanupInterval := cfg.Standalone.CleanupInterval
+	cleanupInterval := cfg.CleanupInterval
 	if cleanupInterval == 0 {
 		cleanupInterval = 1 * time.Minute
 	}
 
-	idleTimeout := cfg.Standalone.IdleTimeout
+	idleTimeout := cfg.IdleTimeout
 	if idleTimeout == 0 {
 		idleTimeout = 5 * time.Minute
 	}
@@ -70,18 +64,18 @@ func New(
 }
 
 // Allow 尝试获取 1 个令牌
-func (l *Limiter) Allow(ctx context.Context, key string, limit types.Limit) (bool, error) {
+func (l *standaloneLimiter) Allow(ctx context.Context, key string, limit Limit) (bool, error) {
 	return l.AllowN(ctx, key, limit, 1)
 }
 
 // AllowN 尝试获取 N 个令牌
-func (l *Limiter) AllowN(ctx context.Context, key string, limit types.Limit, n int) (bool, error) {
+func (l *standaloneLimiter) AllowN(ctx context.Context, key string, limit Limit, n int) (bool, error) {
 	if key == "" {
-		return false, types.ErrKeyEmpty
+		return false, ErrKeyEmpty
 	}
 
 	if limit.Rate <= 0 || limit.Burst <= 0 {
-		return false, types.ErrInvalidLimit
+		return false, ErrInvalidLimit
 	}
 
 	if n <= 0 {
@@ -110,13 +104,13 @@ func (l *Limiter) AllowN(ctx context.Context, key string, limit types.Limit, n i
 }
 
 // Wait 阻塞等待直到获取 1 个令牌
-func (l *Limiter) Wait(ctx context.Context, key string, limit types.Limit) error {
+func (l *standaloneLimiter) Wait(ctx context.Context, key string, limit Limit) error {
 	if key == "" {
-		return types.ErrKeyEmpty
+		return ErrKeyEmpty
 	}
 
 	if limit.Rate <= 0 || limit.Burst <= 0 {
-		return types.ErrInvalidLimit
+		return ErrInvalidLimit
 	}
 
 	// 获取或创建 limiter
@@ -139,7 +133,7 @@ func (l *Limiter) Wait(ctx context.Context, key string, limit types.Limit) error
 }
 
 // getLimiter 获取或创建指定 key 的限流器
-func (l *Limiter) getLimiter(key string, limit types.Limit) *limiterWrapper {
+func (l *standaloneLimiter) getLimiter(key string, limit Limit) *limiterWrapper {
 	// 构造缓存 key (包含 rate 和 burst)
 	cacheKey := fmt.Sprintf("%s:%v:%d", key, limit.Rate, limit.Burst)
 
@@ -160,7 +154,7 @@ func (l *Limiter) getLimiter(key string, limit types.Limit) *limiterWrapper {
 }
 
 // cleanup 定期清理过期的限流器
-func (l *Limiter) cleanup(interval, idleTimeout time.Duration) {
+func (l *standaloneLimiter) cleanup(interval, idleTimeout time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -194,7 +188,7 @@ func (l *Limiter) cleanup(interval, idleTimeout time.Duration) {
 }
 
 // Close 关闭限流器
-func (l *Limiter) Close() error {
+func (l *standaloneLimiter) Close() error {
 	close(l.stopCh)
 	return nil
 }
