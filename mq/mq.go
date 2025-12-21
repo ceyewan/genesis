@@ -1,8 +1,27 @@
+// Package mq 提供消息队列组件，支持 NATS Core 和 JetStream 两种模式。
+//
+// MQ 组件是 Genesis 微服务组件库的消息中间件抽象层，提供了统一的发布-订阅语义。
+// 支持 Core 模式（高性能、发后即忘）和 JetStream 模式（持久化、可靠投递）。
+//
+// 基本使用：
+//
+//	natsConn, _ := connector.NewNATS(natsConfig)
+//	mqClient, _ := mq.New(natsConn, &mq.Config{
+//	    Driver: mq.DriverNatsCore,
+//	}, mq.WithLogger(logger))
+//
+//	// 发布消息
+//	err := mqClient.Publish(ctx, "orders.created", data)
+//
+//	// 订阅消息
+//	sub, _ := mqClient.Subscribe(ctx, "orders.created", func(ctx context.Context, msg mq.Message) error {
+//	    fmt.Printf("收到消息: %s\n", string(msg.Data()))
+//	    return nil
+//	})
 package mq
 
 import (
 	"context"
-	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
@@ -41,7 +60,7 @@ type Subscription interface {
 
 // Client 定义了 MQ 组件的核心能力
 type Client interface {
-	// Publish 发送消息
+	// Publish 发布消息
 	// 在 Core 模式下是发后即忘；在 JetStream 模式下会等待持久化确认
 	Publish(ctx context.Context, subject string, data []byte) error
 
@@ -56,50 +75,48 @@ type Client interface {
 	// 对应 Kafka 的 Consumer Group 概念
 	QueueSubscribe(ctx context.Context, subject string, queue string, handler Handler) (Subscription, error)
 
-	// Request 请求-响应 (RPC 模式)
-	// 发送消息并等待响应。
-	// 注意：此功能是 NATS Core 的强项。如果未来切换 Kafka，此接口可能难以高效实现或不支持。
-	Request(ctx context.Context, subject string, data []byte, timeout time.Duration) (Message, error)
-
 	// Close 关闭客户端
 	Close() error
 }
 
-// NewClient 创建 MQ 客户端 (独立模式)
-// 这是标准的工厂函数，支持在不依赖 Container 的情况下独立实例化
+// New 创建 MQ 客户端
 //
 // 参数:
 //   - conn: NATS 连接器
 //   - cfg: MQ 配置
 //   - opts: 可选参数 (Logger, Meter)
-//
-// 使用示例:
-//
-//	natsConn, _ := connector.NewNATS(natsConfig)
-//	mqClient, _ := mq.NewClient(natsConn, &mq.Config{
-//	    Driver: mq.DriverNatsCore,
-//	}, mq.WithLogger(logger))
-func NewClient(conn connector.NATSConnector, cfg *Config, opts ...Option) (Client, error) {
+func New(conn connector.NATSConnector, cfg *Config, opts ...Option) (Client, error) {
 	// 应用选项
-	opt := Options{
-		Logger: clog.Default(), // 默认 Logger
-	}
+	opt := options{}
 	for _, o := range opts {
 		o(&opt)
 	}
 
-	return New(conn, cfg, opt.Logger, opt.Meter)
+	// 如果没有提供 Logger，创建默认实例
+	if opt.Logger == nil {
+		logger, err := clog.New(&clog.Config{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
+		})
+		if err != nil {
+			return nil, xerrors.Wrapf(err, "failed to create default logger")
+		}
+		opt.Logger = logger
+	}
+
+	return newClient(conn, cfg, opt.Logger, opt.Meter)
 }
 
-// New 内部工厂函数
-func New(conn connector.NATSConnector, cfg *Config, logger clog.Logger, meter metrics.Meter) (Client, error) {
+// newClient 内部工厂函数
+func newClient(conn connector.NATSConnector, cfg *Config, logger clog.Logger, meter metrics.Meter) (Client, error) {
 	if cfg == nil {
 		return nil, xerrors.New("mq config is required")
 	}
 
-	// 使用默认 Logger 如果未提供
+	// Logger 应该由 New 确保，不应该为 nil
 	if logger == nil {
-		logger = clog.Default()
+		return nil, xerrors.New("logger is required, should be provided by New")
 	}
 
 	switch cfg.Driver {

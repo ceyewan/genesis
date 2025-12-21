@@ -2,7 +2,6 @@ package mq
 
 import (
 	"context"
-	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -30,44 +29,58 @@ func newCoreClient(conn connector.NATSConnector, logger clog.Logger, meter metri
 }
 
 func (c *coreClient) Publish(ctx context.Context, subject string, data []byte) error {
+	// 记录发布指标
+	if c.meter != nil {
+		publishCounter, err := c.meter.Counter("mq.publish.total", "Total number of messages published")
+		if err == nil {
+			publishCounter.Inc(ctx,
+				metrics.L("subject", subject),
+				metrics.L("driver", "core"),
+			)
+		}
+	}
+
 	// NATS Core Publish 是发后即忘，非常快
-	return c.conn.Publish(subject, data)
+	err := c.conn.Publish(subject, data)
+	if err != nil && c.meter != nil {
+		errorCounter, err := c.meter.Counter("mq.publish.errors", "Total number of publish errors")
+		if err == nil {
+			errorCounter.Inc(ctx,
+				metrics.L("subject", subject),
+				metrics.L("driver", "core"),
+				metrics.L("error", "publish_failed"),
+			)
+		}
+	}
+	return err
 }
 
-func (c *coreClient) Subscribe(ctx context.Context, subject string, handler Handler) (Subscription, error) {
+func (c *coreClient) Subscribe(ctx context.Context, subject string, Handler Handler) (Subscription, error) {
 	sub, err := c.conn.Subscribe(subject, func(msg *nats.Msg) {
 		// 封装消息
 		m := &coreMessage{msg: msg}
 		// 执行用户处理逻辑
-		if err := handler(context.Background(), m); err != nil {
+		if err := Handler(context.Background(), m); err != nil {
 			c.logger.Error("消息处理失败", clog.String("subject", subject), clog.Error(err))
 		}
 	})
 	if err != nil {
-		return nil, err
+		return nil, xerrors.Wrapf(err, "broadcast subscription failed for subject %s", subject)
 	}
 	return &coreSubscription{sub: sub}, nil
 }
 
-func (c *coreClient) QueueSubscribe(ctx context.Context, subject string, queue string, handler Handler) (Subscription, error) {
+func (c *coreClient) QueueSubscribe(ctx context.Context, subject string, queue string, Handler Handler) (Subscription, error) {
 	sub, err := c.conn.QueueSubscribe(subject, queue, func(msg *nats.Msg) {
 		m := &coreMessage{msg: msg}
-		if err := handler(context.Background(), m); err != nil {
+		if err := Handler(context.Background(), m); err != nil {
 			c.logger.Error("队列消息处理失败", clog.String("subject", subject), clog.String("queue", queue), clog.Error(err))
 		}
 	})
 	if err != nil {
-		return nil, err
+		return nil, xerrors.Wrapf(err, "queue subscription failed for subject %s, queue %s", subject, queue)
 	}
 	return &coreSubscription{sub: sub}, nil
-}
-
-func (c *coreClient) Request(ctx context.Context, subject string, data []byte, timeout time.Duration) (Message, error) {
-	msg, err := c.conn.Request(subject, data, timeout)
-	if err != nil {
-		return nil, err
-	}
-	return &coreMessage{msg: msg}, nil
 }
 
 func (c *coreClient) Close() error {
@@ -135,16 +148,37 @@ func newJetStreamClient(conn connector.NATSConnector, cfg *JetStreamConfig, logg
 }
 
 func (c *jetStreamClient) Publish(ctx context.Context, subject string, data []byte) error {
+	// 记录发布指标
+	if c.meter != nil {
+		publishCounter, err := c.meter.Counter("mq.publish.total", "Total number of messages published")
+		if err == nil {
+			publishCounter.Inc(ctx,
+				metrics.L("subject", subject),
+				metrics.L("driver", "jetstream"),
+			)
+		}
+	}
+
 	// 默认使用同步发送以确保持久化
 	_, err := c.js.Publish(ctx, subject, data)
+	if err != nil && c.meter != nil {
+		errorCounter, err := c.meter.Counter("mq.publish.errors", "Total number of publish errors")
+		if err == nil {
+			errorCounter.Inc(ctx,
+				metrics.L("subject", subject),
+				metrics.L("driver", "jetstream"),
+				metrics.L("error", "publish_failed"),
+			)
+		}
+	}
 	return err
 }
 
-func (c *jetStreamClient) Subscribe(ctx context.Context, subject string, handler Handler) (Subscription, error) {
+func (c *jetStreamClient) Subscribe(ctx context.Context, subject string, Handler Handler) (Subscription, error) {
 	// 自动创建 Stream (如果配置开启)
 	if c.cfg != nil && c.cfg.AutoCreateStream {
 		if err := c.ensureStream(ctx, subject); err != nil {
-			return nil, err
+			return nil, xerrors.Wrapf(err, "failed to ensure stream for subject %s", subject)
 		}
 	}
 
@@ -159,13 +193,13 @@ func (c *jetStreamClient) Subscribe(ctx context.Context, subject string, handler
 		return nil, xerrors.Wrap(err, "failed to create consumer")
 	}
 
-	return c.consume(ctx, consumer, handler)
+	return c.consume(ctx, consumer, Handler)
 }
 
-func (c *jetStreamClient) QueueSubscribe(ctx context.Context, subject string, queue string, handler Handler) (Subscription, error) {
+func (c *jetStreamClient) QueueSubscribe(ctx context.Context, subject string, queue string, Handler Handler) (Subscription, error) {
 	if c.cfg != nil && c.cfg.AutoCreateStream {
 		if err := c.ensureStream(ctx, subject); err != nil {
-			return nil, err
+			return nil, xerrors.Wrapf(err, "failed to ensure stream for subject %s", subject)
 		}
 	}
 
@@ -180,15 +214,15 @@ func (c *jetStreamClient) QueueSubscribe(ctx context.Context, subject string, qu
 		return nil, xerrors.Wrap(err, "failed to create durable consumer")
 	}
 
-	return c.consume(ctx, consumer, handler)
+	return c.consume(ctx, consumer, Handler)
 }
 
-func (c *jetStreamClient) consume(_ context.Context, consumer jetstream.Consumer, handler Handler) (Subscription, error) {
+func (c *jetStreamClient) consume(_ context.Context, consumer jetstream.Consumer, Handler Handler) (Subscription, error) {
 	cons, err := consumer.Consume(func(msg jetstream.Msg) {
 		m := &jetStreamMessage{msg: msg}
 
 		// 执行用户逻辑
-		err := handler(context.Background(), m)
+		err := Handler(context.Background(), m)
 
 		// 自动 Ack/Nak 机制
 		if err != nil {
@@ -204,16 +238,10 @@ func (c *jetStreamClient) consume(_ context.Context, consumer jetstream.Consumer
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, xerrors.Wrap(err, "failed to start consuming messages")
 	}
 
 	return &jetStreamSubscription{cons: cons}, nil
-}
-
-func (c *jetStreamClient) Request(ctx context.Context, subject string, data []byte, timeout time.Duration) (Message, error) {
-	// JetStream 模式不推荐使用 Request/Reply，但为了接口兼容，可以回退到 Core NATS 的 Request
-	// 或者直接报错。这里选择报错以明确语义。
-	return nil, xerrors.New("request/reply pattern is not supported in JetStream mode")
 }
 
 func (c *jetStreamClient) Close() error {

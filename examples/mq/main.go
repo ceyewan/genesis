@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"sync"
 	"time"
@@ -20,10 +21,16 @@ type Order struct {
 }
 
 func main() {
-	fmt.Println("=== Genesis MQ Component Example ===")
+	// 命令行参数
+	var (
+		mode = flag.String("mode", "jetstream", "MQ mode: core or jetstream")
+	)
+	flag.Parse()
 
-	// 1. 初始化连接器和 MQ 客户端 (使用 JetStream 模式)
-	mqClient, conn := initMQClient()
+	fmt.Printf("=== Genesis MQ Component Example (Mode: %s) ===\n", *mode)
+
+	// 1. 初始化连接器和 MQ 客户端
+	mqClient, conn := initMQClient(*mode)
 	defer conn.Close()
 
 	// 2. 演示：广播订阅 (Subscribe)
@@ -39,8 +46,18 @@ func main() {
 	time.Sleep(2 * time.Second)
 }
 
-func initMQClient() (mq.Client, connector.NATSConnector) {
-	fmt.Println("\n--- 1. Initializing MQ Client ---")
+func initMQClient(mode string) (mq.Client, connector.NATSConnector) {
+	fmt.Printf("\n--- 1. Initializing MQ Client (Mode: %s) ---\n", mode)
+
+	// 创建 logger
+	logger, err := clog.New(&clog.Config{
+		Level:  "info",
+		Format: "console",
+		Output: "stdout",
+	})
+	if err != nil {
+		panic(fmt.Sprintf("failed to create logger: %v", err))
+	}
 
 	// 创建 NATS 连接器
 	natsConn, err := connector.NewNATS(&connector.NATSConfig{
@@ -48,7 +65,7 @@ func initMQClient() (mq.Client, connector.NATSConnector) {
 		Name:          "genesis-mq-example",
 		ReconnectWait: 2 * time.Second,
 		MaxReconnects: 5,
-	}, connector.WithLogger(clog.Default()))
+	}, connector.WithLogger(logger))
 	if err != nil {
 		panic(fmt.Sprintf("failed to create NATS connector: %v", err))
 	}
@@ -59,18 +76,27 @@ func initMQClient() (mq.Client, connector.NATSConnector) {
 		panic(fmt.Sprintf("failed to connect to NATS: %v", err))
 	}
 
+	// 根据 mode 选择驱动类型
+	driver := mq.DriverNatsJetStream
+	jetStreamConfig := &mq.JetStreamConfig{
+		AutoCreateStream: true,
+	}
+
+	if mode == "core" {
+		driver = mq.DriverNatsCore
+		jetStreamConfig = nil // Core 模式不需要 JetStream 配置
+	}
+
 	// 创建 MQ 客户端
-	mqClient, err := mq.NewClient(natsConn, &mq.Config{
-		Driver: mq.DriverNatsJetStream, // 使用 JetStream 模式
-		JetStream: &mq.JetStreamConfig{
-			AutoCreateStream: true,
-		},
-	}, mq.WithLogger(clog.Default()))
+	mqClient, err := mq.New(natsConn, &mq.Config{
+		Driver:    driver,
+		JetStream: jetStreamConfig,
+	}, mq.WithLogger(logger))
 	if err != nil {
 		panic(fmt.Sprintf("failed to create MQ client: %v", err))
 	}
 
-	fmt.Println("MQ Client initialized successfully")
+	fmt.Printf("MQ Client initialized successfully (Mode: %s)\n", mode)
 	return mqClient, natsConn
 }
 
