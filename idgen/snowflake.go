@@ -2,13 +2,13 @@ package idgen
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/internal/idgen/allocator"
+	"github.com/ceyewan/genesis/idgen/internal/allocator"
 	"github.com/ceyewan/genesis/metrics"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 const (
@@ -18,100 +18,94 @@ const (
 	smallClockBackwards = 5 * time.Millisecond
 )
 
-// snowflakeGenerator Snowflake 生成器实现（非导出）
-type snowflakeGenerator struct {
-	mu        sync.Mutex
-	allocator allocator.Allocator
-	workerID  int64
-	dcID      int64
-	sequence  int64
-	lastTime  int64
-	// 熔断通道
-	failCh <-chan error
-	// 可观测性组件
-	logger clog.Logger
-	meter  metrics.Meter
-	tracer interface{} // TODO: 实现 Tracer 接口，暂时使用 interface{}
+// snowflakeGen Snowflake 生成器实现（非导出）
+type snowflakeGen struct {
+	mu       sync.Mutex
+	alloc    allocator.Allocator
+	workerID int64
+	dcID     int64
+	sequence int64
+	lastTime int64
+	failCh   <-chan error
+	logger   clog.Logger
+	meter    metrics.Meter
 }
 
-// newSnowflake 创建 Snowflake 生成器（内部函数）
-func newSnowflake(
+// newSnowflakeGen 创建 Snowflake 生成器（内部函数）
+func newSnowflakeGen(
 	cfg *SnowflakeConfig,
 	alloc allocator.Allocator,
 	logger clog.Logger,
 	meter metrics.Meter,
-	tracer interface{},
 ) (Int64Generator, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("snowflake config is nil")
+		return nil, xerrors.WithCode(ErrConfigNil, "snowflake_config_nil")
 	}
 	if alloc == nil {
-		return nil, fmt.Errorf("allocator is nil")
+		return nil, xerrors.WithCode(ErrConnectorNil, "allocator_nil")
 	}
-	return &snowflakeGenerator{
-		allocator: alloc,
-		dcID:      cfg.DatacenterID,
-		logger:    logger,
-		meter:     meter,
-		tracer:    tracer,
+	return &snowflakeGen{
+		alloc:  alloc,
+		dcID:   cfg.DatacenterID,
+		logger: logger,
+		meter:  meter,
 	}, nil
 }
 
-// Init 初始化生成器 (分配 WorkerID 并启动保活)
-func (g *snowflakeGenerator) Init(ctx context.Context) error {
+// init 初始化生成器 (分配 WorkerID 并启动保活)
+func (s *snowflakeGen) init(ctx context.Context) error {
 	// 1. 分配 WorkerID
-	workerID, err := g.allocator.Allocate(ctx)
+	workerID, err := s.alloc.Allocate(ctx)
 	if err != nil {
-		if g.logger != nil {
-			g.logger.Error("failed to allocate worker id", clog.Error(err))
+		if s.logger != nil {
+			s.logger.Error("failed to allocate worker id", clog.Error(err))
 		}
-		return fmt.Errorf("allocate worker id failed: %w", err)
+		return xerrors.Wrap(err, "allocate worker id")
 	}
-	g.workerID = workerID
+	s.workerID = workerID
 
-	if g.logger != nil {
-		g.logger.Info("worker id allocated",
+	if s.logger != nil {
+		s.logger.Info("worker id allocated",
 			clog.Int64("worker_id", workerID),
-			clog.Int64("datacenter_id", g.dcID),
+			clog.Int64("datacenter_id", s.dcID),
 		)
 	}
 
 	// 2. 启动保活
-	failCh, err := g.allocator.Start(ctx, workerID)
+	failCh, err := s.alloc.Start(ctx, workerID)
 	if err != nil {
-		if g.logger != nil {
-			g.logger.Error("failed to start keep alive", clog.Error(err))
+		if s.logger != nil {
+			s.logger.Error("failed to start keep alive", clog.Error(err))
 		}
-		return fmt.Errorf("start keep alive failed: %w", err)
+		return xerrors.Wrap(err, "start keep alive")
 	}
-	g.failCh = failCh
+	s.failCh = failCh
 
 	return nil
 }
 
-// Int64 生成 int64 ID
-func (g *snowflakeGenerator) Int64() (int64, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+// NextInt64 生成 int64 ID
+func (s *snowflakeGen) NextInt64() (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// 检查熔断
 	select {
-	case err := <-g.failCh:
-		return 0, fmt.Errorf("worker id lease lost: %w", err)
+	case err := <-s.failCh:
+		return 0, xerrors.Wrap(err, "worker id lease lost")
 	default:
 	}
 
 	now := time.Now().UnixMilli()
 
 	// 处理时钟回拨
-	if now < g.lastTime {
-		drift := time.Duration(g.lastTime-now) * time.Millisecond
+	if now < s.lastTime {
+		drift := time.Duration(s.lastTime-now) * time.Millisecond
 
 		if drift <= smallClockBackwards {
 			// 1. 微小回拨 (<= 5ms): 尝试复用 lastTime
-			// 只有当序列号未溢出时才能复用
-			if g.sequence < 0xFFF {
-				now = g.lastTime
+			if s.sequence < 0xFFF {
+				now = s.lastTime
 			} else {
 				// 序列号已满，必须等待
 				time.Sleep(drift + time.Millisecond)
@@ -123,42 +117,42 @@ func (g *snowflakeGenerator) Int64() (int64, error) {
 			now = time.Now().UnixMilli()
 		} else {
 			// 3. 大回拨 (> 1s): 拒绝服务
-			return 0, fmt.Errorf("clock moved backwards too much: %v (max allowed: %v)", drift, maxClockBackwards)
+			return 0, xerrors.Wrapf(ErrClockBackwards, "drift: %v (max: %v)", drift, maxClockBackwards)
 		}
 	}
 
-	if now == g.lastTime {
-		g.sequence = (g.sequence + 1) & 0xFFF // 12 位序列号
-		if g.sequence == 0 {
+	if now == s.lastTime {
+		s.sequence = (s.sequence + 1) & 0xFFF // 12 位序列号
+		if s.sequence == 0 {
 			// 序列号溢出，等待下一毫秒
-			for now <= g.lastTime {
+			for now <= s.lastTime {
 				now = time.Now().UnixMilli()
 			}
 		}
 	} else {
-		g.sequence = 0
+		s.sequence = 0
 	}
 
-	g.lastTime = now
+	s.lastTime = now
 
 	// 标准 Snowflake 位结构 (41+10+12)
-	id := (now << 22) | (g.dcID << 17) | (g.workerID << 12) | g.sequence
+	id := (now << 22) | (s.dcID << 17) | (s.workerID << 12) | s.sequence
+
 	return id, nil
 }
 
-// String 返回字符串形式的 ID
-func (g *snowflakeGenerator) String() string {
-	id, err := g.Int64()
+// Next 返回字符串形式的 ID
+func (s *snowflakeGen) Next() string {
+	id, err := s.NextInt64()
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprintf("%d", id)
+	return format64(id)
 }
 
-// Close 实现 io.Closer 接口，但由于 snowflakeGenerator 不拥有 Connector 资源，
+// Close 实现 io.Closer 接口，但由于 snowflakeGen 不拥有 Connector 资源，
 // 所以这是 no-op，符合资源所有权规范
-func (g *snowflakeGenerator) Close() error {
-	// No-op: SnowflakeGenerator 不拥有 Redis/Etcd 连接，由 Connector 管理
-	// 调用方应关闭 Connector 而非 SnowflakeGenerator
+func (s *snowflakeGen) Close() error {
+	// No-op: SnowflakeGen 不拥有 Redis/Etcd 连接，由 Connector 管理
 	return nil
 }

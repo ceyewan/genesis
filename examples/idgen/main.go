@@ -51,7 +51,7 @@ func snowflakeStaticExample() {
 		return
 	}
 
-	id, _ := gen.Int64()
+	id, _ := gen.NextInt64()
 	fmt.Printf("Generated ID (Static): %d\n", id)
 	fmt.Println()
 }
@@ -71,7 +71,7 @@ func snowflakeIPExample() {
 		return
 	}
 
-	id, _ := gen.Int64()
+	id, _ := gen.NextInt64()
 	fmt.Printf("Generated ID (IP): %d\n", id)
 	fmt.Println()
 }
@@ -99,7 +99,7 @@ func snowflakeRedisExample() {
 		Output:      "stdout",
 		AddSource:   false,
 		EnableColor: false,
-	}, &clog.Option{})
+	})
 
 	redisConn, err := connector.NewRedis(redisCfg, connector.WithLogger(logger))
 	if err != nil {
@@ -133,7 +133,7 @@ func snowflakeRedisExample() {
 	// 4. 生成 ID
 	fmt.Println("Generating 5 IDs:")
 	for i := 0; i < 5; i++ {
-		id, _ := gen.Int64()
+		id, _ := gen.NextInt64()
 		fmt.Printf("  ID %d: %d\n", i+1, id)
 		time.Sleep(time.Millisecond)
 	}
@@ -175,7 +175,7 @@ func snowflakeEtcdExample() {
 	// 4. 生成 ID
 	fmt.Println("Generating 5 IDs:")
 	for i := 0; i < 5; i++ {
-		id, _ := gen.Int64()
+		id, _ := gen.NextInt64()
 		fmt.Printf("  ID %d: %d\n", i+1, id)
 		time.Sleep(time.Millisecond)
 	}
@@ -188,15 +188,15 @@ func uuidExample() {
 	// UUID v4 (Random)
 	v4Cfg := &idgen.UUIDConfig{Version: "v4"}
 	v4Gen, _ := idgen.NewUUID(v4Cfg)
-	fmt.Printf("UUID v4 (Random):      %s\n", v4Gen.String())
+	fmt.Printf("UUID v4 (Random):      %s\n", v4Gen.Next())
 
 	// UUID v7 (Time-ordered)
 	v7Cfg := &idgen.UUIDConfig{Version: "v7"}
 	v7Gen, _ := idgen.NewUUID(v7Cfg)
-	fmt.Printf("UUID v7 (Time-ordered): %s\n", v7Gen.String())
+	fmt.Printf("UUID v7 (Time-ordered): %s\n", v7Gen.Next())
 
 	time.Sleep(10 * time.Millisecond)
-	fmt.Printf("UUID v7 (Next):         %s\n", v7Gen.String())
+	fmt.Printf("UUID v7 (Next):         %s\n", v7Gen.Next())
 	fmt.Println()
 }
 
@@ -223,7 +223,7 @@ func sequenceExample() {
 		Output:      "stdout",
 		AddSource:   false,
 		EnableColor: false,
-	}, &clog.Option{})
+	})
 
 	redisConn, err := connector.NewRedis(redisCfg, connector.WithLogger(logger))
 	if err != nil {
@@ -244,10 +244,10 @@ func sequenceExample() {
 	imCfg := &idgen.SequenceConfig{
 		KeyPrefix: "im:msg_seq",
 		Step:      1,
-		TTL:       time.Hour, // 1小时过期
+		TTL:       int64(time.Hour), // 1小时过期
 	}
 
-	imGen, err := idgen.NewSequence(imCfg, redisConn)
+	imGen, err := idgen.NewSequencer(imCfg, redisConn)
 	if err != nil {
 		log.Printf("Failed to create IM sequence generator: %v\n", err)
 		return
@@ -282,12 +282,12 @@ func sequenceExample() {
 	fmt.Println("\n=== 业务流水号场景 ===")
 	businessCfg := &idgen.SequenceConfig{
 		KeyPrefix: "business:seq",
-		Step:      1000,           // 步长 1000
-		MaxValue:  9999,           // 最大值限制
-		TTL:       24 * time.Hour, // 1天过期
+		Step:      1000,                 // 步长 1000
+		MaxValue:  9999,                 // 最大值限制
+		TTL:       int64(24 * time.Hour), // 1天过期
 	}
 
-	businessGen, err := idgen.NewSequence(businessCfg, redisConn)
+	businessGen, err := idgen.NewSequencer(businessCfg, redisConn)
 	if err != nil {
 		log.Printf("Failed to create business sequence generator: %v\n", err)
 		return

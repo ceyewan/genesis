@@ -1,69 +1,67 @@
 package idgen
 
 import (
-	"fmt"
-
 	"github.com/google/uuid"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
-// uuidGenerator UUID 生成器实现（非导出）
-type uuidGenerator struct {
+// uuidGen UUID 生成器实现（非导出）
+type uuidGen struct {
 	version string
-	// 可观测性组件
-	logger clog.Logger
-	meter  metrics.Meter
-	tracer interface{} // TODO: 实现 Tracer 接口，暂时使用 interface{}
+	logger  clog.Logger
+	meter   metrics.Meter
 }
 
-// newUUID 创建 UUID 生成器（内部函数）
-func newUUID(
+// newUUIDGen 创建 UUID 生成器（内部函数）
+func newUUIDGen(
 	cfg *UUIDConfig,
 	logger clog.Logger,
 	meter metrics.Meter,
-	tracer interface{},
 ) (Generator, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("uuid config is nil")
+		return nil, xerrors.WithCode(ErrConfigNil, "uuid_config_nil")
 	}
+
 	version := cfg.Version
 	if version == "" {
 		version = "v4"
 	}
 	if version != "v4" && version != "v7" {
-		return nil, fmt.Errorf("unsupported uuid version: %s", version)
+		return nil, xerrors.Wrapf(ErrUnsupportedVersion, "version: %s", version)
 	}
 
 	if logger != nil {
 		logger.Info("uuid generator created", clog.String("version", version))
 	}
 
-	return &uuidGenerator{
+	return &uuidGen{
 		version: version,
 		logger:  logger,
 		meter:   meter,
-		tracer:  tracer,
 	}, nil
 }
 
-// String 返回字符串形式的 UUID
-func (g *uuidGenerator) String() string {
-	switch g.version {
+// Next 返回字符串形式的 UUID
+func (u *uuidGen) Next() string {
+	var id string
+	switch u.version {
 	case "v4":
-		return uuid.New().String()
+		id = uuid.New().String()
 	case "v7":
-		u, _ := uuid.NewV7()
-		return u.String()
+		v7, _ := uuid.NewV7()
+		id = v7.String()
 	default:
-		return uuid.New().String()
+		id = uuid.New().String()
 	}
+
+	return id
 }
 
-// Close 实现 io.Closer 接口，但由于 uuidGenerator 不拥有任何资源，
+// Close 实现 io.Closer 接口，但由于 uuidGen 不拥有任何资源，
 // 所以这是 no-op，符合资源所有权规范
-func (g *uuidGenerator) Close() error {
-	// No-op: UUIDGenerator 不拥有任何资源
+func (u *uuidGen) Close() error {
 	return nil
 }

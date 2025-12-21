@@ -6,32 +6,24 @@ import (
 )
 
 // Option 组件初始化选项函数
-type Option func(*Options)
+type Option func(*options)
 
-// Options 组件初始化选项配置
-type Options struct {
+// options 组件初始化选项配置（内部使用）
+type options struct {
 	Logger clog.Logger
 	Meter  metrics.Meter
-	Tracer interface{} // TODO: 实现 Tracer 接口，暂时使用 interface{}
 }
 
 // WithLogger 设置 Logger
 func WithLogger(logger clog.Logger) Option {
-	return func(o *Options) {
+	return func(o *options) {
 		o.Logger = logger
 	}
 }
 
 // WithMeter 设置 Meter
 func WithMeter(meter metrics.Meter) Option {
-	return func(o *Options) {
+	return func(o *options) {
 		o.Meter = meter
-	}
-}
-
-// WithTracer 设置 Tracer (TODO: 待实现 Tracer 接口)
-func WithTracer(tracer interface{}) Option {
-	return func(o *Options) {
-		o.Tracer = tracer
 	}
 }
