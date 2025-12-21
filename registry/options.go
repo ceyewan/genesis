@@ -12,7 +12,6 @@ type Option func(*options)
 type options struct {
 	logger clog.Logger
 	meter  metrics.Meter
-	tracer interface{} // TODO: 实现 Tracer 接口
 }
 
 // WithLogger 注入日志记录器
@@ -32,16 +31,15 @@ func WithMeter(m metrics.Meter) Option {
 	}
 }
 
-// WithTracer 注入 Tracer（新增支持）
-func WithTracer(t interface{}) Option {
-	return func(o *options) {
-		o.tracer = t
-	}
-}
 
 // defaultOptions 返回默认选项
 func defaultOptions() *options {
+	logger, _ := clog.New(&clog.Config{
+		Level:  "info",
+		Format: "console",
+		Output: "stdout",
+	})
 	return &options{
-		logger: clog.Default(),
+		logger: logger,
 	}
 }

@@ -15,7 +15,11 @@ func main() {
 	fmt.Println("=== Registry Service Registration & Discovery Example ===\n")
 
 	// 1. 创建 Logger
-	logger := clog.Default()
+	logger, _ := clog.New(&clog.Config{
+		Level:  "info",
+		Format: "console",
+		Output: "stdout",
+	})
 
 	// 2. 创建 Etcd 连接器
 	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{
@@ -39,12 +43,9 @@ func main() {
 		log.Fatalf("Failed to create registry: %v", err)
 	}
 
-	// 4. 启动 Registry
+	// 4. 延迟关闭 Registry
+	defer reg.Close()
 	ctx := context.Background()
-	if err := reg.Start(ctx); err != nil {
-		log.Fatalf("Failed to start registry: %v", err)
-	}
-	defer reg.Stop(ctx)
 
 	// 5. 注册服务实例
 	service := &registry.ServiceInstance{

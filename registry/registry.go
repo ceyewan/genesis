@@ -1,3 +1,74 @@
+// Package registry 提供了基于 Etcd 的服务注册发现组件，支持 gRPC 集成和客户端负载均衡。
+//
+// registry 组件是 Genesis 治理层的核心组件，它在 Etcd 连接器的基础上提供了：
+// - 服务注册与发现能力
+// - 实时服务变化监听
+// - 本地缓存机制提升性能
+// - gRPC Resolver 集成，支持 `etcd://<service_name>` 解析
+// - 自动租约续约和优雅下线
+// - 与 L0 基础组件（日志、指标、错误）的深度集成
+//
+// ## 基本使用
+//
+//	etcdConn, _ := connector.NewEtcd(&cfg.Etcd, connector.WithLogger(logger))
+//	defer etcdConn.Close()
+//	etcdConn.Connect(ctx)
+//
+//	reg, _ := registry.New(etcdConn, &registry.Config{
+//		Namespace:       "/genesis/services",
+//		DefaultTTL:      30 * time.Second,
+//		EnableCache:     true,
+//		CacheExpiration: 10 * time.Second,
+//	}, registry.WithLogger(logger))
+//	defer reg.Close()
+//
+//	// 注册服务
+//	service := &registry.ServiceInstance{
+//		ID:        "user-service-001",
+//		Name:      "user-service",
+//		Endpoints: []string{"grpc://127.0.0.1:8080"},
+//	}
+//	err := reg.Register(ctx, service, 30*time.Second)
+//
+//	// 服务发现
+//	instances, err := reg.GetService(ctx, "user-service")
+//
+//	// gRPC 集成
+//	conn, err := reg.GetConnection(ctx, "user-service")
+//	defer conn.Close()
+//	client := pb.NewUserServiceClient(conn)
+//
+// ## Etcd 存储结构
+//
+// 服务实例在 Etcd 中的存储采用层级结构：
+//
+//	<namespace>/<service_name>/<instance_id> -> JSON(ServiceInstance)
+//
+// 例如：
+// - `/genesis/services/user-service/uuid-1234-5678`
+// - `/genesis/services/order-service/uuid-abcd-efgh`
+//
+// ## gRPC 集成
+//
+// Registry 组件实现了 gRPC resolver.Builder 接口，支持原生 gRPC 服务发现：
+//
+//	// 方式一：使用 GetConnection（推荐）
+//	conn, err := reg.GetConnection(ctx, "user-service")
+//
+//	// 方式二：使用原生 gRPC Dial
+//	conn, err := grpc.Dial(
+//		"etcd:///user-service",
+//		grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
+//		grpc.WithTransportCredentials(insecure.NewCredentials()),
+//	)
+//
+// ## 设计原则
+//
+// - **借用模型**：registry 组件借用 Etcd 连接器的连接，不负责连接的生命周期
+// - **显式依赖**：通过构造函数显式注入连接器和选项
+// - **gRPC 原生支持**：深度集成 gRPC 生态，提供开箱即用的服务发现
+// - **高性能**：本地缓存 + 实时监听，减少对注册中心的直接请求
+// - **可观测性**：集成 clog 和 metrics，提供完整的日志和指标能力
 package registry
 
 import (
@@ -69,7 +140,11 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 	}
 
 	if opt.logger == nil {
-		opt.logger = clog.Default()
+		opt.logger, _ = clog.New(&clog.Config{
+			Level:  "info",
+			Format: "console",
+			Output: "stdout",
+		})
 	}
 
 	r := &etcdRegistry{
@@ -77,7 +152,6 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 		cfg:      cfg,
 		logger:   opt.logger,
 		meter:    opt.meter,
-		tracer:   opt.tracer,
 		leases:   make(map[string]clientv3.LeaseID),
 		watchers: make(map[string]context.CancelFunc),
 		cache:    make(map[string][]*ServiceInstance),
@@ -93,23 +167,12 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 	return r, nil
 }
 
-// Must 提供初始化版本，失败时 panic
-// 仅在应用启动初始化时使用，避免在业务逻辑中使用
-func Must(conn connector.EtcdConnector, cfg *Config, opts ...Option) Registry {
-	reg, err := New(conn, cfg, opts...)
-	if err != nil {
-		panic(err)
-	}
-	return reg
-}
-
 // etcdRegistry 基于 Etcd 的服务注册发现实现
 type etcdRegistry struct {
 	client *clientv3.Client
 	cfg    *Config
 	logger clog.Logger
 	meter  metrics.Meter
-	tracer interface{} // 为未来预留
 
 	// 后台任务管理
 	leases   map[string]clientv3.LeaseID   // serviceID -> leaseID
@@ -353,6 +416,7 @@ func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, op
 	// 合并默认选项
 	defaultOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`), // 使用轮询负载均衡
 	}
 	opts = append(defaultOpts, opts...)
 
@@ -367,18 +431,15 @@ func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, op
 	return conn, nil
 }
 
-// Start 启动后台任务
-func (r *etcdRegistry) Start(ctx context.Context) error {
-	r.logger.Info("registry started")
-	return nil
-}
+// Close 停止后台任务并清理资源（撤销租约、停止监听）
+func (r *etcdRegistry) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-// Stop 停止后台任务并清理资源
-func (r *etcdRegistry) Stop(ctx context.Context) error {
 	// 取消所有 watchers
 	r.mu.Lock()
-	for serviceName, cancel := range r.watchers {
-		cancel()
+	for serviceName, cancelFunc := range r.watchers {
+		cancelFunc()
 		delete(r.watchers, serviceName)
 	}
 	r.mu.Unlock()
@@ -403,16 +464,6 @@ func (r *etcdRegistry) Stop(ctx context.Context) error {
 
 	r.logger.Info("registry stopped")
 	return nil
-}
-
-// Phase 返回启动阶段
-func (r *etcdRegistry) Phase() int {
-	return 20
-}
-
-// Close 关闭组件
-func (r *etcdRegistry) Close() error {
-	return r.Stop(context.Background())
 }
 
 // buildKey 构建存储键

@@ -38,14 +38,8 @@ type Registry interface {
 	// 支持自动服务发现和客户端负载均衡
 	GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
 
-	// --- 生命周期管理 ---
+	// --- 资源管理 ---
 
-	// Start 启动后台任务 (Lease KeepAlive、Watch 监听等)
-	Start(ctx context.Context) error
-
-	// Stop 停止后台任务并清理资源
-	Stop(ctx context.Context) error
-
-	// Phase 返回启动阶段 (建议 20，与其他业务组件一致)
-	Phase() int
+	// Close 停止后台任务并清理资源（撤销租约、停止监听）
+	Close() error
 }

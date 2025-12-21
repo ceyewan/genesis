@@ -9,6 +9,7 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	pb "github.com/ceyewan/genesis/examples/grpc-registry/proto"
 	"github.com/ceyewan/genesis/registry"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -23,7 +24,11 @@ func main() {
 	fmt.Println()
 
 	// 1. 创建 Logger
-	logger := clog.Default()
+	logger, _ := clog.New(&clog.Config{
+		Level:  "info",
+		Format: "console",
+		Output: "stdout",
+	})
 
 	// 2. 创建 Etcd 连接器
 	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{
@@ -47,14 +52,10 @@ func main() {
 		log.Fatalf("Failed to create registry: %v", err)
 	}
 
-	// 4. 启动 Registry
+	// 4. 延迟关闭 Registry
+	defer reg.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-
-	if err := reg.Start(ctx); err != nil {
-		log.Fatalf("Failed to start registry: %v", err)
-	}
-	defer reg.Stop(ctx)
 
 	serviceName := "demo-service"
 
@@ -93,19 +94,36 @@ func main() {
 	}
 	defer conn.Close()
 
-	client := grpc_health_v1.NewHealthClient(conn)
+	echoClient := pb.NewEchoServiceClient(conn)
+	healthClient := grpc_health_v1.NewHealthClient(conn)
 	fmt.Println("✓ gRPC 连接已建立，使用动态服务发现")
 
 	// 7. 测试连接
 	fmt.Println("\n3. 测试连接...")
 	for i := 0; i < 3; i++ {
-		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+		resp, err := healthClient.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
 		if err != nil {
 			log.Printf("Health check failed: %v", err)
 		} else {
-			fmt.Printf("✓ 健康检查 %d: %v\n", i+1, resp.Status)
+			state := conn.GetState()
+			fmt.Printf("✓ 健康检查 %d: %v (连接状态: %v)\n", i+1, resp.Status, state)
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+
+	// 调用 Echo 服务查看服务器信息
+	fmt.Println("\n调用 Echo 服务查看服务器信息:")
+	for i := 0; i < 3; i++ {
+		echoResp, err := echoClient.Echo(ctx, &pb.EchoRequest{
+			Message: fmt.Sprintf("test-%d", i+1),
+		})
+		if err != nil {
+			fmt.Printf("✗ Echo 调用 %d 失败: %v\n", i+1, err)
+		} else {
+			fmt.Printf("✓ Echo 调用 %d: 消息='%s', 服务器='%s', 地址='%s'\n",
+				i+1, echoResp.Message, echoResp.ServerId, echoResp.ServerAddr)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	// 8. 动态添加第二个服务实例
@@ -138,12 +156,23 @@ func main() {
 
 	// 9. 验证负载均衡
 	fmt.Println("\n5. 验证负载均衡（现在有两个服务实例）...")
+	fmt.Printf("已注册的服务实例:\n")
+	services, _ := reg.GetService(ctx, serviceName)
+	for i, svc := range services {
+		fmt.Printf("  %d. ID: %s, Endpoints: %v, Server: %s\n", i+1, svc.ID, svc.Endpoints, svc.Metadata["server"])
+	}
+	fmt.Println()
+
 	for i := 0; i < 6; i++ {
-		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+		// 调用 Echo 服务来观察负载均衡效果
+		echoResp, err := echoClient.Echo(ctx, &pb.EchoRequest{
+			Message: fmt.Sprintf("loadbalancer-test-%d", i+1),
+		})
 		if err != nil {
-			log.Printf("Health check failed: %v", err)
+			fmt.Printf("✗ 负载均衡测试 %d 失败: %v\n", i+1, err)
 		} else {
-			fmt.Printf("✓ 负载均衡测试 %d: %v\n", i+1, resp.Status)
+			fmt.Printf("✓ 负载均衡测试 %d: 消息='%s', 服务器='%s', 地址='%s'\n",
+				i+1, echoResp.Message, echoResp.ServerId, echoResp.ServerAddr)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -164,18 +193,21 @@ func main() {
 	// 11. 验证连接仍然可用
 	fmt.Println("\n7. 验证连接仍然可用（只剩一个服务实例）...")
 	for i := 0; i < 3; i++ {
-		resp, err := client.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
+		echoResp, err := echoClient.Echo(ctx, &pb.EchoRequest{
+			Message: fmt.Sprintf("failover-test-%d", i+1),
+		})
 		if err != nil {
-			log.Printf("Health check failed: %v", err)
+			fmt.Printf("✗ 故障转移测试 %d 失败: %v\n", i+1, err)
 		} else {
-			fmt.Printf("✓ 故障转移测试 %d: %v\n", i+1, resp.Status)
+			fmt.Printf("✓ 故障转移测试 %d: 消息='%s', 服务器='%s', 地址='%s'\n",
+				i+1, echoResp.Message, echoResp.ServerId, echoResp.ServerAddr)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 
 	// 12. 验证服务发现
 	fmt.Println("\n8. 验证服务发现...")
-	services, err := reg.GetService(ctx, serviceName)
+	services, err = reg.GetService(ctx, serviceName)
 	if err != nil {
 		log.Printf("Failed to discover services: %v", err)
 	} else {
@@ -204,6 +236,13 @@ func startTestServer(serverID string) (*grpc.Server, *net.TCPAddr) {
 	}
 
 	server := grpc.NewServer()
+	addr := lis.Addr().(*net.TCPAddr)
+
+	// 注册 Echo 服务
+	pb.RegisterEchoServiceServer(server, &echoServer{
+		serverID:   serverID,
+		serverAddr: addr.String(),
+	})
 
 	// 注册健康检查服务
 	healthServer := health.NewServer()
@@ -220,8 +259,30 @@ func startTestServer(serverID string) (*grpc.Server, *net.TCPAddr) {
 	// 等待服务器启动
 	time.Sleep(100 * time.Millisecond)
 
-	addr := lis.Addr().(*net.TCPAddr)
-	log.Printf("Test server %s started on %s", serverID, addr)
+	log.Printf("Test server %s started on %s (Server ID: %s)", serverID, addr, serverID)
 
 	return server, addr
+}
+
+// echoServer 实现 Echo 服务
+type echoServer struct {
+	pb.UnimplementedEchoServiceServer
+	serverID   string
+	serverAddr string
+}
+
+func (s *echoServer) Echo(ctx context.Context, req *pb.EchoRequest) (*pb.EchoResponse, error) {
+	log.Printf("📢 [%s] Echo 请求收到: %s", s.serverID, req.Message)
+
+	resp := &pb.EchoResponse{
+		Message:    req.Message,
+		ServerId:   s.serverID,
+		ServerAddr: s.serverAddr,
+		Timestamp:  time.Now().Unix(),
+	}
+
+	log.Printf("📢 [%s] Echo 响应: 消息='%s', 服务器='%s', 地址='%s'",
+		s.serverID, resp.Message, resp.ServerId, resp.ServerAddr)
+
+	return resp, nil
 }

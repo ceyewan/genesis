@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package echo;
+
+option go_package = "github.com/ceyewan/genesis/examples/grpc-registry/proto;proto";
+
+// Echo 服务定义
+service EchoService {
+  // Echo 方法返回服务器信息
+  rpc Echo(EchoRequest) returns (EchoResponse);
+}
+
+// Echo 请求
+message EchoRequest {
+  string message = 1;
+}
+
+// Echo 响应
+message EchoResponse {
+  string message = 1;      // 原始消息
+  string server_id = 2;    // 服务器唯一标识
+  string server_addr = 3;  // 服务器地址
+  int64 timestamp = 4;     // 时间戳
+}
+
