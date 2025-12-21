@@ -11,6 +11,7 @@ import (
 	"github.com/ceyewan/genesis/cache/serializer"
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/metrics"
 )
 
 type redisCache struct {
@@ -18,12 +19,11 @@ type redisCache struct {
 	serializer serializer.Serializer
 	prefix     string
 	logger     clog.Logger
-	meter      interface{} // metrics.Meter - TODO: 修复类型
-	tracer     interface{} // TODO: 实现 Tracer 接口
+	meter      metrics.Meter
 }
 
 // newRedis 创建 Redis 缓存实例
-func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger, meter interface{}, tracer interface{}) (Cache, error) {
+func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger, meter metrics.Meter) (Cache, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("redis 连接器为 nil")
 	}
@@ -42,18 +42,12 @@ func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger, me
 		return nil, err
 	}
 
-	// 如果没有提供 logger，使用默认 logger
-	if logger == nil {
-		logger = clog.Default()
-	}
-
 	return &redisCache{
 		client:     conn.GetClient(),
 		serializer: s,
 		prefix:     cfg.Prefix,
 		logger:     logger,
 		meter:      meter,
-		tracer:     tracer,
 	}, nil
 }
 

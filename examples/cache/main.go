@@ -67,9 +67,7 @@ func main() {
 		Level:  "info",
 		Format: "console",
 		Output: "stdout",
-	}, &clog.Option{
-		NamespaceParts: []string{"example", "cache", "im"},
-	})
+	}, clog.WithNamespace("example", "cache", "im"))
 	if err != nil {
 		log.Fatalf("初始化日志记录器失败: %v", err)
 	}

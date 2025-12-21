@@ -1,3 +1,26 @@
+// Package cache 提供缓存组件，支持基于 Redis 的多种数据结构操作。
+//
+// Cache 组件是 Genesis 微服务组件库的缓存抽象层，提供了统一的缓存操作语义。
+// 支持 Redis 的核心数据结构：String、Hash、Sorted Set、List，并支持自动序列化。
+//
+// 基本使用：
+//
+//	redisConn, _ := connector.NewRedis(redisConfig)
+//	cacheClient, _ := cache.New(redisConn, &cache.Config{
+//	    Prefix:     "myapp:",
+//	    Serializer: "json",
+//	}, cache.WithLogger(logger))
+//
+//	// 缓存对象
+//	err := cacheClient.Set(ctx, "user:1001", user, time.Hour)
+//
+//	// 获取对象
+//	var cachedUser User
+//	err = cacheClient.Get(ctx, "user:1001", &cachedUser)
+//
+//	// Hash 操作
+//	err = cacheClient.HSet(ctx, "user:1001:profile", "name", "Alice")
+//	err = cacheClient.HGet(ctx, "user:1001:profile", "name", &name)
 package cache
 
 import (
@@ -6,6 +29,7 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // Cache 定义了缓存组件的核心能力
@@ -50,7 +74,7 @@ type Cache interface {
 // 参数:
 //   - conn: Redis 连接器
 //   - cfg: 缓存配置
-//   - opts: 可选参数 (Logger, Meter, Tracer)
+//   - opts: 可选参数 (Logger, Meter)
 //
 // 使用示例:
 //
@@ -61,12 +85,23 @@ type Cache interface {
 //	}, cache.WithLogger(logger))
 func New(conn connector.RedisConnector, cfg *Config, opts ...Option) (Cache, error) {
 	// 应用选项
-	opt := Options{
-		Logger: clog.Default(), // 默认 Logger
-	}
+	opt := options{}
 	for _, o := range opts {
 		o(&opt)
 	}
 
-	return newRedis(conn, cfg, opt.Logger, opt.Meter, opt.Tracer)
+	// 如果没有提供 Logger，创建默认实例
+	if opt.Logger == nil {
+		logger, err := clog.New(&clog.Config{
+			Level:  "info",
+			Format: "json",
+			Output: "stdout",
+		})
+		if err != nil {
+			return nil, xerrors.Wrapf(err, "failed to create default logger")
+		}
+		opt.Logger = logger
+	}
+
+	return newRedis(conn, cfg, opt.Logger, opt.Meter)
 }
