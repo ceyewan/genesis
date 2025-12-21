@@ -55,7 +55,7 @@ func main() {
 	fmt.Println("=== Genesis DB Component Example (Go Native DI) ===")
 
 	// 0. 加载环境变量（从根目录）
-	if err := godotenv.Load("/Users/ceyewan/CodeField/genesis/.env"); err != nil {
+	if err := godotenv.Load(".env"); err != nil {
 		log.Printf("Warning: could not load .env file: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func initComponents() (connector.MySQLConnector, db.DB) {
 		Level:  "info",
 		Format: "json",
 		Output: "stdout", // 添加输出配置
-	}, &clog.Option{})
+	})
 	if err != nil {
 		log.Fatalf("failed to create logger: %v", err)
 	}
