@@ -1,4 +1,4 @@
-package redis
+package dlock
 
 import (
 	"context"
@@ -12,13 +12,12 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/dlock/types"
 	"github.com/ceyewan/genesis/metrics"
 )
 
-type RedisLocker struct {
+type redisLocker struct {
 	client *redis.Client
-	cfg    *types.Config
+	cfg    *Config
 	logger clog.Logger
 	meter  metrics.Meter
 	locks  map[string]*redisLockEntry
@@ -33,8 +32,8 @@ type redisLockEntry struct {
 	renewDone  chan struct{}
 }
 
-// New 创建 RedisLocker 实例
-func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger, meter metrics.Meter) (*RedisLocker, error) {
+// newRedisLocker 创建 Redis Locker 实例
+func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger, meter metrics.Meter) (Locker, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("redis connector is nil")
 	}
@@ -42,7 +41,7 @@ func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger, m
 		return nil, fmt.Errorf("config is nil")
 	}
 
-	return &RedisLocker{
+	return &redisLocker{
 		client: conn.GetClient(),
 		cfg:    cfg,
 		logger: logger,
@@ -51,11 +50,11 @@ func New(conn connector.RedisConnector, cfg *types.Config, logger clog.Logger, m
 	}, nil
 }
 
-func (l *RedisLocker) Lock(ctx context.Context, key string, opts ...types.LockOption) error {
+func (l *redisLocker) Lock(ctx context.Context, key string, opts ...LockOption) error {
 	return l.lockWithRetry(ctx, key, false, opts...)
 }
 
-func (l *RedisLocker) TryLock(ctx context.Context, key string, opts ...types.LockOption) (bool, error) {
+func (l *redisLocker) TryLock(ctx context.Context, key string, opts ...LockOption) (bool, error) {
 	entry, err := l.acquireLock(ctx, key, opts...)
 	if err != nil {
 		return false, err
@@ -66,7 +65,7 @@ func (l *RedisLocker) TryLock(ctx context.Context, key string, opts ...types.Loc
 	return true, nil
 }
 
-func (l *RedisLocker) Unlock(ctx context.Context, key string) error {
+func (l *redisLocker) Unlock(ctx context.Context, key string) error {
 	l.mu.Lock()
 	entry, exists := l.locks[key]
 	if !exists {
@@ -100,11 +99,13 @@ func (l *RedisLocker) Unlock(ctx context.Context, key string) error {
 		return fmt.Errorf("failed to release lock (ownership lost): %s", key)
 	}
 
-	l.logger.InfoContext(ctx, "lock released", clog.String("key", key))
+	if l.logger != nil {
+		l.logger.InfoContext(ctx, "lock released", clog.String("key", key))
+	}
 	return nil
 }
 
-func (l *RedisLocker) lockWithRetry(ctx context.Context, key string, tryOnce bool, opts ...types.LockOption) error {
+func (l *redisLocker) lockWithRetry(ctx context.Context, key string, tryOnce bool, opts ...LockOption) error {
 	retryInterval := l.cfg.RetryInterval
 	if retryInterval <= 0 {
 		retryInterval = 100 * time.Millisecond
@@ -132,7 +133,7 @@ func (l *RedisLocker) lockWithRetry(ctx context.Context, key string, tryOnce boo
 	}
 }
 
-func (l *RedisLocker) acquireLock(ctx context.Context, key string, opts ...types.LockOption) (*redisLockEntry, error) {
+func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockOption) (*redisLockEntry, error) {
 	l.mu.RLock()
 	if _, exists := l.locks[key]; exists {
 		l.mu.RUnlock()
@@ -140,7 +141,7 @@ func (l *RedisLocker) acquireLock(ctx context.Context, key string, opts ...types
 	}
 	l.mu.RUnlock()
 
-	options := &types.LockOptions{
+	options := &lockOptions{
 		TTL: l.cfg.DefaultTTL,
 	}
 	for _, opt := range opts {
@@ -181,11 +182,13 @@ func (l *RedisLocker) acquireLock(ctx context.Context, key string, opts ...types
 	l.locks[key] = entry
 	l.mu.Unlock()
 
-	l.logger.InfoContext(ctx, "lock acquired", clog.String("key", key), clog.String("token", token))
+	if l.logger != nil {
+		l.logger.InfoContext(ctx, "lock acquired", clog.String("key", key), clog.String("token", token))
+	}
 	return entry, nil
 }
 
-func (l *RedisLocker) watchdog(entry *redisLockEntry, redisKey string) {
+func (l *redisLocker) watchdog(entry *redisLockEntry, redisKey string) {
 	defer close(entry.renewDone)
 
 	renewInterval := entry.expiration / 3
@@ -212,18 +215,22 @@ func (l *RedisLocker) watchdog(entry *redisLockEntry, redisKey string) {
 			cancel()
 
 			if err != nil {
-				l.logger.Error("watchdog renew failed", clog.String("key", entry.key), clog.Error(err))
+				if l.logger != nil {
+					l.logger.Error("watchdog renew failed", clog.String("key", entry.key), clog.Error(err))
+				}
 				return
 			}
 			if res.(int64) == 0 {
-				l.logger.Warn("watchdog lost ownership", clog.String("key", entry.key))
+				if l.logger != nil {
+					l.logger.Warn("watchdog lost ownership", clog.String("key", entry.key))
+				}
 				return
 			}
 		}
 	}
 }
 
-func (l *RedisLocker) getRedisKey(key string) string {
+func (l *redisLocker) getRedisKey(key string) string {
 	if l.cfg.Prefix != "" {
 		return l.cfg.Prefix + key
 	}

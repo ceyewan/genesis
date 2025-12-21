@@ -5,28 +5,28 @@ import (
 	"github.com/ceyewan/genesis/metrics"
 )
 
-// Option DLock 组件选项函数
-type Option func(*Options)
+// Option DLock 组件初始化选项函数
+type Option func(*options)
 
-// Options 选项结构（导出供 internal 使用）
-type Options struct {
-	Logger clog.Logger
-	Meter  metrics.Meter
+// options 选项结构（内部使用，小写）
+type options struct {
+	logger clog.Logger
+	meter  metrics.Meter
 }
 
 // WithLogger 注入日志记录器
-// 组件内部会自动追加 Namespace: logger.WithNamespace("dlock")
+// 组件会自动添加 component=dlock 字段
 func WithLogger(l clog.Logger) Option {
-	return func(o *Options) {
+	return func(o *options) {
 		if l != nil {
-			o.Logger = l.WithNamespace("dlock")
+			o.logger = l
 		}
 	}
 }
 
-// WithMeter 注入指标 Meter
+// WithMeter 注入指标收集器
 func WithMeter(m metrics.Meter) Option {
-	return func(o *Options) {
-		o.Meter = m
+	return func(o *options) {
+		o.meter = m
 	}
 }

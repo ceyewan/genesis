@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	clogtypes "github.com/ceyewan/genesis/clog/types"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/dlock"
 )
@@ -16,12 +15,10 @@ func main() {
 	fmt.Println()
 
 	// 1. 创建应用级 Logger
-	appLogger, err := clog.New(&clogtypes.Config{
+	appLogger, err := clog.New(&clog.Config{
 		Level:  "info",
 		Format: "console",
 		Output: "stdout",
-	}, &clogtypes.Option{
-		NamespaceParts: []string{"dlock-etcd-demo"},
 	})
 	if err != nil {
 		fmt.Printf("创建 Logger 失败: %v\n", err)
