@@ -9,6 +9,7 @@ import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
+
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )

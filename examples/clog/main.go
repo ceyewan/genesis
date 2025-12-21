@@ -41,10 +41,10 @@ func basicExample() {
 
 	// 推荐的生产环境配置
 	logger, _ := clog.New(&clog.Config{
-		Level:     "info",          // 生产环境建议使用 info 或 warn
-		Format:    "json",          // 结构化日志，便于日志收集系统处理
-		Output:    "stdout",        // 容器化环境中输出到 stdout
-		AddSource: true,           // 便于问题排查
+		Level:     "info",   // 生产环境建议使用 info 或 warn
+		Format:    "json",   // 结构化日志，便于日志收集系统处理
+		Output:    "stdout", // 容器化环境中输出到 stdout
+		AddSource: true,     // 便于问题排查
 	})
 
 	logger.Info("服务启动",
@@ -127,7 +127,7 @@ func errorHandlingExample() {
 
 	// 1. 轻量级错误处理 - 适用于大多数业务日志
 	logger.Error("用户验证失败",
-		clog.Error(err),                // 仅包含错误消息
+		clog.Error(err), // 仅包含错误消息
 		clog.String("operation", "create_user"),
 		clog.String("user_input", "invalid-email"),
 		clog.String("client_ip", "192.168.1.100"),
@@ -143,7 +143,7 @@ func errorHandlingExample() {
 
 	// 3. 详细错误处理 - 适用于需要调试的场景（开发环境使用）
 	logger.Error("关键系统错误",
-		clog.ErrorWithStack(err),        // 包含错误消息、类型和堆栈
+		clog.ErrorWithStack(err), // 包含错误消息、类型和堆栈
 		clog.String("component", "payment"),
 		clog.String("trace_id", "trace-123"),
 	)

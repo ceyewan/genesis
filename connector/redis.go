@@ -8,6 +8,7 @@ import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
+
 	"github.com/redis/go-redis/v9"
 )
 

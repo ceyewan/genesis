@@ -38,4 +38,3 @@ const (
 	// LabelResult 结果标签 (success/failure)
 	LabelResult = "result"
 )
-

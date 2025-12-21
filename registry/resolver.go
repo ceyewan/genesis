@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ceyewan/genesis/clog"
+
 	"google.golang.org/grpc/resolver"
 )
 
@@ -152,22 +153,4 @@ func parseEndpoint(endpoint string) string {
 	endpoint = strings.TrimPrefix(endpoint, "https://")
 
 	return endpoint
-}
-
-// serviceInstanceToAddresses 将服务实例转换为 gRPC 地址列表
-func serviceInstanceToAddresses(instances []*ServiceInstance) []resolver.Address {
-	var addrs []resolver.Address
-	for _, instance := range instances {
-		for _, endpoint := range instance.Endpoints {
-			addr := parseEndpoint(endpoint)
-			if addr != "" {
-				addrs = append(addrs, resolver.Address{
-					Addr:       addr,
-					ServerName: instance.Name,
-					Attributes: nil,
-				})
-			}
-		}
-	}
-	return addrs
 }

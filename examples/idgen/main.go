@@ -282,8 +282,8 @@ func sequenceExample() {
 	fmt.Println("\n=== 业务流水号场景 ===")
 	businessCfg := &idgen.SequenceConfig{
 		KeyPrefix: "business:seq",
-		Step:      1000,                 // 步长 1000
-		MaxValue:  9999,                 // 最大值限制
+		Step:      1000,                  // 步长 1000
+		MaxValue:  9999,                  // 最大值限制
 		TTL:       int64(24 * time.Hour), // 1天过期
 	}
 

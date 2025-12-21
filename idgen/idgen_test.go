@@ -76,34 +76,6 @@ func setupRedisConn(t *testing.T) connector.RedisConnector {
 	return redisConn
 }
 
-// setupEtcdConn 设置 Etcd 连接
-func setupEtcdConn(t *testing.T) connector.EtcdConnector {
-	logger := setupLogger(t)
-
-	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{
-		Endpoints: []string{getEnvOrDefault("ETCD_ADDR", "127.0.0.1:2379")},
-	}, connector.WithLogger(logger))
-	if err != nil {
-		t.Skipf("Etcd not available, skipping tests: %v", err)
-		return nil
-	}
-
-	// 测试连接
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := etcdConn.Connect(ctx); err != nil {
-		t.Skipf("Failed to connect to Etcd, skipping tests: %v", err)
-		etcdConn.Close()
-		return nil
-	}
-
-	t.Cleanup(func() {
-		etcdConn.Close()
-	})
-
-	return etcdConn
-}
-
 func TestNewUUID(t *testing.T) {
 	logger := setupLogger(t)
 

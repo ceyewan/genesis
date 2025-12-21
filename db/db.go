@@ -58,6 +58,7 @@ import (
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
+
 	"gorm.io/gorm"
 	"gorm.io/sharding"
 )

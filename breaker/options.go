@@ -16,6 +16,7 @@ type Option func(*options)
 //   - ctx: 上下文
 //   - serviceName: 服务名
 //   - err: 原始错误（通常是 ErrOpenState）
+//
 // 返回:
 //   - error: 降级逻辑的错误，nil 表示降级成功
 type FallbackFunc func(ctx context.Context, serviceName string, err error) error
@@ -58,4 +59,3 @@ func WithFallback(fallback FallbackFunc) Option {
 		o.fallback = fallback
 	}
 }
-

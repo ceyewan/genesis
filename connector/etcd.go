@@ -9,6 +9,7 @@ import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
+
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 

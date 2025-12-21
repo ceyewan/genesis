@@ -16,4 +16,3 @@ var (
 	// ErrOpenState 熔断器处于打开状态
 	ErrOpenState = xerrors.New("breaker: circuit breaker is open")
 )
-

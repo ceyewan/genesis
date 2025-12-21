@@ -5,6 +5,7 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
+
 	"google.golang.org/grpc"
 )
 
@@ -107,4 +108,3 @@ func (cb *circuitBreaker) StreamClientInterceptor() grpc.StreamClientInterceptor
 		return result.(grpc.ClientStream), nil
 	}
 }
-

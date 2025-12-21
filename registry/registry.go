@@ -83,6 +83,7 @@ import (
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
+
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -216,7 +217,11 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 	// 序列化服务实例
 	value, err := json.Marshal(service)
 	if err != nil {
-		r.client.Revoke(ctx, lease.ID)
+		if _, revokeErr := r.client.Revoke(ctx, lease.ID); revokeErr != nil {
+			r.logger.Error("failed to revoke lease",
+				clog.String("leaseID", fmt.Sprintf("%d", lease.ID)),
+				clog.Error(revokeErr))
+		}
 		return xerrors.Wrap(err, "marshal service failed")
 	}
 
@@ -226,7 +231,11 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 	// 写入 Etcd
 	_, err = r.client.Put(ctx, key, string(value), clientv3.WithLease(lease.ID))
 	if err != nil {
-		r.client.Revoke(ctx, lease.ID)
+		if _, revokeErr := r.client.Revoke(ctx, lease.ID); revokeErr != nil {
+			r.logger.Error("failed to revoke lease",
+				clog.String("leaseID", fmt.Sprintf("%d", lease.ID)),
+				clog.Error(revokeErr))
+		}
 		r.logger.Error("failed to put service",
 			clog.String("key", key),
 			clog.Error(err))
@@ -420,7 +429,7 @@ func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, op
 	}
 	opts = append(defaultOpts, opts...)
 
-	conn, err := grpc.DialContext(ctx, target, opts...)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		r.logger.Error("failed to create grpc connection",
 			clog.String("service_name", serviceName),

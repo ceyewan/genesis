@@ -31,7 +31,6 @@ func WithMeter(m metrics.Meter) Option {
 	}
 }
 
-
 // defaultOptions 返回默认选项
 func defaultOptions() *options {
 	logger, _ := clog.New(&clog.Config{

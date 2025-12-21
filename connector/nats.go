@@ -8,6 +8,7 @@ import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
+
 	"github.com/nats-io/nats.go"
 )
 
@@ -76,23 +77,6 @@ func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
 		if err != nil {
 			return nil, xerrors.Wrapf(err, "create active connections gauge")
 		}
-	}
-
-	// 创建 NATS 连接选项
-	natsOpts := []nats.Option{
-		nats.Name(cfg.Name),
-		nats.ReconnectWait(cfg.ReconnectWait),
-		nats.MaxReconnects(cfg.MaxReconnects),
-		nats.PingInterval(cfg.PingInterval),
-		nats.Timeout(cfg.Timeout),
-	}
-
-	// 添加认证
-	if cfg.Username != "" && cfg.Password != "" {
-		natsOpts = append(natsOpts, nats.UserInfo(cfg.Username, cfg.Password))
-	}
-	if cfg.Token != "" {
-		natsOpts = append(natsOpts, nats.Token(cfg.Token))
 	}
 
 	return c, nil

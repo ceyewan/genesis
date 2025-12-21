@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/ceyewan/genesis/metrics"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -101,4 +102,3 @@ func GetClaims(c *gin.Context) (*Claims, bool) {
 	}
 	return claims.(*Claims), true
 }
-

@@ -25,8 +25,8 @@ Genesis 旨在为 Go 微服务开发提供一套**统一的架构规范**和**�
 ## 📚 文档
 
 * [架构设计](docs/genesis-design.md) - 总体架构和设计理念
-* [重构计划](docs/refactoring-plan.md) - 重构执行计划
 * [组件开发规范](docs/component-spec.md) - 组件开发规范
+* [文档索引](docs/) - 查看所有设计文档
 
 ## 🚀 快速开始
 
