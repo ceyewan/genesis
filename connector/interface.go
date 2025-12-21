@@ -1,4 +1,44 @@
-// pkg/connector/interface.go
+// Package connector 为 Genesis 框架提供统一的连接管理能力。
+// 支持多种数据源的连接池管理、健康检查和故障恢复。
+//
+// 特性：
+//   - 统一接口：提供 Connector、TypedConnector 泛型接口
+//   - 多数据源支持：Redis、MySQL、Etcd、NATS
+//   - 连接池管理：自动管理连接生命周期
+//   - 健康检查：定期检查连接状态，自动故障恢复
+//   - 配置驱动：基于配置文件的连接参数管理
+//   - 指标集成：集成 OpenTelemetry 指标收集
+//
+// 基本使用：
+//
+//	// 创建 Redis 连接器
+//	cfg := &connector.RedisConfig{
+//		Addr:     "127.0.0.1:6379",
+//		Password: "",
+//		DB:       0,
+//	}
+//	redisConn, err := connector.NewRedis(cfg,
+//		connector.WithLogger(logger),
+//		connector.WithMeter(meter),
+//	)
+//	if err != nil {
+//		panic(err)
+//	}
+//	defer redisConn.Close()
+//
+//	// 建立连接
+//	if err := redisConn.Connect(ctx); err != nil {
+//		panic(err)
+//	}
+//
+//	// 获取客户端
+//	client := redisConn.GetClient()
+//	result, err := client.Get(ctx, "key").Result()
+//
+// 设计理念：
+// connector 遵循"接口优先"的设计原则，提供统一的连接管理抽象。
+// 通过泛型接口确保类型安全，同时支持不同数据源的特殊配置需求。
+// 采用显式依赖注入，确保组件间的松耦合和可测试性。
 package connector
 
 import (
@@ -30,31 +70,22 @@ type TypedConnector[T any] interface {
 	GetClient() T
 }
 
-// Configurable 定义了配置验证的能力
-type Configurable interface {
-	Validate() error
-}
-
 // RedisConnector Redis 连接器接口
 type RedisConnector interface {
 	TypedConnector[*redis.Client]
-	Configurable
 }
 
 // MySQLConnector MySQL 连接器接口
 type MySQLConnector interface {
 	TypedConnector[*gorm.DB]
-	Configurable
 }
 
 // EtcdConnector Etcd 连接器接口
 type EtcdConnector interface {
 	TypedConnector[*clientv3.Client]
-	Configurable
 }
 
 // NATSConnector NATS 连接器接口
 type NATSConnector interface {
 	TypedConnector[*nats.Conn]
-	Configurable
 }

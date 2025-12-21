@@ -1,9 +1,7 @@
-// pkg/connector/nats.go
 package connector
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -28,6 +26,7 @@ type natsConnector struct {
 
 // NewNATS 创建 NATS 连接器
 func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
+	cfg.SetDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid nats config")
 	}
@@ -136,7 +135,7 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 			c.failedConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
 		}
 		c.logger.Error("failed to connect to nats", clog.Error(err), clog.String("url", c.cfg.URL))
-		return NewError(c.cfg.Name, TypeConnection, err, true)
+		return xerrors.Wrapf(err, "nats connector[%s]: connection failed", c.cfg.Name)
 	}
 
 	c.conn = conn
@@ -184,14 +183,14 @@ func (c *natsConnector) HealthCheck(ctx context.Context) error {
 
 	if conn == nil {
 		c.healthy.Store(false)
-		return NewError(c.cfg.Name, TypeConnection, fmt.Errorf("connection is nil"), false)
+		return xerrors.Wrapf(ErrConnection, "nats connector[%s]: connection is nil", c.cfg.Name)
 	}
 
 	// 检查连接状态
 	status := conn.Status()
 	if status == nats.CLOSED || status == nats.RECONNECTING {
 		c.healthy.Store(false)
-		return NewError(c.cfg.Name, TypeHealthCheck, fmt.Errorf("connection status: %s", status.String()), true)
+		return xerrors.Wrapf(ErrHealthCheck, "nats connector[%s]: connection status: %s", c.cfg.Name, status.String())
 	}
 
 	c.healthy.Store(true)
@@ -213,18 +212,4 @@ func (c *natsConnector) GetClient() *nats.Conn {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.conn
-}
-
-// Validate 实现 Configurable 接口
-func (c *natsConnector) Validate() error {
-	return c.cfg.Validate()
-}
-
-// MustNewNATS 创建 NATS 连接器，失败时 panic
-func MustNewNATS(cfg *NATSConfig, opts ...Option) NATSConnector {
-	conn, err := NewNATS(cfg, opts...)
-	if err != nil {
-		panic(fmt.Sprintf("failed to create nats connector: %v", err))
-	}
-	return conn
 }

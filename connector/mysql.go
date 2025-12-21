@@ -1,4 +1,3 @@
-// pkg/connector/mysql.go
 package connector
 
 import (
@@ -29,6 +28,7 @@ type mysqlConnector struct {
 
 // NewMySQL 创建 MySQL 连接器
 func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
+	cfg.SetDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid mysql config")
 	}
@@ -87,7 +87,7 @@ func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
 	// 创建 GORM 实例
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
-		return nil, NewError(cfg.Name, TypeConnection, err, true)
+		return nil, xerrors.Wrapf(err, "mysql connector[%s]: connection failed", cfg.Name)
 	}
 
 	c.db = db
@@ -115,7 +115,7 @@ func (c *mysqlConnector) Connect(ctx context.Context) error {
 			c.failedConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
 		}
 		c.logger.Error("failed to get mysql db instance", clog.Error(err))
-		return NewError(c.cfg.Name, TypeConnection, err, true)
+		return xerrors.Wrapf(err, "mysql connector[%s]: failed to get db instance", c.cfg.Name)
 	}
 
 	// 配置连接池
@@ -130,7 +130,7 @@ func (c *mysqlConnector) Connect(ctx context.Context) error {
 			c.failedConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
 		}
 		c.logger.Error("failed to connect to mysql", clog.Error(err))
-		return NewError(c.cfg.Name, TypeConnection, err, true)
+		return xerrors.Wrapf(err, "mysql connector[%s]: ping failed", c.cfg.Name)
 	}
 
 	// 记录成功连接
@@ -183,13 +183,13 @@ func (c *mysqlConnector) HealthCheck(ctx context.Context) error {
 	sqlDB, err := c.db.DB()
 	if err != nil {
 		c.healthy.Store(false)
-		return NewError(c.cfg.Name, TypeHealthCheck, err, true)
+		return xerrors.Wrapf(err, "mysql connector[%s]: health check failed - failed to get db instance", c.cfg.Name)
 	}
 
 	if err := sqlDB.Ping(); err != nil {
 		c.healthy.Store(false)
 		c.logger.Warn("mysql health check failed", clog.Error(err))
-		return WrapError(c.cfg.Name, err, true)
+		return xerrors.Wrapf(err, "mysql connector[%s]: health check failed", c.cfg.Name)
 	}
 
 	c.healthy.Store(true)
@@ -209,18 +209,4 @@ func (c *mysqlConnector) Name() string {
 // GetClient 返回 GORM 客户端
 func (c *mysqlConnector) GetClient() *gorm.DB {
 	return c.db
-}
-
-// Validate 实现 Configurable 接口
-func (c *mysqlConnector) Validate() error {
-	return c.cfg.Validate()
-}
-
-// MustNewMySQL 创建 MySQL 连接器，失败时 panic
-func MustNewMySQL(cfg *MySQLConfig, opts ...Option) MySQLConnector {
-	conn, err := NewMySQL(cfg, opts...)
-	if err != nil {
-		panic(fmt.Sprintf("failed to create mysql connector: %v", err))
-	}
-	return conn
 }

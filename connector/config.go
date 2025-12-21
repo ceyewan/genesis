@@ -1,4 +1,3 @@
-// pkg/connector/config.go
 package connector
 
 import (

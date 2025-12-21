@@ -1,9 +1,7 @@
-// pkg/connector/etcd.go
 package connector
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +27,7 @@ type etcdConnector struct {
 
 // NewEtcd 创建 Etcd 连接器
 func NewEtcd(cfg *EtcdConfig, opts ...Option) (EtcdConnector, error) {
+	cfg.SetDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid etcd config")
 	}
@@ -95,7 +94,7 @@ func NewEtcd(cfg *EtcdConfig, opts ...Option) (EtcdConnector, error) {
 	// 创建客户端
 	client, err := clientv3.New(clientConfig)
 	if err != nil {
-		return nil, NewError(c.cfg.Name, TypeConnection, err, true)
+		return nil, xerrors.Wrapf(err, "etcd connector[%s]: connection failed", c.cfg.Name)
 	}
 
 	c.client = client
@@ -139,7 +138,7 @@ func (c *etcdConnector) Connect(ctx context.Context) error {
 			c.failedConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
 		}
 		c.logger.Error("failed to connect to etcd", clog.Error(err))
-		return NewError(c.cfg.Name, TypeConnection, err, true)
+		return xerrors.Wrapf(err, "etcd connector[%s]: connect failed", c.cfg.Name)
 	}
 
 	// 记录成功连接
@@ -189,7 +188,7 @@ func (c *etcdConnector) HealthCheck(ctx context.Context) error {
 	if err != nil && !isEtcdNotFoundErr(err) {
 		c.healthy.Store(false)
 		c.logger.Warn("etcd health check failed", clog.Error(err))
-		return WrapError(c.cfg.Name, err, true)
+		return xerrors.Wrapf(err, "etcd connector[%s]: health check failed", c.cfg.Name)
 	}
 
 	c.healthy.Store(true)
@@ -211,11 +210,6 @@ func (c *etcdConnector) GetClient() *clientv3.Client {
 	return c.client
 }
 
-// Validate 实现 Configurable 接口
-func (c *etcdConnector) Validate() error {
-	return c.cfg.Validate()
-}
-
 // isEtcdNotFoundErr 检查是否是 etcd 的"未找到"错误
 func isEtcdNotFoundErr(err error) bool {
 	if err == nil {
@@ -224,13 +218,4 @@ func isEtcdNotFoundErr(err error) bool {
 	return err == context.DeadlineExceeded ||
 		err == context.Canceled ||
 		(err.Error() == "etcdserver: requested key not found")
-}
-
-// MustNewEtcd 创建 Etcd 连接器，失败时 panic
-func MustNewEtcd(cfg *EtcdConfig, opts ...Option) EtcdConnector {
-	conn, err := NewEtcd(cfg, opts...)
-	if err != nil {
-		panic(fmt.Sprintf("failed to create etcd connector: %v", err))
-	}
-	return conn
 }

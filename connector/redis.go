@@ -1,9 +1,7 @@
-// pkg/connector/redis.go
 package connector
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -28,6 +26,7 @@ type redisConnector struct {
 
 // NewRedis 创建 Redis 连接器
 func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
+	cfg.SetDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid redis config")
 	}
@@ -112,7 +111,7 @@ func (c *redisConnector) Connect(ctx context.Context) error {
 			c.failedConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
 		}
 		c.logger.Error("failed to connect to redis", clog.Error(err), clog.String("addr", c.cfg.Addr))
-		return NewError(c.cfg.Name, TypeConnection, err, true)
+		return xerrors.Wrapf(err, "redis connector[%s]: connection failed", c.cfg.Name)
 	}
 
 	// 记录成功连接
@@ -159,7 +158,7 @@ func (c *redisConnector) HealthCheck(ctx context.Context) error {
 	if err := c.client.Ping(ctx).Err(); err != nil {
 		c.healthy.Store(false)
 		c.logger.Warn("redis health check failed", clog.Error(err))
-		return WrapError(c.cfg.Name, err, true)
+		return xerrors.Wrapf(err, "redis connector[%s]: health check failed", c.cfg.Name)
 	}
 
 	c.healthy.Store(true)
@@ -179,18 +178,4 @@ func (c *redisConnector) Name() string {
 // GetClient 返回 Redis 客户端
 func (c *redisConnector) GetClient() *redis.Client {
 	return c.client
-}
-
-// Validate 实现 Configurable 接口
-func (c *redisConnector) Validate() error {
-	return c.cfg.Validate()
-}
-
-// MustNewRedis 创建 Redis 连接器，失败时 panic
-func MustNewRedis(cfg *RedisConfig, opts ...Option) RedisConnector {
-	conn, err := NewRedis(cfg, opts...)
-	if err != nil {
-		panic(fmt.Sprintf("failed to create redis connector: %v", err))
-	}
-	return conn
 }
