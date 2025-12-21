@@ -31,13 +31,13 @@ auth/
 type Authenticator interface {
     // GenerateToken 生成 Token
     GenerateToken(ctx context.Context, claims *Claims) (string, error)
-    
+
     // ValidateToken 验证 Token，返回 Claims
     ValidateToken(ctx context.Context, token string) (*Claims, error)
-    
+
     // RefreshToken 刷新 Token
     RefreshToken(ctx context.Context, token string) (string, error)
-    
+
     // GinMiddleware 返回 Gin 认证中间件
     GinMiddleware() gin.HandlerFunc
 }
@@ -49,7 +49,7 @@ type Authenticator interface {
 type Claims struct {
     // 标准声明 (使用 jwt.RegisteredClaims)
     jwt.RegisteredClaims
-    
+
     // 自定义声明
     Username string         `json:"uname,omitempty"`
     Roles    []string       `json:"roles,omitempty"`
@@ -61,13 +61,13 @@ type Claims struct {
 
 ```yaml
 auth:
-  secret_key: "your-secret-key-min-32-chars-long"
-  signing_method: "HS256"
-  issuer: "my-service"
-  access_token_ttl: 15m
-  refresh_token_ttl: 168h
-  token_lookup: "header:Authorization"
-  token_head_name: "Bearer"
+    secret_key: "your-secret-key-min-32-chars-long"
+    signing_method: "HS256"
+    issuer: "my-service"
+    access_token_ttl: 15m
+    refresh_token_ttl: 168h
+    token_lookup: "header:Authorization"
+    token_head_name: "Bearer"
 ```
 
 ## 使用示例
@@ -109,9 +109,9 @@ r.GET("/profile", func(c *gin.Context) {
 
 ## 监控指标
 
-| 指标名 | 类型 | 描述 |
-|--------|------|------|
-| `auth_tokens_generated_total` | Counter | 生成的 Token 总数 |
-| `auth_tokens_validated_total` | Counter | 验证的 Token 总数 |
-| `auth_tokens_refreshed_total` | Counter | 刷新的 Token 总数 |
-| `auth_token_validation_duration_seconds` | Histogram | 验证耗时分布 |
+| 指标名                                   | 类型      | 描述              |
+| ---------------------------------------- | --------- | ----------------- |
+| `auth_tokens_generated_total`            | Counter   | 生成的 Token 总数 |
+| `auth_tokens_validated_total`            | Counter   | 验证的 Token 总数 |
+| `auth_tokens_refreshed_total`            | Counter   | 刷新的 Token 总数 |
+| `auth_token_validation_duration_seconds` | Histogram | 验证耗时分布      |

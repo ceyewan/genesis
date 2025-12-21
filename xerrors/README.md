@@ -167,6 +167,7 @@ go run main.go
 ```
 
 示例包含以下场景：
+
 1. **基础错误包装** - Wrap/Wrapf 的多层链式调用
 2. **Sentinel Errors 检查** - 各种预定义错误的判断
 3. **带错误码的错误** - WithCode/GetCode 用于 API 错误映射
@@ -216,14 +217,14 @@ if err != nil {
 
 ## 最佳实践
 
-| 场景 | 推荐做法 |
-|-----|---------|
-| 业务逻辑 | `if err != nil { return xerrors.Wrap(err, "context") }` |
-| 初始化 | `cfg := xerrors.Must(load())` |
-| 多步骤验证 | 使用 `Collector` 收集第一个错误 |
-| API 错误 | 使用 `WithCode` 添加机器可读码 |
-| 日志记录 | 在调用方使用 `clog.Error`，不在 xerrors 内部 |
-| 组件错误 | 定义 Sentinel Errors 在组件的 `errors.go` 文件 |
+| 场景       | 推荐做法                                                |
+| ---------- | ------------------------------------------------------- |
+| 业务逻辑   | `if err != nil { return xerrors.Wrap(err, "context") }` |
+| 初始化     | `cfg := xerrors.Must(load())`                           |
+| 多步骤验证 | 使用 `Collector` 收集第一个错误                         |
+| API 错误   | 使用 `WithCode` 添加机器可读码                          |
+| 日志记录   | 在调用方使用 `clog.Error`，不在 xerrors 内部            |
+| 组件错误   | 定义 Sentinel Errors 在组件的 `errors.go` 文件          |
 
 ## 注意事项
 

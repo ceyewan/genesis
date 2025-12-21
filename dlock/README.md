@@ -63,14 +63,14 @@ func main() {
 
     // 4. 使用锁
     ctx := context.Background()
-    
+
     // 阻塞式加锁
     if err := locker.Lock(ctx, "resource-key"); err != nil {
         logger.Error("failed to acquire lock", clog.Error(err))
         return
     }
     defer locker.Unlock(ctx, "resource-key")
-    
+
     // 执行临界区代码
     logger.Info("critical section", clog.String("key", "resource-key"))
 }
@@ -153,7 +153,7 @@ if acquired {
 ```go
 // 长时间持有锁
 ctx := context.Background()
-locker.Lock(ctx, fmt.Sprintf("inventory:%d", productID), 
+locker.Lock(ctx, fmt.Sprintf("inventory:%d", productID),
     dlock.WithTTL(30*time.Second))
 defer locker.Unlock(ctx, fmt.Sprintf("inventory:%d", productID))
 
@@ -181,7 +181,7 @@ runMigration()
 ### 日志示例
 
 ```go
-locker, _ := dlock.NewRedis(redisConn, cfg, 
+locker, _ := dlock.NewRedis(redisConn, cfg,
     dlock.WithLogger(logger))
 
 // 自动添加的日志字段
@@ -286,12 +286,12 @@ if err := locker.Unlock(ctx, key); err != nil {
 
 dlock 自动收集以下指标（需要注入 `Meter`）：
 
-| 指标名 | 类型 | 说明 | 标签 |
-| -------- | ------ | ------ | ------ |
-| `dlock_lock_acquired_total` | Counter | 锁获取成功次数 | `backend`, `key` |
-| `dlock_lock_failed_total` | Counter | 锁获取失败次数 | `backend`, `key` |
-| `dlock_lock_released_total` | Counter | 锁释放次数 | `backend`, `key` |
-| `dlock_lock_hold_duration_seconds` | Histogram | 锁持有时长 | `backend`, `key` |
+| 指标名                             | 类型      | 说明           | 标签             |
+| ---------------------------------- | --------- | -------------- | ---------------- |
+| `dlock_lock_acquired_total`        | Counter   | 锁获取成功次数 | `backend`, `key` |
+| `dlock_lock_failed_total`          | Counter   | 锁获取失败次数 | `backend`, `key` |
+| `dlock_lock_released_total`        | Counter   | 锁释放次数     | `backend`, `key` |
+| `dlock_lock_hold_duration_seconds` | Histogram | 锁持有时长     | `backend`, `key` |
 
 ## 完整示例
 

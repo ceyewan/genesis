@@ -9,12 +9,12 @@
 - **所属层级**：L2 (Business) — 业务能力，提供消息队列抽象
 - **核心职责**：在 NATS 连接器的基础上提供统一的消息发布订阅语义
 - **设计原则**：
-  - **双模式支持**：Core 模式（高吞吐、低延迟、发后即忘）和 JetStream 模式（持久化、可靠投递）
-  - **统一抽象**：屏蔽底层驱动差异，提供一致的 `Publish/Subscribe` 接口
-  - **借用模型**：借用 NATS 连接器的连接，不负责连接的生命周期
-  - **灵活订阅**：支持广播订阅（Subscribe）和队列订阅（QueueSubscribe）
-  - **可观测性**：集成 clog 和 metrics，提供完整的日志和指标能力
-  - **自动重试**：JetStream 模式下支持消息重试和死信队列
+    - **双模式支持**：Core 模式（高吞吐、低延迟、发后即忘）和 JetStream 模式（持久化、可靠投递）
+    - **统一抽象**：屏蔽底层驱动差异，提供一致的 `Publish/Subscribe` 接口
+    - **借用模型**：借用 NATS 连接器的连接，不负责连接的生命周期
+    - **灵活订阅**：支持广播订阅（Subscribe）和队列订阅（QueueSubscribe）
+    - **可观测性**：集成 clog 和 metrics，提供完整的日志和指标能力
+    - **自动重试**：JetStream 模式下支持消息重试和死信队列
 
 ## 目录结构（完全扁平化设计）
 
@@ -67,12 +67,12 @@ defer sub.Unsubscribe()
 
 ### Core 模式 vs JetStream 模式
 
-| 特性 | Core 模式 | JetStream 模式 |
-|------|-----------|----------------|
-| **性能** | 极高延迟 < 1ms | 高延迟 < 5ms |
-| **可靠性** | 发后即忘，可能丢消息 | 持久化，不丢消息 |
-| **消费者** | 在线消费者才能收到 | 支持离线消息，重投机制 |
-| **用例** | 实时指标、日志、通知 | 订单处理、状态机流转 |
+| 特性       | Core 模式            | JetStream 模式         |
+| ---------- | -------------------- | ---------------------- |
+| **性能**   | 极高延迟 < 1ms       | 高延迟 < 5ms           |
+| **可靠性** | 发后即忘，可能丢消息 | 持久化，不丢消息       |
+| **消费者** | 在线消费者才能收到   | 支持离线消息，重投机制 |
+| **用例**   | 实时指标、日志、通知 | 订单处理、状态机流转   |
 
 ### Core 模式示例
 
@@ -274,8 +274,10 @@ func (s *UserService) handleConfigUpdate(ctx context.Context, msg mq.Message) er
         return s.mq.Publish(ctx, msg.Reply(), data)
     })
     return err
+
 }
-```
+
+````
 
 ## 函数式选项
 
@@ -290,7 +292,7 @@ mqClient, err := mq.New(natsConn, cfg, mq.WithMeter(meter))
 mqClient, err := mq.New(natsConn, cfg,
     mq.WithLogger(logger),
     mq.WithMeter(meter))
-```
+````
 
 ## 资源所有权模型
 
@@ -338,29 +340,29 @@ func main() {
 ## 最佳实践
 
 1. **模式选择**：
-   - 实时指标、日志、通知使用 Core 模式
-   - 订单处理、状态机流转使用 JetStream 模式
-   - 避免混用，保持一致性
+    - 实时指标、日志、通知使用 Core 模式
+    - 订单处理、状态机流转使用 JetStream 模式
+    - 避免混用，保持一致性
 
 2. **主题命名**：
-   - 使用 `资源.动作` 格式，如 `orders.created`、`users.updated`
-   - 避免过度依赖 NATS 的复杂通配符路由
-   - 保持扁平化命名，便于未来迁移到 Kafka
+    - 使用 `资源.动作` 格式，如 `orders.created`、`users.updated`
+    - 避免过度依赖 NATS 的复杂通配符路由
+    - 保持扁平化命名，便于未来迁移到 Kafka
 
 3. **消息处理**：
-   - Handler 应该是幂等的，支持重复处理
-   - 避免在 Handler 中执行耗时操作
-   - 返回 error 会触发重试，谨慎使用
+    - Handler 应该是幂等的，支持重复处理
+    - 避免在 Handler 中执行耗时操作
+    - 返回 error 会触发重试，谨慎使用
 
 4. **错误处理**：
-   - 使用 `xerrors.Wrapf()` 包装错误
-   - 区分业务错误和系统错误
-   - 业务错误返回 nil，避免不必要的重试
+    - 使用 `xerrors.Wrapf()` 包装错误
+    - 区分业务错误和系统错误
+    - 业务错误返回 nil，避免不必要的重试
 
 5. **连接管理**：
-   - 务必通过 `WithLogger` 和 `WithMeter` 注入可观测性组件
-   - 使用 `defer` 确保连接器正确关闭
-   - 在应用启动阶段连接，Fail-fast
+    - 务必通过 `WithLogger` 和 `WithMeter` 注入可观测性组件
+    - 使用 `defer` 确保连接器正确关闭
+    - 在应用启动阶段连接，Fail-fast
 
 ## 完整示例
 

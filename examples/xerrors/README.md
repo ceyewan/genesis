@@ -37,6 +37,7 @@ if xerrors.Is(err, xerrors.ErrNotFound) {
 ```
 
 可用的 Sentinel Errors：
+
 - `ErrNotFound` (404)
 - `ErrAlreadyExists` (409)
 - `ErrInvalidInput` (400)
@@ -186,7 +187,7 @@ result, err := service.DoSomething(ctx)
 if err != nil {
     // xerrors: 包装错误
     err = xerrors.Wrap(err, "service.DoSomething")
-    
+
     // clog: 记录错误
     logger.ErrorContext(ctx, "operation failed",
         clog.Error(err),

@@ -206,36 +206,37 @@ case breaker.StateOpen:
 ### 状态说明
 
 1. **Closed（闭合状态）**
-   - 正常状态，所有请求正常通过
-   - 统计请求成功/失败次数
-   - 当失败率超过阈值时，转换到 Open 状态
+    - 正常状态，所有请求正常通过
+    - 统计请求成功/失败次数
+    - 当失败率超过阈值时，转换到 Open 状态
 
 2. **Open（打开状态）**
-   - 熔断状态，所有请求被快速拒绝
-   - 不会真正调用下游服务
-   - 可以执行降级逻辑
-   - Timeout 时间后，转换到 HalfOpen 状态
+    - 熔断状态，所有请求被快速拒绝
+    - 不会真正调用下游服务
+    - 可以执行降级逻辑
+    - Timeout 时间后，转换到 HalfOpen 状态
 
 3. **HalfOpen（半开状态）**
-   - 探测状态，允许少量请求通过
-   - 如果请求成功，转换到 Closed 状态
-   - 如果请求失败，转换回 Open 状态
+    - 探测状态，允许少量请求通过
+    - 如果请求成功，转换到 Closed 状态
+    - 如果请求失败，转换回 Open 状态
 
 ## 配置说明
 
 ### 参数详解
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `MaxRequests` | uint32 | 1 | 半开状态下允许通过的最大请求数 |
-| `Interval` | time.Duration | 0 | 闭合状态下的统计周期（0 表示不清空） |
-| `Timeout` | time.Duration | 60s | 打开状态持续时间 |
-| `FailureRatio` | float64 | 0.6 | 失败率阈值（0.0-1.0） |
-| `MinimumRequests` | uint32 | 10 | 触发熔断的最小请求数 |
+| 参数              | 类型          | 默认值 | 说明                                 |
+| ----------------- | ------------- | ------ | ------------------------------------ |
+| `MaxRequests`     | uint32        | 1      | 半开状态下允许通过的最大请求数       |
+| `Interval`        | time.Duration | 0      | 闭合状态下的统计周期（0 表示不清空） |
+| `Timeout`         | time.Duration | 60s    | 打开状态持续时间                     |
+| `FailureRatio`    | float64       | 0.6    | 失败率阈值（0.0-1.0）                |
+| `MinimumRequests` | uint32        | 10     | 触发熔断的最小请求数                 |
 
 ### 配置建议
 
 **高可用场景**（宽松熔断）：
+
 ```go
 &breaker.Config{
     MaxRequests:     10,
@@ -246,6 +247,7 @@ case breaker.StateOpen:
 ```
 
 **快速失败场景**（严格熔断）：
+
 ```go
 &breaker.Config{
     MaxRequests:     3,
@@ -259,14 +261,14 @@ case breaker.StateOpen:
 
 ### 可用指标
 
-| 指标名 | 类型 | 标签 | 说明 |
-|--------|------|------|------|
-| `breaker_requests_total` | Counter | service, method, result | 请求总数 |
-| `breaker_success_total` | Counter | service | 成功请求数 |
-| `breaker_failures_total` | Counter | service | 失败请求数 |
-| `breaker_rejects_total` | Counter | service | 被熔断拒绝的请求数 |
-| `breaker_state_changes_total` | Counter | service, from_state, to_state | 状态变更次数 |
-| `breaker_request_duration_seconds` | Histogram | service | 请求耗时 |
+| 指标名                             | 类型      | 标签                          | 说明               |
+| ---------------------------------- | --------- | ----------------------------- | ------------------ |
+| `breaker_requests_total`           | Counter   | service, method, result       | 请求总数           |
+| `breaker_success_total`            | Counter   | service                       | 成功请求数         |
+| `breaker_failures_total`           | Counter   | service                       | 失败请求数         |
+| `breaker_rejects_total`            | Counter   | service                       | 被熔断拒绝的请求数 |
+| `breaker_state_changes_total`      | Counter   | service, from_state, to_state | 状态变更次数       |
+| `breaker_request_duration_seconds` | Histogram | service                       | 请求耗时           |
 
 ### Prometheus 查询示例
 
@@ -321,19 +323,19 @@ brk, _ := breaker.New(cfg,
 ```yaml
 # Prometheus 告警规则示例
 groups:
-  - name: breaker
-    rules:
-      - alert: CircuitBreakerOpen
-        expr: breaker_state_changes_total{to_state="open"} > 0
-        for: 1m
-        annotations:
-          summary: "熔断器打开: {{ $labels.service }}"
+    - name: breaker
+      rules:
+          - alert: CircuitBreakerOpen
+            expr: breaker_state_changes_total{to_state="open"} > 0
+            for: 1m
+            annotations:
+                summary: "熔断器打开: {{ $labels.service }}"
 
-      - alert: HighRejectRate
-        expr: rate(breaker_rejects_total[5m]) / rate(breaker_requests_total[5m]) > 0.5
-        for: 2m
-        annotations:
-          summary: "熔断拒绝率过高: {{ $labels.service }}"
+          - alert: HighRejectRate
+            expr: rate(breaker_rejects_total[5m]) / rate(breaker_requests_total[5m]) > 0.5
+            for: 2m
+            annotations:
+                summary: "熔断拒绝率过高: {{ $labels.service }}"
 ```
 
 ### 4. 日志记录
@@ -410,6 +412,7 @@ conn, _ := grpc.Dial(
 ### Q: 熔断器和限流器有什么区别？
 
 **A:**
+
 - **限流器（RateLimit）**：控制请求速率，防止过载
 - **熔断器（Breaker）**：检测故障，快速失败，避免级联故障
 
@@ -418,6 +421,7 @@ conn, _ := grpc.Dial(
 ### Q: 如何选择合适的 Timeout 值？
 
 **A:**
+
 - 短 Timeout（5-10s）：快速恢复，但可能频繁切换状态
 - 长 Timeout（30-60s）：稳定性好，但恢复较慢
 - 建议：根据下游服务的恢复时间设置，通常 30s 是一个合理的值
@@ -425,6 +429,7 @@ conn, _ := grpc.Dial(
 ### Q: 为什么我的熔断器没有触发？
 
 **A:** 检查以下几点：
+
 1. 请求数是否达到 `MinimumRequests`
 2. 失败率是否超过 `FailureRatio`
 3. 是否正确注入了拦截器

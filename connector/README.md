@@ -14,8 +14,8 @@
 - **类型安全**：通过泛型接口 `TypedConnector[T]` 提供原生的客户端访问（如 `*redis.Client`, `*gorm.DB`）
 - **资源管理**：严格遵循"谁创建，谁负责释放"的原则，使用 `defer` 自然管理生命周期
 - **可观测性**：
-  - **日志**：集成 `clog`，自动注入连接器命名空间和上下文
-  - **指标**：集成 `metrics`，提供连接状态、重试次数等核心指标
+    - **日志**：集成 `clog`，自动注入连接器命名空间和上下文
+    - **指标**：集成 `metrics`，提供连接状态、重试次数等核心指标
 - **错误处理**：使用 `xerrors` 和 Sentinel Errors，提供一致的错误类型和检查能力
 - **健康检查**：提供主动探测（`HealthCheck`）和状态缓存（`IsHealthy`）
 - **扁平化设计**：接口、配置和实现均在 `connector` 包下，开箱即用
@@ -62,12 +62,12 @@ func main() {
 
 ## 4. 支持的连接器类型
 
-| 类型 | 接口 | 底层客户端 | 工厂函数 |
-| :--- | :--- | :--- | :--- |
-| **Redis** | `RedisConnector` | `*redis.Client` | `NewRedis` |
-| **MySQL** | `MySQLConnector` | `*gorm.DB` | `NewMySQL` |
-| **Etcd** | `EtcdConnector` | `*clientv3.Client` | `NewEtcd` |
-| **NATS** | `NATSConnector` | `*nats.Conn` | `NewNATS` |
+| 类型      | 接口             | 底层客户端         | 工厂函数   |
+| :-------- | :--------------- | :----------------- | :--------- |
+| **Redis** | `RedisConnector` | `*redis.Client`    | `NewRedis` |
+| **MySQL** | `MySQLConnector` | `*gorm.DB`         | `NewMySQL` |
+| **Etcd**  | `EtcdConnector`  | `*clientv3.Client` | `NewEtcd`  |
+| **NATS**  | `NATSConnector`  | `*nats.Conn`       | `NewNATS`  |
 
 ## 5. 资源所有权模型
 
@@ -189,11 +189,11 @@ redisConn, err := connector.NewRedis(&cfg.Redis,
 
 ```json
 {
-  "namespace": "connector",
-  "connector": "redis",
-  "name": "primary",
-  "msg": "connected to redis",
-  "addr": "127.0.0.1:6379"
+    "namespace": "connector",
+    "connector": "redis",
+    "name": "primary",
+    "msg": "connected to redis",
+    "addr": "127.0.0.1:6379"
 }
 ```
 

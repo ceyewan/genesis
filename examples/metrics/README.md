@@ -7,20 +7,20 @@
 这个示例包含：
 
 1. **Metrics 初始化**
-   - 创建 Metrics 配置
-   - 初始化 Meter 实例
-   - 创建自定义指标（Counter、Histogram、Gauge）
+    - 创建 Metrics 配置
+    - 初始化 Meter 实例
+    - 创建自定义指标（Counter、Histogram、Gauge）
 
 2. **HTTP 中间件埋点**
-   - 自动记录所有请求的计数器（method、path、status）
-   - 自动记录请求耗时分布（Histogram）
-   - 实时跟踪活跃请求数（Gauge）
+    - 自动记录所有请求的计数器（method、path、status）
+    - 自动记录请求耗时分布（Histogram）
+    - 实时跟踪活跃请求数（Gauge）
 
 3. **业务路由**
-   - GET `/` - 返回欢迎信息
-   - POST `/orders` - 模拟创建订单
-   - GET `/users/:id` - 获取用户信息
-   - GET `/error` - 模拟错误响应
+    - GET `/` - 返回欢迎信息
+    - POST `/orders` - 模拟创建订单
+    - GET `/users/:id` - 获取用户信息
+    - GET `/error` - 模拟错误响应
 
 ## 快速开始
 
@@ -47,6 +47,7 @@ Prometheus metrics available at http://localhost:9090/metrics
 ```
 
 示例会自动启动：
+
 1. **Gin HTTP 服务器** - 运行在 `:8080`
 2. **客户端模拟器** - 自动每 3 秒发送一批测试请求
 3. **Prometheus 指标导出** - 在 `:9090/metrics`
@@ -248,6 +249,7 @@ docker-compose -f docker-compose.dev.yml up prometheus grafana -d
 ```
 
 Docker 容器启动后：
+
 - **Prometheus** - http://localhost:9090
 - **Grafana** - http://localhost:3000
 
@@ -261,6 +263,7 @@ go run main.go
 ```
 
 应用会在以下端口运行：
+
 - **Gin 服务** - http://localhost:8080
 - **Prometheus 指标** - http://localhost:9090/metrics（应用内置）
 
@@ -269,26 +272,31 @@ go run main.go
 访问 http://localhost:9090，在查询框中输入以下 PromQL 表达式查看指标：
 
 **请求总数**
+
 ```promql
 rate(http_requests_total[1m])
 ```
 
 **活跃请求数**
+
 ```promql
 http_requests_active
 ```
 
 **请求耗时（P95）**
+
 ```promql
 histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[1m]))
 ```
 
 **按状态码分组的请求数**
+
 ```promql
 sum(rate(http_requests_total[1m])) by (status)
 ```
 
 **按路径分组的请求数**
+
 ```promql
 sum(rate(http_requests_total[1m])) by (path)
 ```
@@ -298,16 +306,19 @@ sum(rate(http_requests_total[1m])) by (path)
 #### 🚀 快速方法（一键导入）
 
 **第 1 步：登录 Grafana**
+
 1. 访问 http://localhost:3000
 2. 用户名: `admin` | 密码: `admin`
 
 **第 2 步：导入预配置仪表板**
+
 1. 左侧菜单 → **Dashboards** → 点击 **+ 导入**
 2. 选择 **上传 JSON 文件**
 3. 选择 `examples/metrics/grafana-dashboard.json`
 4. 点击 **导入**
 
 ✅ 完成！已为您自动生成中文仪表板，包含 4 个面板：
+
 - 📈 **请求速率** - 每秒请求数
 - 🔄 **活跃请求数** - 当前处理的请求
 - ⏱️ **请求延迟** - P95 和 P99 延迟
@@ -318,6 +329,7 @@ sum(rate(http_requests_total[1m])) by (path)
 如果需要自己配置，请按以下步骤：
 
 **第 1 步：添加 Prometheus 数据源**
+
 1. 左侧菜单 → **Connections** → **Data sources**
 2. 点击 **Add data source**
 3. 选择 **Prometheus**
@@ -325,6 +337,7 @@ sum(rate(http_requests_total[1m])) by (path)
 5. 点击 **Save & test**
 
 **第 2 步：创建新仪表板**
+
 1. 左侧菜单 → **Dashboards** → **Create** → **New dashboard**
 2. 点击 **Add visualization**
 3. 选择 **Prometheus** 数据源
@@ -351,9 +364,9 @@ sum(rate(http_requests_total[1m])) by (path)
 
 ```yaml
 scrape_configs:
-  - job_name: 'genesis-app'
-    static_configs:
-      - targets: ['host.docker.internal:9091']  # 宿主机上的应用（默认端口 9091）
+    - job_name: "genesis-app"
+      static_configs:
+          - targets: ["host.docker.internal:9091"] # 宿主机上的应用（默认端口 9091）
 ```
 
 > **注意**：metrics 示例使用端口 9090 暴露指标，如需使用根目录的 Prometheus，请修改 main.go 中的 Port 为 9091，或临时修改 config/prometheus.yml。
@@ -366,6 +379,7 @@ docker-compose -f docker-compose.dev.yml down
 ```
 
 移除数据卷：
+
 ```bash
 docker-compose -f docker-compose.dev.yml down -v
 ```
@@ -393,6 +407,7 @@ go run main.go
 **Prometheus 无法连接到应用**
 
 如果在 Prometheus 中看到 "DOWN" 状态，检查：
+
 1. 应用是否正在运行（http://localhost:8080）
 2. Prometheus 指标是否可访问（http://localhost:9090/metrics 或 9091/metrics）
 3. Docker 网络配置（使用 `host.docker.internal` 连接宿主机）

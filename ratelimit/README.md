@@ -187,7 +187,7 @@ pathLimits := map[string]ratelimit.Limit{
     "/api/upload":  {Rate: 2, Burst: 5},     // 上传接口限流最严格
 }
 
-r.Use(ratelimit.GinMiddlewarePerPath(limiter, pathLimits, 
+r.Use(ratelimit.GinMiddlewarePerPath(limiter, pathLimits,
     ratelimit.Limit{Rate: 50, Burst: 100}))
 ```
 
@@ -195,11 +195,11 @@ r.Use(ratelimit.GinMiddlewarePerPath(limiter, pathLimits,
 
 ```go
 // 基于自定义业务逻辑的限流
-r.Use(ratelimit.GinMiddleware(limiter, 
+r.Use(ratelimit.GinMiddleware(limiter,
     func(c *gin.Context) string {
         // 可以组合多个维度
-        return fmt.Sprintf("user:%s:api:%s", 
-            c.GetString("user_id"), 
+        return fmt.Sprintf("user:%s:api:%s",
+            c.GetString("user_id"),
             c.Request.URL.Path)
     },
     func(c *gin.Context) ratelimit.Limit {
@@ -236,7 +236,7 @@ ratelimit.LabelErrorType // "error_type" - 错误类型
 
 ```go
 // 传入 Logger 进行日志记录
-limiter, err := ratelimit.New(cfg, redisConn, 
+limiter, err := ratelimit.New(cfg, redisConn,
     ratelimit.WithLogger(logger))
 ```
 
@@ -271,6 +271,7 @@ func New(cfg *Config, redisConn connector.RedisConnector, opts ...Option) (Limit
 创建限流组件实例（独立模式），这是标准的工厂函数，支持在不依赖容器的情况下独立实例化。
 
 **参数**：
+
 - `cfg`: 限流组件配置
 - `redisConn`: Redis 连接器（仅分布式模式需要，单机模式传 nil）
 - `opts`: 可选参数（Logger, Meter）
@@ -414,14 +415,14 @@ make example-ratelimit
 
 ## 对比表：单机 vs 分布式
 
-| 特性 | 单机 | 分布式 |
-|------|------|--------|
-| **延迟** | 极低（微秒级） | 低（毫秒级） |
-| **内存占用** | 低 | 取决于 Redis |
-| **支持多进程** | ❌ 否 | ✅ 是 |
-| **支持多服务器** | ❌ 否 | ✅ 是 |
-| **依赖外部服务** | ❌ 否 | ✅ Redis |
-| **适用场景** | 单机应用、本地限流 | 分布式系统、集群环境 |
+| 特性             | 单机               | 分布式               |
+| ---------------- | ------------------ | -------------------- |
+| **延迟**         | 极低（微秒级）     | 低（毫秒级）         |
+| **内存占用**     | 低                 | 取决于 Redis         |
+| **支持多进程**   | ❌ 否              | ✅ 是                |
+| **支持多服务器** | ❌ 否              | ✅ 是                |
+| **依赖外部服务** | ❌ 否              | ✅ Redis             |
+| **适用场景**     | 单机应用、本地限流 | 分布式系统、集群环境 |
 
 ## 参考文献
 

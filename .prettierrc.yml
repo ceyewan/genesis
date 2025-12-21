@@ -1,0 +1,9 @@
+# .prettierrc.yaml
+overrides:
+  - files: "*.md"
+    options:
+      parser: markdown
+      # 关键设置：
+      tabWidth: 4 # 一个缩进等于 4 个空格
+      useTabs: false # 禁止使用 Tab 字符，强制转换为空格
+      proseWrap: preserve # (可选) 自动换行，不需要可设为 preserve

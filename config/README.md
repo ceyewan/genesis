@@ -112,6 +112,7 @@ go func() {
 - **格式**：`{PREFIX}_{SECTION}_{KEY}`（全大写）
 
 **示例**：
+
 - YAML: `mysql.host`
 - 环境变量: `GENESIS_MYSQL_HOST`
 
@@ -201,6 +202,7 @@ config/
 ```
 
 **加载逻辑**：
+
 1. 先加载 `config.yaml`
 2. 根据 `GENESIS_ENV` 环境变量加载对应的 `config.{env}.yaml` 进行合并覆盖
 
@@ -252,26 +254,26 @@ type AppConfig struct {
 ```yaml
 # config.yaml
 app:
-  name: "Genesis 应用"
-  version: "1.0.0"
-  debug: false
+    name: "Genesis 应用"
+    version: "1.0.0"
+    debug: false
 
 mysql:
-  host: "localhost"
-  port: 3306
-  username: "root"
-  database: "genesis"
-  charset: "utf8mb4"
+    host: "localhost"
+    port: 3306
+    username: "root"
+    database: "genesis"
+    charset: "utf8mb4"
 
 redis:
-  addr: "localhost:6379"
-  db: 0
+    addr: "localhost:6379"
+    db: 0
 
 clog:
-  level: "info"
-  format: "json"
-  output: "stdout"
-  enable_color: false
+    level: "info"
+    format: "json"
+    output: "stdout"
+    enable_color: false
 ```
 
 ### 环境变量示例

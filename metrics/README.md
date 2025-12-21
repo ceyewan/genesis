@@ -9,9 +9,9 @@
 - **所属层级**：L0 (Base) — 框架基石，为所有组件提供可观测性
 - **核心职责**：提供统一的指标收集、上报和暴露接口
 - **设计原则**：
-  - 基于 OpenTelemetry 标准，确保与云原生生态兼容
-  - 极简接口，屏蔽 OTel SDK 的复杂性
-  - 与 Connector/组件深度集成，自动埋点
+    - 基于 OpenTelemetry 标准，确保与云原生生态兼容
+    - 极简接口，屏蔽 OTel SDK 的复杂性
+    - 与 Connector/组件深度集成，自动埋点
 
 > **注意**：Genesis 当前只提供 Metrics 能力。如需 Tracing（链路追踪），请直接使用 OpenTelemetry SDK。
 
@@ -225,11 +225,11 @@ meter, err := metrics.New(cfg)
 
 ```yaml
 scrape_configs:
-  - job_name: 'genesis-services'
-    static_configs:
-      - targets: ['localhost:9090']
-    scrape_interval: 15s
-    metrics_path: /metrics
+    - job_name: "genesis-services"
+      static_configs:
+          - targets: ["localhost:9090"]
+      scrape_interval: 15s
+      metrics_path: /metrics
 ```
 
 ## 性能考虑

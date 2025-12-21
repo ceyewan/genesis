@@ -5,18 +5,18 @@ run:
 linters:
   disable-all: true
   enable:
-    - errcheck      # 检查未处理的错误
-    - gosimple      # 简化代码建议
-    - govet         # Go 官方静态分析工具
-    - ineffassign   # 检查无效赋值
-    - staticcheck   # 强大的静态分析工具
-    - typecheck     # 类型检查
-    - unused        # 检查未使用的常量、变量、函数和类型
-    - gofmt         # 检查代码格式
-    - goimports     # 检查 import 格式
-    - misspell      # 检查拼写错误
-    - unconvert     # 检查不必要的类型转换
-    - unparam       # 检查未使用的函数参数 (正是你刚才发现的问题)
+    - errcheck # 检查未处理的错误
+    - gosimple # 简化代码建议
+    - govet # Go 官方静态分析工具
+    - ineffassign # 检查无效赋值
+    - staticcheck # 强大的静态分析工具
+    - typecheck # 类型检查
+    - unused # 检查未使用的常量、变量、函数和类型
+    - gofmt # 检查代码格式
+    - goimports # 检查 import 格式
+    - misspell # 检查拼写错误
+    - unconvert # 检查不必要的类型转换
+    - unparam # 检查未使用的函数参数 (正是你刚才发现的问题)
 
 linters-settings:
   gofmt:

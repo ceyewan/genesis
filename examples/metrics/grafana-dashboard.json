@@ -334,11 +334,7 @@
   "refresh": "5s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": [
-    "genesis",
-    "metrics",
-    "中文"
-  ],
+  "tags": ["genesis", "metrics", "中文"],
   "templating": {
     "list": []
   },

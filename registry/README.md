@@ -9,13 +9,13 @@
 - **所属层级**：L3 (Governance) — 流量治理，提供服务注册发现能力
 - **核心职责**：在 Etcd 连接器的基础上提供统一的服务注册与发现语义
 - **设计原则**：
-  - **借用模型**：借用 Etcd 连接器的连接，不负责连接的生命周期
-  - **gRPC 原生支持**：实现 gRPC resolver.Builder 接口，支持 `etcd://<service_name>` 解析
-  - **本地缓存**：服务发现内置本地缓存机制，减少对注册中心的直接请求压力
-  - **实时监听**：通过 Etcd Watch 机制实时感知服务变化
-  - **自动续约**：Lease 机制确保服务可用性，自动处理续租
-  - **优雅下线**：Close() 方法自动撤销租约，停止监听器
-  - **可观测性**：集成 clog 和 metrics，提供完整的日志和指标能力
+    - **借用模型**：借用 Etcd 连接器的连接，不负责连接的生命周期
+    - **gRPC 原生支持**：实现 gRPC resolver.Builder 接口，支持 `etcd://<service_name>` 解析
+    - **本地缓存**：服务发现内置本地缓存机制，减少对注册中心的直接请求压力
+    - **实时监听**：通过 Etcd Watch 机制实时感知服务变化
+    - **自动续约**：Lease 机制确保服务可用性，自动处理续租
+    - **优雅下线**：Close() 方法自动撤销租约，停止监听器
+    - **可观测性**：集成 clog 和 metrics，提供完整的日志和指标能力
 
 ## 目录结构（完全扁平化设计）
 
@@ -277,10 +277,12 @@ reg, err := registry.New(etcdConn, cfg,
 ```
 
 例如：
+
 - `/genesis/services/user-service/uuid-1234-5678`
 - `/genesis/services/order-service/uuid-abcd-efgh`
 
 这种设计便于：
+
 - 使用前缀 Watch 监听特定服务的变化
 - 层次化的命名空间管理
 - 清晰的服务组织结构
@@ -306,6 +308,7 @@ conn, err := grpc.Dial(
 ```
 
 支持的负载均衡策略：
+
 - `round_robin`：轮询（默认）
 - `pick_first`：选择第一个
 - 自定义策略
