@@ -1,4 +1,4 @@
-# AGENT.md
+# AGENTS.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -159,14 +159,14 @@ cache, err := cache.New(redisConn, cfg,
 
 ## 重构进度追踪
 
-当前项目正在从原型架构迁移到四层扁平化架构。详细进度请参考 `docs/refactoring-progress.md`。
+项目已完成四层扁平化架构重构，所有组件均已符合 v0.1.0 发布标准。
 
 **已完成重构的组件**：
 
 - Level 0: clog, config, metrics, xerrors (✅)
 - Level 1: connector, db (✅)
-- Level 2: dlock, cache, idgen, mq, idempotency (✅)
-- Level 3: auth (🔄 进行中)
+- Level 2: dlock, cache, idgen, mq (✅)
+- Level 3: auth, ratelimit, breaker, registry (✅)
 
 ## 文档查阅指南
 

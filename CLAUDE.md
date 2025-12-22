@@ -12,12 +12,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目架构
 
-| 层次                        | 核心组件                                   | 职责                         | 组织方式 |
-| :-------------------------- | :----------------------------------------- | :--------------------------- | :------- |
-| **Level 3: Governance**     | `auth`, `ratelimit`, `breaker`, `registry` | 流量治理，身份认证，切面能力 | 扁平化   |
+| 层次                        | 核心组件                                       | 职责                         | 组织方式 |
+| :-------------------------- | :--------------------------------------------- | :--------------------------- | :------- |
+| **Level 3: Governance**     | `auth`, `ratelimit`, `breaker`, `registry`     | 流量治理，身份认证，切面能力 | 扁平化   |
 | **Level 2: Business**       | `cache`, `idgen`, `dlock`, `idempotency`, `mq` | 业务能力封装                 | 扁平化   |
-| **Level 1: Infrastructure** | `connector`, `db`                          | 连接管理，底层 I/O           | 扁平化   |
-| **Level 0: Base**           | `clog`, `config`, `metrics`, `xerrors`     | 框架基石                     | 扁平化   |
+| **Level 1: Infrastructure** | `connector`, `db`                              | 连接管理，底层 I/O           | 扁平化   |
+| **Level 0: Base**           | `clog`, `config`, `metrics`, `xerrors`         | 框架基石                     | 扁平化   |
 
 **设计原则**：显式优于隐式、简单优于聪明、组合优于继承
 **依赖注入**：使用Go原生构造函数注入，已移除DI容器
