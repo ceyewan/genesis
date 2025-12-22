@@ -9,8 +9,9 @@ app:
   debug: true
 
 redis:
-  addr: "dev-redis.internal:6379"
-  db: 1
+  addr: "localhost:6379"
+  password: "genesis_redis_password"
+  db: 0
 
 clog:
   level: "debug"

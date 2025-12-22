@@ -97,7 +97,8 @@ func main() {
 
 - **[cache](./cache)** - 统一缓存接口，支持 Redis
 - **[dlock](./dlock)** - 分布式锁，支持 Redis/Etcd，内置自动续期
-- **[idgen](./idgen)** - ID 生成器，支持 Snowflake/UUID
+- **[idgen](./idgen)** - ID 生成器，支持 Snowflake/UUID/Sequence
+- **[idempotency](./idempotency)** - 幂等性组件，支持手动调用、Gin、gRPC
 - **[mq](./mq)** - 消息队列组件，支持 NATS
 
 ### Level 3 - 流量治理
@@ -123,7 +124,7 @@ make example-all
 
 ## 🗺️ 版本状态
 
-### v0.1.0 (即将发布)
+### v0.1.0 (已发布)
 
 - **Base (L0):** clog, config, metrics, xerrors
 - **Infrastructure (L1):** connector, db

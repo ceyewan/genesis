@@ -10,6 +10,7 @@ import (
 	"github.com/ceyewan/genesis/xerrors"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 )
 
 type redisConnector struct {
@@ -89,6 +90,9 @@ func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
 		DialTimeout:  cfg.DialTimeout,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
+		MaintNotificationsConfig: &maintnotifications.Config{
+			Mode: maintnotifications.ModeDisabled,
+		},
 	})
 
 	return c, nil

@@ -22,6 +22,7 @@
 - **[dlock-redis](./dlock-redis/)** - 基于 Redis 的分布式锁示例
 - **[dlock-etcd](./dlock-etcd/)** - 基于 Etcd 的分布式锁示例
 - **[idgen](./idgen/)** - ID 生成器示例
+- **[idempotency](./idempotency/)** - 幂等性组件示例
 - **[mq](./mq/)** - 消息队列使用示例
 
 ### Level 3 - 流量治理示例

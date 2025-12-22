@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package idempotency;
+
+option go_package = "github.com/ceyewan/genesis/examples/idempotency/proto;pb";
+
+// OrderService 订单服务定义
+service OrderService {
+  // CreateOrder 创建订单（一元调用）
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+}
+
+// CreateOrderRequest 创建订单请求
+message CreateOrderRequest {
+  string idempotency_key = 1; // 幂等性键
+  string order_id = 2;
+  string customer_id = 3;
+  double amount = 4;
+  string description = 5;
+}
+
+// CreateOrderResponse 创建订单响应
+message CreateOrderResponse {
+  string order_id = 1;
+  string status = 2;
+  double amount = 3;
+  int64 timestamp = 4;
+}
+
