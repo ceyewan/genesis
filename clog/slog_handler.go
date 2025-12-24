@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
 
 // clogHandler 封装了底层的 slog.Handler，并处理 Source 路径裁剪和动态级别调整。
@@ -91,7 +90,7 @@ func newHandler(config *Config, options *options) (slog.Handler, error) {
 			// 统一时间戳格式为 ISO8601
 			if a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
 				// 使用 ISO8601 格式：2006-01-02T15:04:05.000Z
-				a.Value = slog.StringValue(a.Value.Time().Format(time.RFC3339))
+				a.Value = slog.StringValue(a.Value.Time().Format(timeFormat))
 			}
 
 			// 路径裁剪和调用信息处理 - 显示为caller字段
@@ -175,13 +174,18 @@ func (h *clogHandler) Flush() {
 
 // ANSI 颜色常量
 const (
-	ansiReset        = "\033[0m"
-	ansiDim          = "\033[2m"  // 暗淡效果，用于时间戳
-	ansiResetDim     = "\033[22m" // 取消暗淡
-	ansiBrightRed    = "\033[91m" // ERROR/FATAL - 亮红
-	ansiBrightYellow = "\033[93m" // WARN - 亮黄
-	ansiBrightGreen  = "\033[92m" // INFO - 亮绿
-	ansiDimGray      = "\033[90m" // DEBUG - 暗灰
+	ansiReset   = "\033[0m"
+	ansiBold    = "\033[1m"
+	ansiDim     = "\033[2m" // 暗淡效果
+	ansiRed     = "\033[31m"
+	ansiGreen   = "\033[32m"
+	ansiYellow  = "\033[33m"
+	ansiBlue    = "\033[34m"
+	ansiMagenta = "\033[35m"
+	ansiCyan    = "\033[36m" // Key 颜色，清爽
+	ansiWhite   = "\033[37m"
+	ansiGray    = "\033[90m" // 深灰，用于分割线和时间
+	ansiBgRed   = "\033[41m" // 红底色，用于 Fatal
 )
 
 // coloredTextHandler 为 TextHandler 添加彩色支持
@@ -276,59 +280,95 @@ func (h *coloredTextHandler) WithGroup(name string) slog.Handler {
 
 // colorizeOutput 为日志输出添加 ANSI 颜色
 func (h *coloredTextHandler) colorizeOutput(output string, level slog.Level) string {
-	// 示例输出格式: "time=... level=... msg=... key=value ...\n"
-	// 解析 key=value 格式并添加颜色
-
 	output = strings.TrimSpace(output)
 	if output == "" {
 		return output + "\n"
 	}
 
-	levelColor := h.getLevelColor(level)
-
-	var result strings.Builder
 	fields := h.parseKeyValuePairs(output)
+	var sb strings.Builder
 
-	for i, field := range fields {
-		if i > 0 {
-			result.WriteString(" ")
-		}
+	// 临时存储解析出的核心字段
+	var (
+		timeStr   string
+		levelStr  string
+		callerStr string
+		msgStr    string
+		attrs     []string // 剩余的 kv 属性
+	)
 
+	// 第一遍扫描：分离核心字段和业务属性
+	for _, field := range fields {
 		parts := strings.SplitN(field, "=", 2)
 		if len(parts) != 2 {
-			result.WriteString(field)
 			continue
 		}
+		key, val := parts[0], parts[1]
 
-		key := parts[0]
-		value := parts[1]
-
-		// 根据 key 应用颜色和格式
 		switch key {
 		case "time":
-			// 时间戳：暗淡效果，key 和 = 符号都暗淡
-			result.WriteString(fmt.Sprintf("%s%s%s%s%s%s%s", ansiDim, key, ansiReset, ansiDim, "=", ansiReset, value))
-		case "level":
-			// 级别：固定 5 字符宽度，后跟 tab 对齐，key 和 = 符号同色
-			levelStr := value
-			for len(levelStr) < 5 {
-				levelStr += " "
+			// 缩短时间戳，只显示时间部分
+			// 原始: 2025-12-24T15:48:17.340+08:00
+			// 截取: 15:48:17.340
+			if len(val) > 23 {
+				timeStr = val[11:23]
+			} else {
+				timeStr = val
 			}
-			result.WriteString(fmt.Sprintf("%s%s%s%s%s%s%s%s\t", levelColor, key, ansiReset, levelColor, "=", ansiReset, levelStr, ansiReset))
+		case "level":
+			levelStr = val
 		case "caller":
-			// caller：处理 genesis 前缀去掉，key 和 = 符号暗淡
-			value = strings.TrimPrefix(value, "genesis/")
-			result.WriteString(fmt.Sprintf("%s%s%s%s%s%s%s", ansiDim, key, ansiReset, ansiDim, "=", ansiReset, value))
+			callerStr = strings.TrimPrefix(val, "genesis/")
 		case "msg":
-			// 消息：根据日志级别着色，key 和 = 符号同色
-			result.WriteString(fmt.Sprintf("%s%s%s%s%s%s%s", levelColor, key, ansiReset, levelColor, "=", ansiReset, value))
+			msgStr = val
 		default:
-			// 其他字段：key 和 = 符号暗淡，value 正常
-			result.WriteString(fmt.Sprintf("%s%s%s%s%s%s%s", ansiDim, key, ansiReset, ansiDim, "=", ansiReset, value))
+			// 存储业务属性 key=value
+			attrs = append(attrs, field)
 		}
 	}
 
-	return result.String() + "\n"
+	// --- 重新组装日志行 (Layout) ---
+
+	// 1. 时间戳 (深灰色，低调)
+	if timeStr != "" {
+		sb.WriteString(fmt.Sprintf("%s%s%s ", ansiGray, timeStr, ansiReset))
+	}
+
+	// 2. 级别 (带颜色，固定宽度对齐)
+	levelColor := h.getLevelColor(level)
+	paddedLevel := fmt.Sprintf("%-5s", levelStr)
+	sb.WriteString(fmt.Sprintf("%s%s%s%s ", ansiBold, levelColor, paddedLevel, ansiReset))
+
+	// 3. 分隔符 (竖线，增加层次感)
+	sb.WriteString(fmt.Sprintf("%s|%s ", ansiGray, ansiReset))
+
+	// 4. 调用处 (可选：放在消息前)
+	if callerStr != "" {
+		sb.WriteString(fmt.Sprintf("%s%s%s ", ansiGray, callerStr, ansiReset))
+		sb.WriteString(fmt.Sprintf("%s>%s ", ansiCyan, ansiReset)) // 一个小箭头
+	}
+
+	// 5. 消息主体 (最重要！白色高亮)
+	sb.WriteString(fmt.Sprintf("%s%s%s ", ansiWhite, msgStr, ansiReset))
+
+	// 6. 业务属性 (放在最后，Key 青色，Value 默认色)
+	if len(attrs) > 0 {
+		sb.WriteString("\t") // 与消息稍微隔开一点
+		for i, attr := range attrs {
+			if i > 0 {
+				sb.WriteString(" ")
+			}
+			parts := strings.SplitN(attr, "=", 2)
+			k, v := parts[0], parts[1]
+
+			// 格式: Key(青色)=Value(默认)
+			sb.WriteString(fmt.Sprintf("%s%s%s%s=%s%s",
+				ansiCyan, k, ansiReset,
+				ansiGray, ansiReset, v))
+		}
+	}
+
+	return sb.String() + "\n"
 }
 
 // parseKeyValuePairs 解析 "key1=value1 key2=value2 ..." 格式的字符串
@@ -347,7 +387,14 @@ func (h *coloredTextHandler) parseKeyValuePairs(line string) []string {
 			current.WriteByte(char)
 		} else if char == ' ' && !inQuotes {
 			if current.Len() > 0 {
-				pairs = append(pairs, current.String())
+				pair := current.String()
+				// 处理 key==value 格式，替换为 key=value
+				pair = strings.Replace(pair, "==", "=", 1)
+				// 移除 %!(EXTRA 等特殊标记
+				if idx := strings.Index(pair, "%!(EXTRA"); idx != -1 {
+					pair = pair[:idx]
+				}
+				pairs = append(pairs, pair)
 				current.Reset()
 			}
 		} else {
@@ -357,7 +404,12 @@ func (h *coloredTextHandler) parseKeyValuePairs(line string) []string {
 	}
 
 	if current.Len() > 0 {
-		pairs = append(pairs, current.String())
+		pair := current.String()
+		pair = strings.Replace(pair, "==", "=", 1)
+		if idx := strings.Index(pair, "%!(EXTRA"); idx != -1 {
+			pair = pair[:idx]
+		}
+		pairs = append(pairs, pair)
 	}
 
 	return pairs
@@ -367,12 +419,14 @@ func (h *coloredTextHandler) parseKeyValuePairs(line string) []string {
 func (h *coloredTextHandler) getLevelColor(level slog.Level) string {
 	switch {
 	case level <= slog.LevelDebug:
-		return ansiDimGray
+		return ansiMagenta // Debug 用紫色，显眼但不刺眼
 	case level <= slog.LevelInfo:
-		return ansiBrightGreen
+		return ansiGreen // Info 保持绿色，代表正常
 	case level <= slog.LevelWarn:
-		return ansiBrightYellow
+		return ansiYellow // Warn 黄色
+	case level <= slog.LevelError:
+		return ansiBold + ansiRed // Error 使用加粗亮红色
 	default:
-		return ansiBrightRed
+		return ansiBgRed + ansiWhite + ansiBold // Fatal 红底白字
 	}
 }

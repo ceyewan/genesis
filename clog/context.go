@@ -2,11 +2,12 @@ package clog
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 )
 
-// extractContextFields 从 context 中提取配置的字段，并添加到 map 中。
-func extractContextFields(ctx context.Context, options *options, data map[string]any) {
+// extractContextFields 从 context 中提取配置的字段，并追加到 attrs 切片中
+func extractContextFields(ctx context.Context, options *options, attrs *[]slog.Attr) {
 	if ctx == nil || options == nil || len(options.contextFields) == 0 {
 		return
 	}
@@ -41,7 +42,7 @@ func extractContextFields(ctx context.Context, options *options, data map[string
 			if !strings.HasPrefix(fieldName, prefix) {
 				fieldName = prefix + fieldName
 			}
-			data[fieldName] = extractedVal
+			*attrs = append(*attrs, slog.Any(fieldName, extractedVal))
 		}
 	}
 }

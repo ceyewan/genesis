@@ -1,9 +1,12 @@
 package clog
 
-import "strings"
+import (
+	"log/slog"
+	"strings"
+)
 
-// NamespaceKey 是日志中命名空间的字段名，用于标识服务模块
-const NamespaceKey = "namespace"
+// namespaceKey 是日志中命名空间的字段名，用于标识服务模块（内部使用）
+const namespaceKey = "namespace"
 
 // getNamespaceString 根据 options 中的 parts 和 joiner 生成完整的命名空间字符串。
 func getNamespaceString(options *options) string {
@@ -13,10 +16,10 @@ func getNamespaceString(options *options) string {
 	return strings.Join(options.namespaceParts, options.namespaceJoiner)
 }
 
-// addNamespaceFields 将命名空间字段添加到 map 中。
-func addNamespaceFields(options *options, data map[string]any) {
+// addNamespaceFields 将命名空间字段追加到 attrs 切片中。
+func addNamespaceFields(options *options, attrs *[]slog.Attr) {
 	ns := getNamespaceString(options)
 	if ns != "" {
-		data[NamespaceKey] = ns
+		*attrs = append(*attrs, slog.String(namespaceKey, ns))
 	}
 }
