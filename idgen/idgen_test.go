@@ -2,6 +2,7 @@ package idgen
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"testing"
@@ -76,72 +77,13 @@ func setupRedisConn(t *testing.T) connector.RedisConnector {
 	return redisConn
 }
 
-func TestNewUUID(t *testing.T) {
-	logger := setupLogger(t)
+// ========================================
+// UUID 测试
+// ========================================
 
-	tests := []struct {
-		name        string
-		cfg         *UUIDConfig
-		opts        []Option
-		expectError bool
-	}{
-		{
-			name:        "nil config",
-			cfg:         nil,
-			expectError: true,
-		},
-		{
-			name: "valid config v4 without logger",
-			cfg: &UUIDConfig{
-				Version: "v4",
-			},
-			expectError: false,
-		},
-		{
-			name: "valid config v7 with logger",
-			cfg: &UUIDConfig{
-				Version: "v7",
-			},
-			opts:        []Option{WithLogger(logger)},
-			expectError: false,
-		},
-		{
-			name: "invalid version",
-			cfg: &UUIDConfig{
-				Version: "v99",
-			},
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gen, err := NewUUID(tt.cfg, tt.opts...)
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error but got none")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
-				return
-			}
-			if gen == nil {
-				t.Error("Expected generator but got nil")
-			}
-		})
-	}
-}
-
-func TestUUID_Next(t *testing.T) {
-	gen, err := NewUUID(&UUIDConfig{Version: "v4"})
-	if err != nil {
-		t.Fatalf("Failed to create UUID generator: %v", err)
-	}
-
+func TestNewUUIDV4(t *testing.T) {
 	t.Run("Generate v4 UUID", func(t *testing.T) {
-		uuid := gen.Next()
+		uuid := NewUUIDV4()
 		if uuid == "" {
 			t.Error("Expected non-empty UUID")
 		}
@@ -150,24 +92,11 @@ func TestUUID_Next(t *testing.T) {
 			t.Errorf("Expected UUID length 36, got %d", len(uuid))
 		}
 	})
-
-	t.Run("Generate unique UUIDs", func(t *testing.T) {
-		uuid1 := gen.Next()
-		uuid2 := gen.Next()
-		if uuid1 == uuid2 {
-			t.Error("Expected different UUIDs")
-		}
-	})
 }
 
-func TestUUID_V7(t *testing.T) {
-	gen, err := NewUUID(&UUIDConfig{Version: "v7"})
-	if err != nil {
-		t.Fatalf("Failed to create UUID v7 generator: %v", err)
-	}
-
+func TestNewUUIDV7(t *testing.T) {
 	t.Run("Generate v7 UUID", func(t *testing.T) {
-		uuid := gen.Next()
+		uuid := NewUUIDV7()
 		if uuid == "" {
 			t.Error("Expected non-empty UUID")
 		}
@@ -177,67 +106,101 @@ func TestUUID_V7(t *testing.T) {
 	})
 }
 
-func TestNewSnowflake_Redis(t *testing.T) {
-	redis := setupRedisConn(t)
-	if redis == nil {
-		t.Skip("Redis not available")
-	}
+func TestNewUUID(t *testing.T) {
+	t.Run("Default v7", func(t *testing.T) {
+		gen := NewUUID()
+		uuid := gen.Next()
+		if uuid == "" {
+			t.Error("Expected non-empty UUID")
+		}
+	})
 
-	logger := setupLogger(t)
+	t.Run("With v4 option", func(t *testing.T) {
+		gen := NewUUID(WithUUIDVersion("v4"))
+		uuid := gen.Next()
+		if uuid == "" {
+			t.Error("Expected non-empty UUID")
+		}
+	})
 
+	t.Run("Generate unique UUIDs", func(t *testing.T) {
+		gen := NewUUID()
+		uuid1 := gen.Next()
+		uuid2 := gen.Next()
+		if uuid1 == uuid2 {
+			t.Error("Expected different UUIDs")
+		}
+	})
+}
+
+func TestNextUUID(t *testing.T) {
+	t.Run("Static method generates UUID", func(t *testing.T) {
+		uuid := NextUUID()
+		if uuid == "" {
+			t.Error("Expected non-empty UUID")
+		}
+		if len(uuid) != 36 {
+			t.Errorf("Expected UUID length 36, got %d", len(uuid))
+		}
+	})
+
+	t.Run("Static method generates unique UUIDs", func(t *testing.T) {
+		uuid1 := NextUUID()
+		time.Sleep(5 * time.Millisecond) // v7 有时间排序，需要一点延迟
+		uuid2 := NextUUID()
+		if uuid1 == uuid2 {
+			t.Error("Expected different UUIDs")
+		}
+	})
+}
+
+// ========================================
+// Snowflake 测试
+// ========================================
+
+func TestNewSnowflake(t *testing.T) {
 	tests := []struct {
 		name        string
-		cfg         *SnowflakeConfig
-		redis       connector.RedisConnector
-		etcd        connector.EtcdConnector
-		opts        []Option
+		workerID    int64
+		opts        []SnowflakeOption
 		expectError bool
 	}{
 		{
-			name:        "nil config",
-			cfg:         nil,
-			redis:       redis,
-			expectError: true,
-		},
-		{
-			name: "valid config with static method",
-			cfg: &SnowflakeConfig{
-				Method:   "static",
-				WorkerID: 1,
-			},
+			name:        "valid workerID",
+			workerID:    1,
 			expectError: false,
 		},
 		{
-			name: "valid config with redis method and logger",
-			cfg: &SnowflakeConfig{
-				Method:       "redis",
-				DatacenterID: 1,
-				TTL:          30,
-			},
-			redis:       redis,
-			opts:        []Option{WithLogger(logger)},
+			name:        "workerID zero",
+			workerID:    0,
 			expectError: false,
 		},
 		{
-			name: "invalid method",
-			cfg: &SnowflakeConfig{
-				Method: "invalid",
-			},
+			name:        "workerID max",
+			workerID:    1023,
+			expectError: false,
+		},
+		{
+			name:        "with datacenterID",
+			workerID:    30, // Must be <= 31 when using DatacenterID
+			opts:        []SnowflakeOption{WithDatacenterID(1)},
+			expectError: false,
+		},
+		{
+			name:        "negative workerID",
+			workerID:    -1,
 			expectError: true,
 		},
 		{
-			name: "redis method without connector",
-			cfg: &SnowflakeConfig{
-				Method: "redis",
-			},
-			redis:       nil,
+			name:        "workerID too large",
+			workerID:    1024,
 			expectError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gen, err := NewSnowflake(tt.cfg, tt.redis, tt.etcd, tt.opts...)
+			sf, err := NewSnowflake(tt.workerID, tt.opts...)
 			if tt.expectError {
 				if err == nil {
 					t.Error("Expected error but got none")
@@ -248,7 +211,7 @@ func TestNewSnowflake_Redis(t *testing.T) {
 				t.Errorf("Unexpected error: %v", err)
 				return
 			}
-			if gen == nil {
+			if sf == nil {
 				t.Error("Expected generator but got nil")
 			}
 		})
@@ -256,24 +219,14 @@ func TestNewSnowflake_Redis(t *testing.T) {
 }
 
 func TestSnowflake_NextInt64(t *testing.T) {
-	redis := setupRedisConn(t)
-	if redis == nil {
-		t.Skip("Redis not available")
-	}
-
-	gen, err := NewSnowflake(&SnowflakeConfig{
-		Method:   "static",
-		WorkerID: 1,
-	}, nil, nil)
+	sf, err := NewSnowflake(1)
 	if err != nil {
-		t.Fatalf("Failed to create Snowflake generator: %v", err)
+		t.Fatalf("Failed to create Snowflake: %v", err)
 	}
 
 	t.Run("Generate Snowflake ID", func(t *testing.T) {
-		id, err := gen.NextInt64()
-		if err != nil {
-			t.Errorf("Failed to generate ID: %v", err)
-		}
+		id := sf.Next()
+
 		if id == 0 {
 			t.Error("Expected non-zero ID")
 		}
@@ -283,15 +236,9 @@ func TestSnowflake_NextInt64(t *testing.T) {
 	})
 
 	t.Run("Generate unique IDs", func(t *testing.T) {
-		id1, err := gen.NextInt64()
-		if err != nil {
-			t.Fatalf("Failed to generate first ID: %v", err)
-		}
+		id1 := sf.Next()
 
-		id2, err := gen.NextInt64()
-		if err != nil {
-			t.Fatalf("Failed to generate second ID: %v", err)
-		}
+		id2 := sf.Next()
 
 		if id1 == id2 {
 			t.Error("Expected different IDs")
@@ -302,7 +249,7 @@ func TestSnowflake_NextInt64(t *testing.T) {
 	})
 
 	t.Run("Next method returns string", func(t *testing.T) {
-		idStr := gen.Next()
+		idStr := fmt.Sprint(sf.Next())
 		if idStr == "" {
 			t.Error("Expected non-empty string")
 		}
@@ -312,6 +259,130 @@ func TestSnowflake_NextInt64(t *testing.T) {
 		}
 	})
 }
+
+func TestSetupAndNext(t *testing.T) {
+	t.Run("Setup and use global Next", func(t *testing.T) {
+		err := Setup(100)
+		if err != nil {
+			t.Fatalf("Failed to setup: %v", err)
+		}
+
+		id := Next()
+		if id == 0 {
+			t.Error("Expected non-zero ID")
+		}
+
+		id2 := Next()
+		if id2 <= id {
+			t.Error("Expected increasing IDs")
+		}
+	})
+
+	t.Run("Setup with datacenterID", func(t *testing.T) {
+		err := Setup(30, WithDatacenterID(1)) // Must be <= 31 when using DatacenterID
+		if err != nil {
+			t.Fatalf("Failed to setup with datacenterID: %v", err)
+		}
+
+		id := Next()
+		if id == 0 {
+			t.Error("Expected non-zero ID")
+		}
+	})
+}
+
+func TestNextString(t *testing.T) {
+	Setup(1)
+
+	t.Run("NextString returns string", func(t *testing.T) {
+		idStr := fmt.Sprint(Next())
+		if idStr == "" {
+			t.Error("Expected non-empty string")
+		}
+		// Should be parseable as int64
+		if _, err := strconv.ParseInt(idStr, 10, 64); err != nil {
+			t.Errorf("Failed to parse ID as int64: %v", err)
+		}
+	})
+}
+
+// ========================================
+// AssignInstanceID 测试
+// ========================================
+
+func TestAssignInstanceID(t *testing.T) {
+	redis := setupRedisConn(t)
+	if redis == nil {
+		t.Skip("Redis not available")
+	}
+
+	t.Run("Assign instance ID successfully", func(t *testing.T) {
+		ctx := context.Background()
+		instanceID, stop, _, err := AssignInstanceID(ctx, redis, "test:worker", 100)
+		if err != nil {
+			t.Fatalf("Failed to assign instance ID: %v", err)
+		}
+		defer stop()
+
+		if instanceID < 0 || instanceID >= 100 {
+			t.Errorf("Expected instanceID in [0, 100), got %d", instanceID)
+		}
+	})
+
+	t.Run("Multiple assignments get unique IDs", func(t *testing.T) {
+		ctx := context.Background()
+		id1, stop1, _, err := AssignInstanceID(ctx, redis, "test:unique", 50)
+		if err != nil {
+			t.Fatalf("Failed to assign first ID: %v", err)
+		}
+		defer stop1()
+
+		id2, stop2, _, err := AssignInstanceID(ctx, redis, "test:unique", 50)
+		if err != nil {
+			t.Fatalf("Failed to assign second ID: %v", err)
+		}
+		defer stop2()
+
+		if id1 == id2 {
+			t.Errorf("Expected unique IDs, got both %d", id1)
+		}
+	})
+
+	t.Run("Exhaust all IDs", func(t *testing.T) {
+		ctx := context.Background()
+		key := "test:exhaust"
+		maxID := 5
+
+		// 分配所有 ID
+		stops := make([]func(), 0, maxID)
+		for i := 0; i < maxID; i++ {
+			_, stop, _, err := AssignInstanceID(ctx, redis, key, maxID)
+			if err != nil {
+				t.Fatalf("Failed to assign ID %d: %v", i, err)
+			}
+			stops = append(stops, stop)
+		}
+
+		// 清理
+		for _, stop := range stops {
+			stop()
+		}
+
+		// 等待 Redis 释放
+		time.Sleep(100 * time.Millisecond)
+
+		// 再次分配应该成功
+		_, stop, _, err := AssignInstanceID(ctx, redis, key, maxID)
+		if err != nil {
+			t.Errorf("Expected to assign ID after cleanup, got error: %v", err)
+		}
+		defer stop()
+	})
+}
+
+// ========================================
+// Sequence 测试
+// ========================================
 
 func TestNewSequencer(t *testing.T) {
 	redis := setupRedisConn(t)
@@ -441,9 +512,9 @@ func TestSequencer_Next(t *testing.T) {
 			t.Error("Expected user:100 sequence to increment")
 		}
 
-		// seq2 should be equal to 1 or 2 based on timing, not affected by user:100
-		if seq2 == seq1Next {
-			t.Logf("Sequences happen to match: both at %d", seq1Next)
+		// seq2 is independent of seq1, just verify it's positive
+		if seq2 < 1 {
+			t.Error("Expected positive sequence")
 		}
 	})
 }
@@ -484,14 +555,16 @@ func TestSequencer_NextBatch(t *testing.T) {
 
 	t.Run("Batch with step", func(t *testing.T) {
 		gen2, err := NewSequencer(&SequenceConfig{
-			KeyPrefix: "test:step:",
+			KeyPrefix: "test:step2:",
 			Step:      5,
 		}, redis)
 		if err != nil {
 			t.Fatalf("Failed to create sequencer with step: %v", err)
 		}
 
-		seqs, err := gen2.NextBatch(ctx, "step:1", 3)
+		// 使用新键避免状态累积
+		key := fmt.Sprintf("step:new:%d", time.Now().UnixNano())
+		seqs, err := gen2.NextBatch(ctx, key, 3)
 		if err != nil {
 			t.Errorf("Failed to generate batch: %v", err)
 		}
@@ -508,6 +581,57 @@ func TestSequencer_NextBatch(t *testing.T) {
 		}
 		if seqs[2] != 15 {
 			t.Errorf("Expected third sequence 15, got %d", seqs[2])
+		}
+	})
+}
+
+func TestNextSequence(t *testing.T) {
+	redis := setupRedisConn(t)
+	if redis == nil {
+		t.Skip("Redis not available")
+	}
+
+	ctx := context.Background()
+
+	t.Run("Generate simple sequence", func(t *testing.T) {
+		seq1, err := NextSequence(ctx, redis, "test:static:1")
+		if err != nil {
+			t.Errorf("Failed to generate sequence: %v", err)
+		}
+		if seq1 <= 0 {
+			t.Error("Expected positive sequence number")
+		}
+
+		seq2, err := NextSequence(ctx, redis, "test:static:1")
+		if err != nil {
+			t.Errorf("Failed to generate sequence: %v", err)
+		}
+		if seq2 != seq1+1 {
+			t.Errorf("Expected %d, got %d", seq1+1, seq2)
+		}
+	})
+
+	t.Run("Different keys are independent", func(t *testing.T) {
+		// 使用新键避免之前测试的影响
+		keyA := fmt.Sprintf("test:unique:a:%d", time.Now().UnixNano())
+		keyB := fmt.Sprintf("test:unique:b:%d", time.Now().UnixNano())
+
+		seq1, err := NextSequence(ctx, redis, keyA)
+		if err != nil {
+			t.Errorf("Failed to generate sequence: %v", err)
+		}
+
+		seq2, err := NextSequence(ctx, redis, keyB)
+		if err != nil {
+			t.Errorf("Failed to generate sequence: %v", err)
+		}
+
+		// Should both start from 1
+		if seq1 != 1 {
+			t.Errorf("Expected first key to start at 1, got %d", seq1)
+		}
+		if seq2 != 1 {
+			t.Errorf("Expected second key to start at 1, got %d", seq2)
 		}
 	})
 }

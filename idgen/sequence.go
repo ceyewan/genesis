@@ -3,7 +3,6 @@ package idgen
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
@@ -38,7 +37,7 @@ type redisSequencer struct {
 //	seq, _ := gen.Next(ctx, "bob")    // Bob 的消息序号
 func NewSequencer(cfg *SequenceConfig, redis connector.RedisConnector, opts ...Option) (Sequencer, error) {
 	if cfg == nil {
-		return nil, xerrors.WithCode(ErrConfigNil, "sequence_config_nil")
+		return nil, xerrors.WithCode(ErrInvalidInput, "sequence_config_nil")
 	}
 	if redis == nil {
 		return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_nil")
@@ -81,66 +80,61 @@ func (r *redisSequencer) Next(ctx context.Context, key string) (int64, error) {
 	redisKey := r.buildKey(key)
 	client := r.redis.GetClient()
 
-	// 使用 Redis INCRBY 命令生成序列号
-	result, err := client.IncrBy(ctx, redisKey, r.cfg.Step).Result()
+	// Lua 脚本：原子执行 IncrBy + MaxValue Check + Reset + Expire
+	script := `
+		local key = KEYS[1]
+		local step = tonumber(ARGV[1])
+		local max = tonumber(ARGV[2])
+		local ttl = tonumber(ARGV[3])
+
+		local v = redis.call("INCRBY", key, step)
+		local current = tonumber(v)
+
+		if max > 0 and current > max then
+			-- 超过最大值，重置为步长
+			redis.call("SET", key, step)
+			current = step
+		end
+
+		if ttl > 0 then
+			redis.call("EXPIRE", key, ttl)
+		end
+
+		return current
+	`
+
+	// TTL 单位为秒
+	ttlSec := int(r.cfg.TTL / 1e9) // 纳秒转秒
+	if r.cfg.TTL > 0 && ttlSec == 0 {
+		ttlSec = 1 // 至少 1 秒
+	}
+
+	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, r.cfg.MaxValue, ttlSec).Result()
 	if err != nil {
 		if r.logger != nil {
-			r.logger.Error("failed to increment sequence",
+			r.logger.Error("failed to generate sequence",
 				clog.Error(err),
 				clog.String("redis_key", redisKey),
 				clog.String("key", key),
-				clog.Int64("step", r.cfg.Step),
 			)
 		}
-		return 0, xerrors.Wrap(err, "redis incrby failed")
+		return 0, xerrors.Wrap(err, "redis_eval_failed")
 	}
 
-	// 检查是否需要循环
-	if r.cfg.MaxValue > 0 && result > r.cfg.MaxValue {
-		// 重置为步长
-		resetValue := r.cfg.Step
-		if resetValue > r.cfg.MaxValue {
-			resetValue = r.cfg.Step
-		}
-		_, err := client.Set(ctx, redisKey, resetValue, 0).Result()
-		if err != nil {
-			if r.logger != nil {
-				r.logger.Error("failed to reset sequence",
-					clog.Error(err),
-					clog.String("redis_key", redisKey),
-					clog.String("key", key),
-				)
-			}
-			return 0, xerrors.Wrap(err, "redis reset failed")
-		}
-		result = resetValue
-	}
-
-	// 设置 TTL
-	if r.cfg.TTL > 0 {
-		ttl := time.Duration(r.cfg.TTL)
-		_, err = client.Expire(ctx, redisKey, ttl).Result()
-		if err != nil {
-			if r.logger != nil {
-				r.logger.Warn("failed to set ttl",
-					clog.Error(err),
-					clog.String("redis_key", redisKey),
-					clog.String("key", key),
-					clog.Duration("ttl", ttl),
-				)
-			}
-		}
+	seq, ok := result.(int64)
+	if !ok {
+		return 0, xerrors.New("unexpected result type from redis")
 	}
 
 	if r.logger != nil {
 		r.logger.Debug("generated sequence number",
 			clog.String("redis_key", redisKey),
 			clog.String("key", key),
-			clog.Int64("seq", result),
+			clog.Int64("seq", seq),
 		)
 	}
 
-	return result, nil
+	return seq, nil
 }
 
 // NextBatch 批量生成序列号
@@ -152,73 +146,59 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 	redisKey := r.buildKey(key)
 	client := r.redis.GetClient()
 
-	// 计算总增量
-	totalIncrement := int64(count) * r.cfg.Step
+	// Lua 脚本：原子执行 Batch IncrBy + MaxValue Check + Reset + Expire
+	script := `
+		local key = KEYS[1]
+		local step = tonumber(ARGV[1])
+		local count = tonumber(ARGV[2])
+		local max = tonumber(ARGV[3])
+		local ttl = tonumber(ARGV[4])
 
-	// 使用 Redis INCRBY 命令批量增加序列号
-	endSeq, err := client.IncrBy(ctx, redisKey, totalIncrement).Result()
+		local total_inc = step * count
+		local v = redis.call("INCRBY", key, total_inc)
+		local end_seq = tonumber(v)
+
+		if max > 0 and end_seq > max then
+			-- 超过最大值，重置为 total_inc (相当于从 0 开始重新计数)
+			redis.call("SET", key, total_inc)
+			end_seq = total_inc
+		end
+
+		if ttl > 0 then
+			redis.call("EXPIRE", key, ttl)
+		end
+
+		return end_seq
+	`
+
+	// TTL 单位为秒
+	ttlSec := int(r.cfg.TTL / 1e9)
+	if r.cfg.TTL > 0 && ttlSec == 0 {
+		ttlSec = 1
+	}
+
+	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, count, r.cfg.MaxValue, ttlSec).Result()
 	if err != nil {
 		if r.logger != nil {
-			r.logger.Error("failed to batch increment sequence",
+			r.logger.Error("failed to batch generate sequence",
 				clog.Error(err),
 				clog.String("redis_key", redisKey),
 				clog.String("key", key),
-				clog.Int("count", count),
-				clog.Int64("total_increment", totalIncrement),
 			)
 		}
-		return nil, xerrors.Wrap(err, "redis incrby failed")
+		return nil, xerrors.Wrap(err, "redis_eval_failed")
+	}
+
+	endSeq, ok := result.(int64)
+	if !ok {
+		return nil, xerrors.New("unexpected result type from redis")
 	}
 
 	// 生成序列号数组
 	seqs := make([]int64, count)
 	for i := 0; i < count; i++ {
-		seq := endSeq - int64(count-i-1)*r.cfg.Step
-
-		// 检查最大值限制
-		if r.cfg.MaxValue > 0 && seq > r.cfg.MaxValue {
-			// 如果超出最大值，重置并重新开始
-			resetValue := int64(count) * r.cfg.Step
-			if resetValue > r.cfg.MaxValue {
-				resetValue = r.cfg.Step
-			}
-			_, err := client.Set(ctx, redisKey, resetValue, 0).Result()
-			if err != nil {
-				if r.logger != nil {
-					r.logger.Error("failed to reset sequence in batch",
-						clog.Error(err),
-						clog.String("redis_key", redisKey),
-						clog.String("key", key),
-					)
-				}
-				return nil, xerrors.Wrap(err, "redis reset failed")
-			}
-			for j := 0; j < count; j++ {
-				seqs[j] = int64(j+1) * r.cfg.Step
-				if seqs[j] > r.cfg.MaxValue {
-					seqs[j] = r.cfg.Step
-				}
-			}
-			break
-		}
-
-		seqs[i] = seq
-	}
-
-	// 设置 TTL
-	if r.cfg.TTL > 0 {
-		ttl := time.Duration(r.cfg.TTL)
-		_, err = client.Expire(ctx, redisKey, ttl).Result()
-		if err != nil {
-			if r.logger != nil {
-				r.logger.Warn("failed to set ttl for batch",
-					clog.Error(err),
-					clog.String("redis_key", redisKey),
-					clog.String("key", key),
-					clog.Duration("ttl", ttl),
-				)
-			}
-		}
+		// 倒推每个序列号
+		seqs[i] = endSeq - int64(count-i-1)*r.cfg.Step
 	}
 
 	if r.logger != nil {
