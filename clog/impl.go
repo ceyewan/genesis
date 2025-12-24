@@ -89,25 +89,12 @@ func (l *loggerImpl) WithNamespace(parts ...string) Logger {
 }
 
 func (l *loggerImpl) With(fields ...Field) Logger {
-	// 创建map并应用所有字段
-	data := make(map[string]any)
-
-	for _, field := range fields {
-		field(data)
-	}
-
-	// 转换为slog.Attr
-	attrs := make([]slog.Attr, 0, len(data))
-	for k, v := range data {
-		attrs = append(attrs, slog.Any(k, v))
-	}
-
-	// 创建新的logger实例
+	// 直接将 slog.Attr 字段追加到 baseAttrs
 	newLogger := &loggerImpl{
 		handler:   l.handler,
 		config:    l.config,
 		options:   l.options,
-		baseAttrs: append(l.baseAttrs, attrs...),
+		baseAttrs: append(l.baseAttrs, fields...),
 	}
 
 	return newLogger
@@ -115,20 +102,14 @@ func (l *loggerImpl) With(fields ...Field) Logger {
 
 // 内部方法
 func (l *loggerImpl) log(ctx context.Context, level Level, msg string, fields ...Field) {
-	data := make(map[string]any)
-
-	// 应用所有字段
-	for _, field := range fields {
-		field(data)
-	}
+	// 准备属性切片：baseAttrs + fields + contextFields + namespaceFields
+	attrs := make([]slog.Attr, 0, len(l.baseAttrs)+len(fields)+4)
+	attrs = append(attrs, l.baseAttrs...)
+	attrs = append(attrs, fields...)
 
 	// 提取Context字段、处理命名空间等
-	extractContextFields(ctx, l.options, data)
-	addNamespaceFields(l.options, data) // 只在log方法中添加一次
-
-	// 转换为slog并记录
-	attrs := l.convertToAttrs(data)
-	attrs = append(l.baseAttrs, attrs...)
+	extractContextFields(ctx, l.options, &attrs)
+	addNamespaceFields(l.options, &attrs) // 只在log方法中添加一次
 
 	// 将 Level 映射为 slog.Level，避免直接按数字转换导致不一致
 	var slogLevel slog.Level
@@ -189,13 +170,4 @@ func (l *loggerImpl) Flush() {
 func (l *loggerImpl) setupBaseAttrs() {
 	// 创建空的 baseAttrs
 	l.baseAttrs = []slog.Attr{}
-}
-
-// convertToAttrs 将 map[string]any 中的数据转换为 slog.Attr 数组
-func (l *loggerImpl) convertToAttrs(data map[string]any) []slog.Attr {
-	attrs := make([]slog.Attr, 0, len(data))
-	for k, v := range data {
-		attrs = append(attrs, slog.Any(k, v))
-	}
-	return attrs
 }

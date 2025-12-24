@@ -185,14 +185,12 @@ func TestLoggerFields(t *testing.T) {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
 
-	// 验证字段
+	// 验证扁平字段
 	tests := map[string]interface{}{
 		"string_field": "test_value",
 		"int_field":    float64(42), // JSON 数字都是 float64
 		"float_field":  3.14,
 		"bool_field":   true,
-		"err_msg":      "test error",
-		"err_type":     "*errors.errorString",
 	}
 
 	for key, expected := range tests {
@@ -210,6 +208,21 @@ func TestLoggerFields(t *testing.T) {
 		t.Errorf("time_field is not string: %T", timeField)
 	} else if _, err := time.Parse(time.RFC3339Nano, timeStr); err != nil {
 		t.Errorf("time_field is not valid RFC3339Nano format: %v", err)
+	}
+
+	// ErrorWithStack 现在使用 Group 产生嵌套结构：error={msg="...", type="...", stack="..."}
+	errorGroup, ok := logEntry["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected error field to be a group, got %T", logEntry["error"])
+	}
+	if errorGroup["msg"] != "test error" {
+		t.Errorf("error.msg = %v, want test error", errorGroup["msg"])
+	}
+	if errorGroup["type"] != "*errors.errorString" {
+		t.Errorf("error.type = %v, want *errors.errorString", errorGroup["type"])
+	}
+	if _, ok := errorGroup["stack"]; !ok {
+		t.Error("Missing stack field in error group")
 	}
 }
 
@@ -432,26 +445,40 @@ func TestLevelString(t *testing.T) {
 
 // TestFieldFunctions 测试字段构造函数
 func TestFieldFunctions(t *testing.T) {
-	m := make(map[string]any)
+	var buf bytes.Buffer
+	logger, _ := New(&Config{
+		Level:  "debug",
+		Format: "json",
+		Output: "buffer",
+	}, withBuffer(&buf))
 
-	// 测试所有字段构造函数
-	String("key1", "value1")(m)
-	Int("key2", 42)(m)
-	Float64("key3", 3.14)(m)
-	Bool("key4", true)(m)
-	Time("key5", time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC))(m)
-	Any("key6", map[string]string{"nested": "value"})(m)
+	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	logger.Info("test fields",
+		String("key1", "value1"),
+		Int("key2", 42),
+		Float64("key3", 3.14),
+		Bool("key4", true),
+		Time("key5", testTime),
+		Any("key6", map[string]string{"nested": "value"}),
+	)
+
+	output := buf.String()
+	var logEntry map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
+		t.Fatalf("Failed to parse log entry: %v", err)
+	}
 
 	// 验证字段
 	tests := map[string]interface{}{
 		"key1": "value1",
-		"key2": 42,
+		"key2": float64(42), // JSON 数字都是 float64
 		"key3": 3.14,
 		"key4": true,
 	}
 
 	for key, expected := range tests {
-		if value, ok := m[key]; !ok {
+		if value, ok := logEntry[key]; !ok {
 			t.Errorf("Missing field: %s", key)
 		} else if value != expected {
 			t.Errorf("Field %s = %v, want %v", key, value, expected)
@@ -459,17 +486,17 @@ func TestFieldFunctions(t *testing.T) {
 	}
 
 	// 验证时间字段
-	if timeField, ok := m["key5"]; !ok {
+	if timeField, ok := logEntry["key5"]; !ok {
 		t.Error("Missing time field")
 	} else if _, ok := timeField.(string); !ok {
 		t.Errorf("Time field is not string: %T", timeField)
 	}
 
 	// 验证 Any 字段
-	if anyField, ok := m["key6"]; !ok {
+	if anyField, ok := logEntry["key6"]; !ok {
 		t.Error("Missing any field")
-	} else if nested, ok := anyField.(map[string]string); !ok {
-		t.Errorf("Any field is not map[string]string: %T", anyField)
+	} else if nested, ok := anyField.(map[string]interface{}); !ok {
+		t.Errorf("Any field is not map[string]interface{}: %T", anyField)
 	} else if nested["nested"] != "value" {
 		t.Errorf("Nested value = %v, want value", nested["nested"])
 	}
@@ -477,102 +504,195 @@ func TestFieldFunctions(t *testing.T) {
 
 // TestErrorField 测试轻量级错误字段
 func TestErrorField(t *testing.T) {
-	m := make(map[string]any)
-	err := errors.New("test error")
+	var buf bytes.Buffer
+	logger, _ := New(&Config{
+		Level:  "debug",
+		Format: "json",
+		Output: "buffer",
+	}, withBuffer(&buf))
 
-	Error(err)(m)
+	err := errors.New("test error")
+	logger.Error("test error message", Error(err))
+
+	output := buf.String()
+	var logEntry map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
+		t.Fatalf("Failed to parse log entry: %v", err)
+	}
 
 	// 验证错误字段 - 只应该包含 err_msg
-	if m["err_msg"] != "test error" {
-		t.Errorf("err_msg = %v, want test error", m["err_msg"])
+	if logEntry["err_msg"] != "test error" {
+		t.Errorf("err_msg = %v, want test error", logEntry["err_msg"])
 	}
 	// 确保不包含其他字段
-	if _, ok := m["err_type"]; ok {
+	if _, ok := logEntry["err_type"]; ok {
 		t.Error("Error() should not include err_type field")
 	}
-	if _, ok := m["err_stack"]; ok {
+	if _, ok := logEntry["err_stack"]; ok {
 		t.Error("Error() should not include err_stack field")
+	}
+	if _, ok := logEntry["error"]; ok {
+		t.Error("Error() should not include error group field")
 	}
 }
 
 // TestErrorWithCodeField 测试带错误码的错误字段
 func TestErrorWithCodeField(t *testing.T) {
-	m := make(map[string]any)
+	var buf bytes.Buffer
+	logger, _ := New(&Config{
+		Level:  "debug",
+		Format: "json",
+		Output: "buffer",
+	}, withBuffer(&buf))
+
 	err := errors.New("test error")
+	logger.Error("test error with code", ErrorWithCode(err, "ERR_001"))
 
-	ErrorWithCode(err, "ERR_001")(m)
-
-	// 验证错误字段 - 应该包含 err_msg 和 err_code
-	if m["err_msg"] != "test error" {
-		t.Errorf("err_msg = %v, want test error", m["err_msg"])
+	output := buf.String()
+	var logEntry map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
+		t.Fatalf("Failed to parse log entry: %v", err)
 	}
-	if m["err_code"] != "ERR_001" {
-		t.Errorf("err_code = %v, want ERR_001", m["err_code"])
+
+	// ErrorWithCode 使用 Group 产生嵌套结构：error={code="...", msg="..."}
+	errorGroup, ok := logEntry["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected error field to be a group, got %T", logEntry["error"])
+	}
+
+	// 验证嵌套字段
+	if errorGroup["msg"] != "test error" {
+		t.Errorf("error.msg = %v, want test error", errorGroup["msg"])
+	}
+	if errorGroup["code"] != "ERR_001" {
+		t.Errorf("error.code = %v, want ERR_001", errorGroup["code"])
 	}
 	// 确保不包含其他字段
-	if _, ok := m["err_type"]; ok {
-		t.Error("ErrorWithCode() should not include err_type field")
+	if _, ok := errorGroup["type"]; ok {
+		t.Error("ErrorWithCode() should not include type field")
 	}
-	if _, ok := m["err_stack"]; ok {
-		t.Error("ErrorWithCode() should not include err_stack field")
+	if _, ok := errorGroup["stack"]; ok {
+		t.Error("ErrorWithCode() should not include stack field")
 	}
 }
 
 // TestErrorWithStackField 测试带堆栈的错误字段
 func TestErrorWithStackField(t *testing.T) {
-	m := make(map[string]any)
+	var buf bytes.Buffer
+	logger, _ := New(&Config{
+		Level:  "debug",
+		Format: "json",
+		Output: "buffer",
+	}, withBuffer(&buf))
+
 	err := errors.New("test error")
+	logger.Error("test error with stack", ErrorWithStack(err))
 
-	ErrorWithStack(err)(m)
+	output := buf.String()
+	var logEntry map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
+		t.Fatalf("Failed to parse log entry: %v", err)
+	}
 
-	// 验证带堆栈错误字段 - 应该包含 err_msg, err_type, err_stack
-	if m["err_msg"] != "test error" {
-		t.Errorf("err_msg = %v, want test error", m["err_msg"])
+	// ErrorWithStack 使用 Group 产生嵌套结构：error={msg="...", type="...", stack="..."}
+	errorGroup, ok := logEntry["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected error field to be a group, got %T", logEntry["error"])
 	}
-	if m["err_type"] != "*errors.errorString" {
-		t.Errorf("err_type = %v, want *errors.errorString", m["err_type"])
+
+	// 验证嵌套字段
+	if errorGroup["msg"] != "test error" {
+		t.Errorf("error.msg = %v, want test error", errorGroup["msg"])
 	}
-	if _, ok := m["err_stack"]; !ok {
-		t.Error("Missing err_stack field in ErrorWithStack")
+	if errorGroup["type"] != "*errors.errorString" {
+		t.Errorf("error.type = %v, want *errors.errorString", errorGroup["type"])
+	}
+	if _, ok := errorGroup["stack"]; !ok {
+		t.Error("Missing stack field in error group")
 	}
 	// 确保不包含错误码
-	if _, ok := m["err_code"]; ok {
-		t.Error("ErrorWithStack() should not include err_code field")
+	if _, ok := errorGroup["code"]; ok {
+		t.Error("ErrorWithStack() should not include code field")
 	}
 }
 
 // TestErrorWithCodeStackField 测试带错误码和堆栈的错误字段
 func TestErrorWithCodeStackField(t *testing.T) {
-	m := make(map[string]any)
+	var buf bytes.Buffer
+	logger, _ := New(&Config{
+		Level:  "debug",
+		Format: "json",
+		Output: "buffer",
+	}, withBuffer(&buf))
+
 	err := errors.New("test error")
+	logger.Error("test error with code and stack", ErrorWithCodeStack(err, "ERR_001"))
 
-	ErrorWithCodeStack(err, "ERR_001")(m)
+	output := buf.String()
+	var logEntry map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
+		t.Fatalf("Failed to parse log entry: %v", err)
+	}
 
-	// 验证完整错误字段 - 应该包含所有字段
-	if m["err_msg"] != "test error" {
-		t.Errorf("err_msg = %v, want test error", m["err_msg"])
+	// ErrorWithCodeStack 使用 Group 产生嵌套结构：error={msg="...", type="...", code="...", stack="..."}
+	errorGroup, ok := logEntry["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected error field to be a group, got %T", logEntry["error"])
 	}
-	if m["err_code"] != "ERR_001" {
-		t.Errorf("err_code = %v, want ERR_001", m["err_code"])
+
+	// 验证嵌套字段
+	if errorGroup["msg"] != "test error" {
+		t.Errorf("error.msg = %v, want test error", errorGroup["msg"])
 	}
-	if m["err_type"] != "*errors.errorString" {
-		t.Errorf("err_type = %v, want *errors.errorString", m["err_type"])
+	if errorGroup["code"] != "ERR_001" {
+		t.Errorf("error.code = %v, want ERR_001", errorGroup["code"])
 	}
-	if _, ok := m["err_stack"]; !ok {
-		t.Error("Missing err_stack field in ErrorWithCodeStack")
+	if errorGroup["type"] != "*errors.errorString" {
+		t.Errorf("error.type = %v, want *errors.errorString", errorGroup["type"])
+	}
+	if _, ok := errorGroup["stack"]; !ok {
+		t.Error("Missing stack field in error group")
 	}
 }
 
 // TestErrorFieldWithNil 测试 nil 错误处理
 func TestErrorFieldWithNil(t *testing.T) {
-	m := make(map[string]any)
+	var buf bytes.Buffer
+	logger, _ := New(&Config{
+		Level:  "debug",
+		Format: "json",
+		Output: "buffer",
+	}, withBuffer(&buf))
 
-	Error(nil)(m)
-	ErrorWithCode(nil, "ERR_001")(m)
+	logger.Error("nil error", Error(nil))
+	logger.Error("nil error with code", ErrorWithCode(nil, "ERR_001"))
 
-	// 验证没有添加任何字段
-	if len(m) != 0 {
-		t.Errorf("Expected empty map for nil error, got %v", m)
+	output := buf.String()
+	var logEntry1 map[string]interface{}
+	var logEntry2 map[string]interface{}
+
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+
+	if err := json.Unmarshal([]byte(lines[0]), &logEntry1); err != nil {
+		t.Fatalf("Failed to parse first log entry: %v", err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &logEntry2); err != nil {
+		t.Fatalf("Failed to parse second log entry: %v", err)
+	}
+
+	// Error(nil) 应该返回空的 key="" 字段，不影响日志
+	if _, ok := logEntry1["err_msg"]; ok {
+		t.Error("Error(nil) should not add err_msg field")
+	}
+
+	// ErrorWithCode(nil) 应该只返回 code
+	if errGroup, ok := logEntry2["error"].(map[string]interface{}); ok {
+		if errGroup["code"] != "ERR_001" {
+			t.Errorf("ErrorWithCode(nil) should have code = ERR_001, got %v", errGroup["code"])
+		}
+		if _, ok := errGroup["msg"]; ok {
+			t.Error("ErrorWithCode(nil) should not have msg field")
+		}
 	}
 }
 

@@ -33,6 +33,9 @@ func main() {
 
 	// 示例4：错误处理 - 推荐的错误日志方式
 	errorHandlingExample()
+
+	// 示例5：彩色控制台输出 - 开发环境推荐配置
+	coloredExample()
 }
 
 // basicExample 展示基础配置，推荐用于生产环境
@@ -153,5 +156,48 @@ func errorHandlingExample() {
 		clog.ErrorWithCodeStack(errors.New("memory allocation failed"), "SYS_001"),
 		clog.String("service", "payment"),
 		clog.String("version", "v2.1.0"),
+	)
+}
+
+// coloredExample 展示彩色控制台输出，推荐用于开发环境
+func coloredExample() {
+	fmt.Println("\n--- 示例5：开发环境彩色输出 ---")
+
+	// 开发环境推荐配置
+	logger, _ := clog.New(&clog.Config{
+		Level:       "debug",   // 开发环境建议使用 debug
+		Format:      "console", // 控制台格式
+		Output:      "stdout",  // 输出到标准输出
+		EnableColor: true,      // 启用彩色输出
+		AddSource:   true,      // 显示调用位置
+		SourceRoot:  "genesis", // 裁剪 genesis 前缀
+	},
+		clog.WithNamespace("my-app"), // 命名空间
+	)
+
+	// Debug 级别 - 暗灰色
+	logger.Debug("调试信息",
+		clog.String("detail", "检查数据库连接"),
+		clog.Int("retry", 0),
+	)
+
+	// Info 级别 - 亮绿色
+	logger.Info("用户登录成功",
+		clog.String("user_id", "12345"),
+		clog.String("username", "alice"),
+		clog.String("ip", "192.168.1.100"),
+	)
+
+	// Warn 级别 - 亮黄色
+	logger.Warn("响应时间较长",
+		clog.Duration("duration", 2500*time.Millisecond),
+		clog.String("threshold", "2s"),
+	)
+
+	// Error 级别 - 亮红色
+	err := errors.New("数据库连接失败")
+	logger.Error("操作失败",
+		clog.ErrorWithCode(err, "DB_001"),
+		clog.String("database", "users"),
 	)
 }
