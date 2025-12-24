@@ -29,14 +29,18 @@ type mysqlConnector struct {
 
 // NewMySQL 创建 MySQL 连接器
 func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
-	cfg.SetDefaults()
-	if err := cfg.Validate(); err != nil {
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid mysql config")
 	}
 
 	opt := &options{}
 	for _, o := range opts {
 		o(opt)
+	}
+
+	if opt.logger == nil {
+		opt.logger = clog.Discard()
 	}
 
 	c := &mysqlConnector{

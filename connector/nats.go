@@ -27,14 +27,18 @@ type natsConnector struct {
 
 // NewNATS 创建 NATS 连接器
 func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
-	cfg.SetDefaults()
-	if err := cfg.Validate(); err != nil {
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid nats config")
 	}
 
 	opt := &options{}
 	for _, o := range opts {
 		o(opt)
+	}
+
+	if opt.logger == nil {
+		opt.logger = clog.Discard()
 	}
 
 	c := &natsConnector{

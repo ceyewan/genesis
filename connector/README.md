@@ -35,9 +35,11 @@ import (
 
 func main() {
     ctx := context.Background()
-    logger := clog.Must(&clog.Config{Level: "info"})
+    // Logger 是可选的，不传则默认静默 (Noop)
+    logger, _ := clog.New(&clog.Config{Level: "info"})
 
     // 1. 创建 Redis 连接器（验证配置并初始化实例）
+    // 配置采用平铺结构，核心参数必填，其余可选
     conn, err := connector.NewRedis(&connector.RedisConfig{
         Addr: "localhost:6379",
         DB:   0,
@@ -118,42 +120,37 @@ return xerrors.Wrapf(err, "redis connector[%s]: connection failed", c.cfg.Name)
 
 ## 7. 配置结构
 
-### 通用配置
-
-每个连接器都包含一个 `BaseConfig`，用于通用的连接控制：
-
-```go
-type BaseConfig struct {
-    Name            string        `mapstructure:"name"`              // 连接器名称
-    MaxRetries      int           `mapstructure:"max_retries"`       // 最大重试次数
-    RetryInterval   time.Duration `mapstructure:"retry_interval"`    // 重试间隔
-    ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`   // 连接超时
-    HealthCheckFreq time.Duration `mapstructure:"health_check_freq"` // 健康检查频率
-}
-```
+所有配置采用扁平化结构，明确区分核心参数与可选参数。大部分参数都有合理的默认值，用户仅需提供关键信息。
 
 ### Redis 配置示例
 
 ```go
 type RedisConfig struct {
-    BaseConfig   `mapstructure:",squash"`  // 继承通用配置
-    Addr         string        `mapstructure:"addr"`           // 连接地址，如 "127.0.0.1:6379"
-    Password     string        `mapstructure:"password"`       // 认证密码（可选）
-    DB           int           `mapstructure:"db"`             // 数据库编号（默认0）
-    PoolSize     int           `mapstructure:"pool_size"`      // 连接池大小（默认10）
-    MinIdleConns int           `mapstructure:"min_idle_conns"` // 最小空闲连接数（默认5）
-    DialTimeout  time.Duration `mapstructure:"dial_timeout"`   // 连接超时（默认5s）
-    ReadTimeout  time.Duration `mapstructure:"read_timeout"`   // 读取超时（默认3s）
-    WriteTimeout time.Duration `mapstructure:"write_timeout"`  // 写入超时（默认3s）
+    // 基础配置（可选，有默认值）
+    Name            string        `mapstructure:"name"`              // 连接器名称 (默认: "default")
+    MaxRetries      int           `mapstructure:"max_retries"`       // 最大重试次数 (默认: 3)
+    // ... 其他通用配置
+
+    // 核心配置 (必填)
+    Addr     string `mapstructure:"addr"`     // 连接地址，如 "127.0.0.1:6379"
+    
+    // 可选配置
+    Password string `mapstructure:"password"` // 认证密码
+    DB       int    `mapstructure:"db"`       // 数据库编号 (默认: 0)
+
+    // 高级配置 (可选，有默认值)
+    PoolSize     int           `mapstructure:"pool_size"`      // 连接池大小 (默认: 10)
+    MinIdleConns int           `mapstructure:"min_idle_conns"` // 最小空闲连接数 (默认: 5)
+    DialTimeout  time.Duration `mapstructure:"dial_timeout"`   // 连接超时 (默认: 5s)
+    // ...
 }
 ```
 
 ### 配置处理流程
 
-1. `cfg.SetDefaults()` - 设置默认值（自动调用）
-2. `cfg.Validate()` - 验证配置有效性（自动调用）
-3. 创建连接器实例
-4. `conn.Connect(ctx)` - 建立实际连接
+1. **自动默认值**：内部自动应用默认值，无需用户手动调用 `SetDefaults`。
+2. **自动验证**：内部自动验证必要参数（如 Addr, Host），无需用户手动调用 `Validate`。
+3. **Fail-fast**：如果配置无效，工厂函数 `New*` 会立即返回错误。
 
 ## 8. 健康检查
 
@@ -181,9 +178,12 @@ go func() {
 通过 `WithLogger` 注入 `clog.Logger`，自动添加连接器命名空间：
 
 ```go
+// 强烈建议注入 Logger 以便排查问题
 redisConn, err := connector.NewRedis(&cfg.Redis,
     connector.WithLogger(logger))
 ```
+
+> **注意**：如果未提供 Logger，连接器将默认使用 Noop Logger（静默模式），不会输出任何日志，也不会 Panic。
 
 日志输出示例：
 
@@ -221,7 +221,8 @@ redisConn, err := connector.NewRedis(&cfg.Redis,
 ```go
 func main() {
     ctx := context.Background()
-    logger := clog.Must(&clog.Config{Level: "info"})
+    // 建议在 main 中初始化 Logger
+    logger, _ := clog.New(&clog.Config{Level: "info"})
 
     // 1. 创建连接器
     redisConn, _ := connector.NewRedis(&cfg.Redis,

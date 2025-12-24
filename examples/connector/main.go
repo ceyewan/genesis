@@ -54,10 +54,10 @@ func runRedisExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 
 	// 1. 准备配置
 	cfg := &connector.RedisConfig{
-		BaseConfig: connector.BaseConfig{Name: "redis-demo"},
-		Addr:       getEnvOrDefault("REDIS_ADDR", "localhost:6379"),
-		Password:   os.Getenv("REDIS_PASSWORD"),
-		PoolSize:   10,
+		Name:     "redis-demo",
+		Addr:     getEnvOrDefault("REDIS_ADDR", "localhost:6379"),
+		Password: getEnvOrDefault("REDIS_PASSWORD", ""),
+		PoolSize: 10,
 	}
 
 	// 2. 创建实例 (Fail-fast: 验证配置)
@@ -96,7 +96,7 @@ func runMySQLExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 	logger.Info("--- [MySQL] 示例开始 ---")
 
 	cfg := &connector.MySQLConfig{
-		BaseConfig:   connector.BaseConfig{Name: "mysql-demo"},
+		Name:         "mysql-demo",
 		Host:         getEnvOrDefault("MYSQL_HOST", "localhost"),
 		Port:         getEnvIntOrDefault("MYSQL_PORT", 3306),
 		Username:     getEnvOrDefault("MYSQL_USER", "root"),
@@ -133,7 +133,7 @@ func runEtcdExample(ctx context.Context, logger clog.Logger, meter metrics.Meter
 	logger.Info("--- [Etcd] 示例开始 ---")
 
 	cfg := &connector.EtcdConfig{
-		BaseConfig:  connector.BaseConfig{Name: "etcd-demo"},
+		Name:        "etcd-demo",
 		Endpoints:   []string{getEnvOrDefault("ETCD_ENDPOINTS", "localhost:2379")},
 		DialTimeout: 5 * time.Second,
 	}
@@ -164,9 +164,9 @@ func runNATSExample(ctx context.Context, logger clog.Logger, meter metrics.Meter
 	logger.Info("--- [NATS] 示例开始 ---")
 
 	cfg := &connector.NATSConfig{
-		BaseConfig: connector.BaseConfig{Name: "nats-demo"},
-		URL:        getEnvOrDefault("NATS_URL", "nats://localhost:4222"),
-		Timeout:    5 * time.Second,
+		Name:    "nats-demo",
+		URL:     getEnvOrDefault("NATS_URL", "nats://localhost:4222"),
+		Timeout: 5 * time.Second,
 	}
 
 	conn, err := connector.NewNATS(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
