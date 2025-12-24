@@ -21,6 +21,7 @@ clog/                     # 根目录 - 扁平化设计
 ├── README.md             # 本文档
 ├── clog.go              # 构造函数：New()
 ├── config.go            # 配置结构：Config + validate()
+├── noop.go             # No-op 实现：Discard()
 ├── options.go           # 函数式选项：Option、WithNamespace 等
 ├── logger.go            # Logger 接口定义
 ├── level.go             # 日志级别：Level、ParseLevel
@@ -87,14 +88,14 @@ type Logger interface {
 //   Level: 日志级别 (debug|info|warn|error|fatal)
 //   Format: 输出格式 (json|console)
 //   Output: 输出目标 (stdout|stderr|文件路径)
-//   EnableColor: 是否启用彩色输出（仅 console 格式）
+//   EnableColor: 是否启用彩色输出（仅 console 格式，已实现）
 //   AddSource: 是否显示调用位置信息
 //   SourceRoot: 源代码路径前缀，用于裁剪显示的文件路径
 type Config struct {
     Level       string `json:"level" yaml:"level"`             // debug|info|warn|error|fatal
     Format      string `json:"format" yaml:"format"`           // json|console
     Output      string `json:"output" yaml:"output"`           // stdout|stderr|<file path>
-    EnableColor bool   `json:"enableColor" yaml:"enableColor"` // 仅在 console 格式下有效，未实现
+    EnableColor bool   `json:"enableColor" yaml:"enableColor"` // 仅在 console 格式下有效
     AddSource   bool   `json:"addSource" yaml:"addSource"`
     SourceRoot  string `json:"sourceRoot" yaml:"sourceRoot"` // 用于裁剪文件路径
 }
@@ -123,6 +124,22 @@ func WithContextField(key any, fieldName string, opts ...ContextFieldOption) Opt
 //
 // config 为日志基本配置，opts 为函数式选项。
 func New(config *Config, opts ...Option) (Logger, error)
+
+// Discard 返回一个 No-op Logger 实现
+//
+// 该 Logger 的所有方法都是空操作，不产生任何输出。
+// 适用于测试环境或需要临时禁用日志的场景。
+func Discard() Logger
+
+// NewDevDefaultConfig 创建开发环境的默认日志配置
+//
+// sourceRoot 推荐设置为你的项目根目录，例如 "genesis"，以获得更简洁的调用源信息。
+func NewDevDefaultConfig(sourceRoot string) *Config
+
+// NewProdDefaultConfig 创建生产环境的默认日志配置
+//
+// sourceRoot 推荐设置为你的项目根目录，例如 "genesis"，以获得更简洁的调用源信息。
+func NewProdDefaultConfig(sourceRoot string) *Config
 ```
 
 ## 5. 命名空间规范
@@ -231,7 +248,53 @@ logger.InfoContext(ctx, "Request processed")
 // 输出: {"ctx.trace_id":"abc123", "ctx.user_id":"user-456", "msg":"Request processed", ...}
 ```
 
-### 7.4 生产环境配置
+### 7.4 使用 No-op Logger
+
+```go
+// 测试环境使用 No-op Logger，不产生任何输出
+logger := clog.Discard()
+
+logger.Info("This will not be printed")
+logger.Error("Neither will this")
+```
+
+### 7.5 使用默认配置函数
+
+```go
+// 开发环境：启用调试级别、彩色输出、控制台输出
+logger, _ := clog.New(
+    clog.NewDevDefaultConfig("genesis"),
+    clog.WithNamespace("user-service"),
+)
+
+// 生产环境：启用信息级别、JSON 格式、控制台输出
+logger, _ := clog.New(
+    clog.NewProdDefaultConfig("genesis"),
+    clog.WithNamespace("user-service"),
+)
+```
+
+### 7.6 开发环境彩色输出
+
+```go
+logger, _ := clog.New(
+    clog.NewDevDefaultConfig("genesis"),
+    clog.WithNamespace("user-service"),
+)
+
+logger.Debug("Debug message")      // 灰色
+logger.Info("Info message")        // 蓝色
+logger.Warn("Warning message")     // 黄色
+logger.Error("Error message")      // 红色加粗，最醒目
+```
+
+输出示例：
+```
+15:01:01.340 | INFO  | user-service.api | main.go:42 | Service started
+15:01:02.123 | ERROR | user-service.api | main.go:50 | Failed to connect
+```
+
+### 7.7 生产环境配置
 
 ```go
 logger, _ := clog.New(&clog.Config{
@@ -246,7 +309,8 @@ logger, _ := clog.New(&clog.Config{
 ## 8. 技术实现
 
 - **底层实现**：基于 Go 1.21+ 标准库 `log/slog`
-- **性能优化**：利用 slog 的延迟计算特性，直接使用 map[string]any 减少内存分配
+- **性能优化**：Field 直接映射为 slog.Attr，实现零内存分配（Zero Allocation）
+- **彩色输出**：Console 格式支持现代 CLI 风格彩色输出，ERROR 级别加粗显示
 - **扩展性**：通过私有函数封装，便于未来替换底层实现
 - **兼容性**：提供完整的 API 文档和使用示例
 
