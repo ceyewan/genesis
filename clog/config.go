@@ -18,28 +18,28 @@ type Config struct {
 }
 
 // NewDevDefaultConfig 创建开发环境的默认日志配置
-// 推荐修改 SourceRoot 为你的项目根目录，以获得更简洁的调用源信息。
-func NewDevDefaultConfig() *Config {
+// 参数 sourceRoot 推荐设置为你的项目根目录，例如 genesis，以获得更简洁的调用源信息。
+func NewDevDefaultConfig(sourceRoot string) *Config {
 	return &Config{
 		Level:       "debug",
 		Format:      "console",
 		Output:      "stdout",
 		EnableColor: true,
 		AddSource:   true,
-		SourceRoot:  "",
+		SourceRoot:  sourceRoot,
 	}
 }
 
 // NewProdDefaultConfig 创建生产环境的默认日志配置
-// 推荐修改 SourceRoot 为你的项目根目录，以获得更简洁的调用源信息。
-func NewProdDefaultConfig() *Config {
+// 参数 sourceRoot 推荐设置为你的项目根目录，例如 genesis，以获得更简洁的调用源信息。
+func NewProdDefaultConfig(sourceRoot string) *Config {
 	return &Config{
 		Level:       "info",
 		Format:      "json",
 		Output:      "stdout",
 		EnableColor: false,
 		AddSource:   true,
-		SourceRoot:  "",
+		SourceRoot:  sourceRoot,
 	}
 }
 
