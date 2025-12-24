@@ -28,14 +28,18 @@ type redisConnector struct {
 
 // NewRedis 创建 Redis 连接器
 func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
-	cfg.SetDefaults()
-	if err := cfg.Validate(); err != nil {
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid redis config")
 	}
 
 	opt := &options{}
 	for _, o := range opts {
 		o(opt)
+	}
+
+	if opt.logger == nil {
+		opt.logger = clog.Discard()
 	}
 
 	c := &redisConnector{

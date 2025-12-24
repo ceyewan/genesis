@@ -82,9 +82,7 @@ func snowflakeRedisExample() {
 
 	// 1. 直接创建 Redis 连接器 (Go Native DI 模式)
 	redisCfg := &connector.RedisConfig{
-		BaseConfig: connector.BaseConfig{
-			Name: "idgen-redis-example",
-		},
+		Name:         "idgen-redis-example",
 		Addr:         "127.0.0.1:6379",
 		Password:     os.Getenv("GENESIS_REDIS_PASSWORD"), // 从环境变量读取密码
 		DialTimeout:  2 * time.Second,                     // 快速失败
@@ -206,9 +204,7 @@ func sequenceExample() {
 
 	// 1. 创建 Redis 连接器
 	redisCfg := &connector.RedisConfig{
-		BaseConfig: connector.BaseConfig{
-			Name: "idgen-sequence-example",
-		},
+		Name:         "idgen-sequence-example",
 		Addr:         "127.0.0.1:6379",
 		Password:     os.Getenv("GENESIS_REDIS_PASSWORD"), // 从环境变量读取密码
 		DialTimeout:  2 * time.Second,

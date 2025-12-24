@@ -28,14 +28,18 @@ type etcdConnector struct {
 
 // NewEtcd 创建 Etcd 连接器
 func NewEtcd(cfg *EtcdConfig, opts ...Option) (EtcdConnector, error) {
-	cfg.SetDefaults()
-	if err := cfg.Validate(); err != nil {
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid etcd config")
 	}
 
 	opt := &options{}
 	for _, o := range opts {
 		o(opt)
+	}
+
+	if opt.logger == nil {
+		opt.logger = clog.Discard()
 	}
 
 	c := &etcdConnector{

@@ -98,9 +98,7 @@ func initComponents() (connector.MySQLConnector, db.DB) {
 
 	// 2. 创建 MySQL 连接器
 	mysqlConn, err := connector.NewMySQL(&connector.MySQLConfig{
-		BaseConfig: connector.BaseConfig{
-			Name: "mysql-db-example",
-		},
+		Name:         "mysql-db-example",
 		Host:         getEnvOrDefault("MYSQL_HOST", "localhost"),
 		Port:         getEnvIntOrDefault("MYSQL_PORT", 3306),
 		Username:     getEnvOrDefault("MYSQL_USER", "root"),
