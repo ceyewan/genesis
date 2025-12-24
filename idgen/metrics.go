@@ -8,9 +8,6 @@ const (
 	// MetricIDGenerationErrors ID 生成错误数 (Counter)
 	MetricIDGenerationErrors = "idgen_generation_errors_total"
 
-	// MetricWorkerIDAllocationErrors WorkerID 分配错误数 (Counter)
-	MetricWorkerIDAllocationErrors = "idgen_worker_id_allocation_errors_total"
-
 	// MetricClockBackwardsCount 时钟回拨次数 (Counter)
 	MetricClockBackwardsCount = "idgen_clock_backwards_total"
 
@@ -19,9 +16,6 @@ const (
 
 	// MetricSequenceGenerationErrors 序列号生成错误数 (Counter)
 	MetricSequenceGenerationErrors = "idgen_sequence_generation_errors_total"
-
-	// LabelMethod 方法标签 (e.g., "static", "redis", "etcd")
-	LabelMethod = "method"
 
 	// LabelVersion 版本标签 (e.g., "v4", "v7")
 	LabelVersion = "version"

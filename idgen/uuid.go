@@ -2,66 +2,86 @@ package idgen
 
 import (
 	"github.com/google/uuid"
-
-	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
-	"github.com/ceyewan/genesis/xerrors"
 )
 
-// uuidGen UUID 生成器实现（非导出）
-type uuidGen struct {
+// ========================================
+// 静态便捷函数 (Static Convenience Functions)
+// ========================================
+
+// NewUUIDV7 生成 UUID v7 (时间排序)
+// 这是最常用的 UUID 版本，适合作为数据库主键
+//
+// 使用示例:
+//
+//	uid := idgen.NewUUIDV7()
+func NewUUIDV7() string {
+	v7, _ := uuid.NewV7()
+	return v7.String()
+}
+
+// NewUUIDV4 生成 UUID v4 (随机)
+// 适用于不需要时间排序的场景
+//
+// 使用示例:
+//
+//	uid := idgen.NewUUIDV4()
+func NewUUIDV4() string {
+	return uuid.New().String()
+}
+
+// ========================================
+// 实例模式 (Instance Mode)
+// ========================================
+
+// UUID UUID 生成器
+// 支持多个版本，默认使用 v7
+type UUID struct {
 	version string
-	logger  clog.Logger
-	meter   metrics.Meter
 }
 
-// newUUIDGen 创建 UUID 生成器（内部函数）
-func newUUIDGen(
-	cfg *UUIDConfig,
-	logger clog.Logger,
-	meter metrics.Meter,
-) (Generator, error) {
-	if cfg == nil {
-		return nil, xerrors.WithCode(ErrConfigNil, "uuid_config_nil")
-	}
+// UUIDOption UUID 初始化选项
+type UUIDOption func(*UUID)
 
-	version := cfg.Version
-	if version == "" {
-		version = "v4"
+// NewUUID 创建 UUID 生成器
+//
+// 参数:
+//   - opts: 可选参数 (Version)
+//
+// 使用示例:
+//
+//	// 默认 v7
+//	gen := idgen.NewUUID()
+//	uid := gen.Next()
+//
+//	// 指定 v4
+//	gen := idgen.NewUUID(idgen.WithUUIDVersion("v4"))
+//	uid := gen.Next()
+func NewUUID(opts ...UUIDOption) *UUID {
+	u := &UUID{
+		version: "v7", // 默认 v7
 	}
-	if version != "v4" && version != "v7" {
-		return nil, xerrors.Wrapf(ErrUnsupportedVersion, "version: %s", version)
+	for _, opt := range opts {
+		opt(u)
 	}
-
-	if logger != nil {
-		logger.Info("uuid generator created", clog.String("version", version))
-	}
-
-	return &uuidGen{
-		version: version,
-		logger:  logger,
-		meter:   meter,
-	}, nil
+	return u
 }
 
-// Next 返回字符串形式的 UUID
-func (u *uuidGen) Next() string {
-	var id string
+// WithUUIDVersion 设置 UUID 版本
+// 支持: "v4" | "v7"
+func WithUUIDVersion(version string) UUIDOption {
+	return func(u *UUID) {
+		u.version = version
+	}
+}
+
+// Next 生成 UUID 字符串
+func (u *UUID) Next() string {
 	switch u.version {
 	case "v4":
-		id = uuid.New().String()
+		return NewUUIDV4()
 	case "v7":
-		v7, _ := uuid.NewV7()
-		id = v7.String()
+		return NewUUIDV7()
 	default:
-		id = uuid.New().String()
+		return NewUUIDV7()
 	}
-
-	return id
-}
-
-// Close 实现 io.Closer 接口，但由于 uuidGen 不拥有任何资源，
-// 所以这是 no-op，符合资源所有权规范
-func (u *uuidGen) Close() error {
-	return nil
 }

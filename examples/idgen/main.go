@@ -16,203 +16,76 @@ func main() {
 	fmt.Println("=== Genesis ID Generator Examples ===")
 	fmt.Println()
 
-	// 示例 1: Snowflake (Static Mode)
+	// 示例 1: Snowflake (静态模式)
 	snowflakeStaticExample()
 
-	// 示例 2: Snowflake (IP Mode)
-	snowflakeIPExample()
+	// 示例 2: Snowflake (实例模式)
+	snowflakeInstanceExample()
 
-	// 示例 3: Snowflake (Redis Mode) - 需要运行 Redis
+	// 示例 3: Snowflake (Redis 自动分配 WorkerID)
 	snowflakeRedisExample()
 
-	// 示例 4: Snowflake (Etcd Mode) - 需要运行 Etcd（暂时跳过）
-	// snowflakeEtcdExample()
-
-	// 示例 5: UUID (v4 & v7)
+	// 示例 4: UUID (v4 & v7)
 	uuidExample()
 
-	// 示例 6: Sequence (基于 Redis INCR)
+	// 示例 5: Sequence (基于 Redis INCR)
 	sequenceExample()
 }
 
+// ========================================
+// Snowflake 示例
+// ========================================
+
 func snowflakeStaticExample() {
-	fmt.Println("--- Example 1: Snowflake (Static Mode) ---")
+	fmt.Println("--- Example 1: Snowflake (静态模式) ---")
 
-	cfg := &idgen.SnowflakeConfig{
-		Method:       "static",
-		WorkerID:     1, // 手动指定 WorkerID
-		DatacenterID: 1,
+	// 使用全局静态 API (最简单)
+	idgen.Setup(1) // 设置 workerID = 1
+
+	fmt.Println("生成 5 个 Snowflake ID:")
+	for i := 0; i < 5; i++ {
+		id := idgen.Next()
+		fmt.Printf("  ID %d: %d\n", i+1, id)
+		time.Sleep(time.Millisecond)
 	}
-
-	// Static 模式不需要连接器
-	gen, err := idgen.NewSnowflake(cfg, nil, nil) // 使用默认 Logger
-	if err != nil {
-		log.Printf("Failed to create static snowflake: %v\n", err)
-		return
-	}
-
-	id, _ := gen.NextInt64()
-	fmt.Printf("Generated ID (Static): %d\n", id)
 	fmt.Println()
 }
 
-func snowflakeIPExample() {
-	fmt.Println("--- Example 2: Snowflake (IP Mode) ---")
+func snowflakeInstanceExample() {
+	fmt.Println("--- Example 2: Snowflake (实例模式) ---")
 
-	cfg := &idgen.SnowflakeConfig{
-		Method:       "ip_24", // 使用 IP 后 8 位作为 WorkerID
-		DatacenterID: 1,
-	}
-
-	// IP 模式不需要连接器
-	gen, err := idgen.NewSnowflake(cfg, nil, nil)
+	// 创建独立的 Snowflake 实例
+	sf, err := idgen.NewSnowflake(23,
+		idgen.WithDatacenterID(1), // 可选：设置数据中心 ID
+	)
 	if err != nil {
-		log.Printf("Failed to create IP snowflake: %v\n", err)
+		log.Printf("Failed to create Snowflake: %v\n", err)
 		return
 	}
 
-	id, _ := gen.NextInt64()
-	fmt.Printf("Generated ID (IP): %d\n", id)
+	fmt.Println("生成 5 个 Snowflake ID (实例模式):")
+	for i := 0; i < 5; i++ {
+		id := sf.Next()
+		fmt.Printf("  ID %d: %d\n", i+1, id)
+		time.Sleep(time.Millisecond)
+	}
 	fmt.Println()
 }
 
 func snowflakeRedisExample() {
-	fmt.Println("--- Example 3: Snowflake (Redis Mode) ---")
-	fmt.Println("Note: This example requires Redis running on localhost:6379")
-
-	// 1. 直接创建 Redis 连接器 (Go Native DI 模式)
-	redisCfg := &connector.RedisConfig{
-		Name:         "idgen-redis-example",
-		Addr:         "127.0.0.1:6379",
-		Password:     os.Getenv("GENESIS_REDIS_PASSWORD"), // 从环境变量读取密码
-		DialTimeout:  2 * time.Second,                     // 快速失败
-		ReadTimeout:  2 * time.Second,
-		WriteTimeout: 2 * time.Second,
-	}
-
-	// 创建默认 logger
-	logger, _ := clog.New(&clog.Config{
-		Level:       "info",
-		Format:      "console",
-		Output:      "stdout",
-		AddSource:   false,
-		EnableColor: false,
-	})
-
-	redisConn, err := connector.NewRedis(redisCfg, connector.WithLogger(logger))
-	if err != nil {
-		fmt.Printf("Skipping Redis example: failed to create redis connector: %v\n", err)
-		return
-	}
-	defer redisConn.Close()
-
-	// 2. 建立连接
-	ctx := context.Background()
-	if err := redisConn.Connect(ctx); err != nil {
-		fmt.Printf("Skipping Redis example: failed to connect: %v\n", err)
-		return
-	}
-
-	// 2. 配置 Snowflake
-	snowflakeCfg := &idgen.SnowflakeConfig{
-		Method:       "redis",
-		DatacenterID: 1,
-		KeyPrefix:    "genesis:examples:idgen",
-		TTL:          10, // 短 TTL 方便测试
-	}
-
-	// 3. 创建生成器
-	gen, err := idgen.NewSnowflake(snowflakeCfg, redisConn, nil)
-	if err != nil {
-		log.Printf("Failed to create Redis snowflake: %v\n", err)
-		return
-	}
-
-	// 4. 生成 ID
-	fmt.Println("Generating 5 IDs:")
-	for i := 0; i < 5; i++ {
-		id, _ := gen.NextInt64()
-		fmt.Printf("  ID %d: %d\n", i+1, id)
-		time.Sleep(time.Millisecond)
-	}
-	fmt.Println()
-}
-
-func snowflakeEtcdExample() {
-	fmt.Println("--- Example 4: Snowflake (Etcd Mode) ---")
-	fmt.Println("Note: This example requires Etcd running on localhost:2379")
-
-	// 1. 直接创建 Etcd 连接器 (Go Native DI 模式)
-	etcdCfg := &connector.EtcdConfig{
-		Endpoints: []string{"127.0.0.1:2379"},
-		Timeout:   2 * time.Second,
-	}
-
-	etcdConn, err := connector.NewEtcd(etcdCfg)
-	if err != nil {
-		fmt.Printf("Skipping Etcd example: failed to create etcd connector: %v\n", err)
-		return
-	}
-	defer etcdConn.Close()
-
-	// 2. 配置 Snowflake
-	snowflakeCfg := &idgen.SnowflakeConfig{
-		Method:       "etcd",
-		DatacenterID: 1,
-		KeyPrefix:    "genesis:examples:idgen",
-		TTL:          10,
-	}
-
-	// 3. 创建生成器
-	gen, err := idgen.NewSnowflake(snowflakeCfg, nil, etcdConn)
-	if err != nil {
-		log.Printf("Failed to create Etcd snowflake: %v\n", err)
-		return
-	}
-
-	// 4. 生成 ID
-	fmt.Println("Generating 5 IDs:")
-	for i := 0; i < 5; i++ {
-		id, _ := gen.NextInt64()
-		fmt.Printf("  ID %d: %d\n", i+1, id)
-		time.Sleep(time.Millisecond)
-	}
-	fmt.Println()
-}
-
-func uuidExample() {
-	fmt.Println("--- Example 5: UUID (v4 & v7) ---")
-
-	// UUID v4 (Random)
-	v4Cfg := &idgen.UUIDConfig{Version: "v4"}
-	v4Gen, _ := idgen.NewUUID(v4Cfg)
-	fmt.Printf("UUID v4 (Random):      %s\n", v4Gen.Next())
-
-	// UUID v7 (Time-ordered)
-	v7Cfg := &idgen.UUIDConfig{Version: "v7"}
-	v7Gen, _ := idgen.NewUUID(v7Cfg)
-	fmt.Printf("UUID v7 (Time-ordered): %s\n", v7Gen.Next())
-
-	time.Sleep(10 * time.Millisecond)
-	fmt.Printf("UUID v7 (Next):         %s\n", v7Gen.Next())
-	fmt.Println()
-}
-
-func sequenceExample() {
-	fmt.Println("--- Example 6: Sequence (基于 Redis INCR) ---")
-	fmt.Println("Note: This example requires Redis running on localhost:6379")
+	fmt.Println("--- Example 3: Snowflake (Redis 自动分配 WorkerID) ---")
+	fmt.Println("Note: 此示例需要 Redis 运行在 localhost:6379")
 
 	// 1. 创建 Redis 连接器
 	redisCfg := &connector.RedisConfig{
-		Name:         "idgen-sequence-example",
+		Name:         "idgen-redis-example",
 		Addr:         "127.0.0.1:6379",
-		Password:     os.Getenv("GENESIS_REDIS_PASSWORD"), // 从环境变量读取密码
+		Password:     os.Getenv("GENESIS_REDIS_PASSWORD"),
 		DialTimeout:  2 * time.Second,
 		ReadTimeout:  2 * time.Second,
 		WriteTimeout: 2 * time.Second,
 	}
 
-	// 创建默认 logger
 	logger, _ := clog.New(&clog.Config{
 		Level:       "info",
 		Format:      "console",
@@ -223,7 +96,8 @@ func sequenceExample() {
 
 	redisConn, err := connector.NewRedis(redisCfg, connector.WithLogger(logger))
 	if err != nil {
-		fmt.Printf("Skipping Sequence example: failed to create redis connector: %v\n", err)
+		fmt.Printf("跳过 Redis 示例: 无法创建 redis connector: %v\n", err)
+		fmt.Println()
 		return
 	}
 	defer redisConn.Close()
@@ -231,16 +105,126 @@ func sequenceExample() {
 	// 2. 建立连接
 	ctx := context.Background()
 	if err := redisConn.Connect(ctx); err != nil {
-		fmt.Printf("Skipping Sequence example: failed to connect: %v\n", err)
+		fmt.Printf("跳过 Redis 示例: 无法连接: %v\n", err)
+		fmt.Println()
 		return
 	}
 
-	// 3. 基本序列号生成（IM 消息序列号场景）
-	fmt.Println("\n=== IM 消息序列号场景 ===")
+	// 3. 使用 Redis 自动分配唯一 WorkerID
+	workerID, stop, failCh, err := idgen.AssignInstanceID(ctx, redisConn, "myapp:idgen", 1024)
+	if err != nil {
+		log.Printf("Failed to assign worker ID: %v\n", err)
+		return
+	}
+	defer stop()
+
+	// 监听保活失败
+	go func() {
+		if err := <-failCh; err != nil {
+			log.Printf("WorkerID 租约保活失败: %v\n", err)
+		}
+	}()
+
+	fmt.Printf("自动分配的 WorkerID: %d\n", workerID)
+
+	// 4. 使用分配的 WorkerID 初始化
+	idgen.Setup(workerID, idgen.WithDatacenterID(1))
+
+	fmt.Println("生成 5 个 Snowflake ID:")
+	for i := 0; i < 5; i++ {
+		id := idgen.Next()
+		fmt.Printf("  ID %d: %d\n", i+1, id)
+		time.Sleep(time.Millisecond)
+	}
+	fmt.Println()
+}
+
+// ========================================
+// UUID 示例
+// ========================================
+
+func uuidExample() {
+	fmt.Println("--- Example 4: UUID (v4 & v7) ---")
+
+	// 静态方法 (最常用)
+	fmt.Println("静态方法 (默认 v7):")
+	for i := 0; i < 3; i++ {
+		uid := idgen.NextUUID()
+		fmt.Printf("  UUID v7 #%d: %s\n", i+1, uid)
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// v4 (随机)
+	fmt.Println("\nUUID v4 (随机):")
+	v4 := idgen.NewUUIDV4()
+	fmt.Printf("  UUID v4: %s\n", v4)
+
+	// 实例模式
+	fmt.Println("\n实例模式:")
+	gen := idgen.NewUUID()
+	fmt.Printf("  UUID (默认 v7): %s\n", gen.Next())
+
+	genV4 := idgen.NewUUID(idgen.WithUUIDVersion("v4"))
+	fmt.Printf("  UUID (v4): %s\n", genV4.Next())
+
+	fmt.Println()
+}
+
+// ========================================
+// Sequence 示例
+// ========================================
+
+func sequenceExample() {
+	fmt.Println("--- Example 5: Sequence (基于 Redis INCR) ---")
+	fmt.Println("Note: 此示例需要 Redis 运行在 localhost:6379")
+
+	// 1. 创建 Redis 连接器
+	redisCfg := &connector.RedisConfig{
+		Name:         "idgen-sequence-example",
+		Addr:         "127.0.0.1:6379",
+		Password:     os.Getenv("GENESIS_REDIS_PASSWORD"),
+		DialTimeout:  2 * time.Second,
+		ReadTimeout:  2 * time.Second,
+		WriteTimeout: 2 * time.Second,
+	}
+
+	logger, _ := clog.New(&clog.Config{
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		AddSource:   false,
+		EnableColor: false,
+	})
+
+	redisConn, err := connector.NewRedis(redisCfg, connector.WithLogger(logger))
+	if err != nil {
+		fmt.Printf("跳过 Sequence 示例: 无法创建 redis connector: %v\n", err)
+		fmt.Println()
+		return
+	}
+	defer redisConn.Close()
+
+	// 2. 建立连接
+	ctx := context.Background()
+	if err := redisConn.Connect(ctx); err != nil {
+		fmt.Printf("跳过 Sequence 示例: 无法连接: %v\n", err)
+		fmt.Println()
+		return
+	}
+
+	// 3. 静态便捷方法 (最简单)
+	fmt.Println("静态便捷方法 (简单计数):")
+	for i := 0; i < 5; i++ {
+		seq, _ := idgen.NextSequence(ctx, redisConn, "simple:counter")
+		fmt.Printf("  计数: %d\n", seq)
+	}
+
+	// 4. 实例模式 (IM 消息序列号场景)
+	fmt.Println("\n实例模式 (IM 消息序列号):")
 	imCfg := &idgen.SequenceConfig{
 		KeyPrefix: "im:msg_seq",
 		Step:      1,
-		TTL:       int64(time.Hour), // 1小时过期
+		TTL:       int64(time.Hour),
 	}
 
 	imGen, err := idgen.NewSequencer(imCfg, redisConn)
@@ -249,10 +233,8 @@ func sequenceExample() {
 		return
 	}
 
-	fmt.Println("为不同用户生成消息序列号:")
 	users := []string{"alice", "bob", "charlie"}
 	for _, user := range users {
-		// 为每个用户生成 3 条消息序列号
 		fmt.Printf("\n用户 %s 的消息序列号:\n", user)
 		for i := 0; i < 3; i++ {
 			seq, err := imGen.Next(ctx, user)
@@ -264,23 +246,22 @@ func sequenceExample() {
 		}
 	}
 
-	// 4. 批量生成序列号
-	fmt.Println("\n=== 批量生成序列号 ===")
-	fmt.Println("为 Alice 批量生成 5 条消息序列号:")
+	// 5. 批量生成
+	fmt.Println("\n批量生成序列号:")
 	batchSeqs, err := imGen.NextBatch(ctx, "alice", 5)
 	if err != nil {
 		log.Printf("Failed to generate batch sequence: %v\n", err)
 	} else {
-		fmt.Printf("批量结果: %v\n", batchSeqs)
+		fmt.Printf("为 Alice 批量生成 5 条消息序列号: %v\n", batchSeqs)
 	}
 
-	// 5. 业务流水号场景
-	fmt.Println("\n=== 业务流水号场景 ===")
+	// 6. 业务流水号场景 (步长 1000)
+	fmt.Println("\n业务流水号场景 (步长 1000):")
 	businessCfg := &idgen.SequenceConfig{
 		KeyPrefix: "business:seq",
-		Step:      1000,                  // 步长 1000
-		MaxValue:  9999,                  // 最大值限制
-		TTL:       int64(24 * time.Hour), // 1天过期
+		Step:      1000,
+		MaxValue:  9999,
+		TTL:       int64(24 * time.Hour),
 	}
 
 	businessGen, err := idgen.NewSequencer(businessCfg, redisConn)
@@ -289,7 +270,6 @@ func sequenceExample() {
 		return
 	}
 
-	// 为不同业务生成流水号
 	businesses := []string{"order", "payment", "refund"}
 	for _, business := range businesses {
 		seq, err := businessGen.Next(ctx, business)
@@ -297,7 +277,7 @@ func sequenceExample() {
 			log.Printf("Failed to generate business sequence for %s: %v\n", business, err)
 			continue
 		}
-		fmt.Printf("业务流水号 - %s: %d\n", business, seq)
+		fmt.Printf("  业务流水号 - %s: %d\n", business, seq)
 	}
 
 	fmt.Println("\n=== 序列号生成器测试完成 ===")
