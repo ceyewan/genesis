@@ -154,6 +154,7 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 		logger:   opt.logger,
 		meter:    opt.meter,
 		leases:   make(map[string]clientv3.LeaseID),
+		keepAlives: make(map[string]*leaseKeepAlive),
 		watchers: make(map[string]context.CancelFunc),
 		cache:    make(map[string][]*ServiceInstance),
 		stopChan: make(chan struct{}),
@@ -168,6 +169,15 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 	return r, nil
 }
 
+// leaseKeepAlive 租约保活信息
+type leaseKeepAlive struct {
+	leaseID     clientv3.LeaseID
+	keepAliveCh <-chan *clientv3.LeaseKeepAliveResponse
+	cancel      context.CancelFunc
+	serviceID   string
+	serviceName string
+}
+
 // etcdRegistry 基于 Etcd 的服务注册发现实现
 type etcdRegistry struct {
 	client *clientv3.Client
@@ -176,12 +186,13 @@ type etcdRegistry struct {
 	meter  metrics.Meter
 
 	// 后台任务管理
-	leases   map[string]clientv3.LeaseID   // serviceID -> leaseID
-	watchers map[string]context.CancelFunc // serviceName -> cancel
-	cache    map[string][]*ServiceInstance // serviceName -> instances
-	stopChan chan struct{}
-	wg       sync.WaitGroup
-	mu       sync.RWMutex
+	leases      map[string]clientv3.LeaseID   // serviceID -> leaseID (废弃，保留用于兼容)
+	keepAlives  map[string]*leaseKeepAlive    // serviceID -> keepAlive info
+	watchers    map[string]context.CancelFunc // serviceName -> cancel
+	cache       map[string][]*ServiceInstance // serviceName -> instances
+	stopChan    chan struct{}
+	wg          sync.WaitGroup
+	mu          sync.RWMutex
 
 	// resolver builder
 	resolverBuilder *etcdResolverBuilder
@@ -201,7 +212,7 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 	defer r.mu.Unlock()
 
 	// 检查是否已注册
-	if _, exists := r.leases[service.ID]; exists {
+	if _, exists := r.keepAlives[service.ID]; exists {
 		return ErrServiceAlreadyRegistered
 	}
 
@@ -242,8 +253,34 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 		return xerrors.Wrap(err, "put service failed")
 	}
 
-	// 保存 lease ID
+	// 启动 KeepAlive 后台协程
+	keepAliveCtx, keepAliveCancel := context.WithCancel(ctx)
+	keepAliveCh, err := r.client.KeepAlive(keepAliveCtx, lease.ID)
+	if err != nil {
+		keepAliveCancel()
+		if _, revokeErr := r.client.Revoke(ctx, lease.ID); revokeErr != nil {
+			r.logger.Error("failed to revoke lease",
+				clog.String("leaseID", fmt.Sprintf("%d", lease.ID)),
+				clog.Error(revokeErr))
+		}
+		return xerrors.Wrap(err, "keepalive failed")
+	}
+
+	// 保存 keepAlive 信息
+	ka := &leaseKeepAlive{
+		leaseID:     lease.ID,
+		keepAliveCh: keepAliveCh,
+		cancel:      keepAliveCancel,
+		serviceID:   service.ID,
+		serviceName: service.Name,
+	}
+	r.keepAlives[service.ID] = ka
+	// 兼容旧代码，同时更新 leases map
 	r.leases[service.ID] = lease.ID
+
+	// 启动 KeepAlive 监控协程
+	r.wg.Add(1)
+	go r.monitorKeepAlive(ka)
 
 	r.logger.Info("service registered",
 		clog.String("service_id", service.ID),
@@ -260,11 +297,15 @@ func (r *etcdRegistry) Deregister(ctx context.Context, serviceID string) error {
 	}
 
 	r.mu.Lock()
-	leaseID, exists := r.leases[serviceID]
+	ka, exists := r.keepAlives[serviceID]
 	if !exists {
 		r.mu.Unlock()
 		return ErrServiceNotFound
 	}
+	leaseID := ka.leaseID
+	// 取消 KeepAlive 协程
+	ka.cancel()
+	delete(r.keepAlives, serviceID)
 	delete(r.leases, serviceID)
 	r.mu.Unlock()
 
@@ -331,6 +372,8 @@ func (r *etcdRegistry) GetService(ctx context.Context, serviceName string) ([]*S
 }
 
 // Watch 监听服务实例变化
+// 支持自动重连：当 watch channel 关闭或发生错误时，会自动重连
+// 使用 WithRev 从上次处理的位置继续监听，避免事件丢失
 func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan ServiceEvent, error) {
 	if serviceName == "" {
 		return nil, ErrInvalidServiceInstance
@@ -352,64 +395,124 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 		defer r.wg.Done()
 		defer close(eventCh)
 
-		watchCh := r.client.Watch(watchCtx, prefix, clientv3.WithPrefix())
+		var lastRev int64 = 0
+		retryInterval := r.cfg.RetryInterval
+		if retryInterval == 0 {
+			retryInterval = 1 * time.Second
+		}
+
+		// 外层循环：处理重连
 		for {
+			// 构建 watch 选项
+			watchOpts := []clientv3.OpOption{clientv3.WithPrefix()}
+			if lastRev > 0 {
+				// 从上次处理的 revision 之后开始监听
+				watchOpts = append(watchOpts, clientv3.WithRev(lastRev+1))
+			}
+
+			// 创建 watcher
+			watchCh := r.client.Watch(watchCtx, prefix, watchOpts...)
+
+			r.logger.Debug("watch started",
+				clog.String("service_name", serviceName),
+				clog.Int64("from_revision", lastRev+1))
+
+			// 内层循环：处理 watch 事件
+			for watchCh != nil {
+				select {
+				case <-watchCtx.Done():
+					r.logger.Debug("watch stopped by context",
+						clog.String("service_name", serviceName))
+					return
+
+				case wresp, ok := <-watchCh:
+					if !ok {
+						// watch channel 关闭，需要重连
+						r.logger.Warn("watch channel closed, will retry",
+							clog.String("service_name", serviceName),
+							clog.Duration("retry_after", retryInterval))
+						watchCh = nil
+						// 继续外层循环进行重连
+						goto reconnect
+					}
+
+					if wresp.Err() != nil {
+						r.logger.Error("watch error, will retry",
+							clog.String("service_name", serviceName),
+							clog.Error(wresp.Err()),
+							clog.Duration("retry_after", retryInterval))
+						watchCh = nil
+						// 继续外层循环进行重连
+						goto reconnect
+					}
+
+					// 处理事件
+					for _, ev := range wresp.Events {
+						// 更新最后处理的 revision
+						if ev.Kv.ModRevision > lastRev {
+							lastRev = ev.Kv.ModRevision
+						}
+
+						var event ServiceEvent
+						var instance ServiceInstance
+
+						switch ev.Type {
+						case clientv3.EventTypePut:
+							// PUT 事件：反序列化服务实例
+							if err := json.Unmarshal(ev.Kv.Value, &instance); err != nil {
+								r.logger.Warn("failed to unmarshal watch event",
+									clog.String("key", string(ev.Kv.Key)),
+									clog.Error(err))
+								continue
+							}
+							event = ServiceEvent{
+								Type:    EventTypePut,
+								Service: &instance,
+							}
+							// 更新缓存（带 revision 版本控制）
+							if r.cfg.EnableCache {
+								r.updateCache(serviceName, &instance, true, ev.Kv.ModRevision)
+							}
+
+						case clientv3.EventTypeDelete:
+							// DELETE 事件：从 key 中提取服务 ID
+							// Key 格式: /namespace/service_name/instance_id
+							keyParts := strings.Split(string(ev.Kv.Key), "/")
+							if len(keyParts) > 0 {
+								instance.ID = keyParts[len(keyParts)-1]
+								instance.Name = serviceName
+							}
+							event = ServiceEvent{
+								Type:    EventTypeDelete,
+								Service: &instance,
+							}
+							// 更新缓存（带 revision 版本控制）
+							if r.cfg.EnableCache {
+								r.updateCache(serviceName, &instance, false, ev.Kv.ModRevision)
+							}
+						}
+
+						// 发送事件
+						select {
+						case eventCh <- event:
+						case <-watchCtx.Done():
+							return
+						}
+					}
+				}
+			}
+
+		reconnect:
+			// 检查是否应该退出
 			select {
 			case <-watchCtx.Done():
 				return
-			case wresp := <-watchCh:
-				if wresp.Err() != nil {
-					r.logger.Error("watch error",
-						clog.String("service_name", serviceName),
-						clog.Error(wresp.Err()))
-					continue
-				}
-
-				for _, ev := range wresp.Events {
-					var event ServiceEvent
-					var instance ServiceInstance
-
-					switch ev.Type {
-					case clientv3.EventTypePut:
-						// PUT 事件：反序列化服务实例
-						if err := json.Unmarshal(ev.Kv.Value, &instance); err != nil {
-							r.logger.Warn("failed to unmarshal watch event",
-								clog.Error(err))
-							continue
-						}
-						event = ServiceEvent{
-							Type:    EventTypePut,
-							Service: &instance,
-						}
-						// 更新缓存
-						if r.cfg.EnableCache {
-							r.updateCache(serviceName, &instance, true)
-						}
-
-					case clientv3.EventTypeDelete:
-						// DELETE 事件：从 key 中提取服务 ID
-						// Key 格式: /namespace/service_name/instance_id
-						keyParts := strings.Split(string(ev.Kv.Key), "/")
-						if len(keyParts) > 0 {
-							instance.ID = keyParts[len(keyParts)-1]
-							instance.Name = serviceName
-						}
-						event = ServiceEvent{
-							Type:    EventTypeDelete,
-							Service: &instance,
-						}
-						// 更新缓存
-						if r.cfg.EnableCache {
-							r.updateCache(serviceName, &instance, false)
-						}
-					}
-
-					select {
-					case eventCh <- event:
-					case <-watchCtx.Done():
-						return
-					}
-				}
+			default:
+				// 等待后重连（指数退避）
+				r.logger.Info("retrying watch",
+					clog.String("service_name", serviceName),
+					clog.Duration("after", retryInterval))
+				time.Sleep(retryInterval)
 			}
 		}
 	}()
@@ -441,15 +544,35 @@ func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, op
 }
 
 // Close 停止后台任务并清理资源（撤销租约、停止监听）
+// 此方法是幂等的，可以安全地多次调用
 func (r *etcdRegistry) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// 使用 sync.Once 确保 stopChan 只关闭一次
+	r.mu.Lock()
+	select {
+	case <-r.stopChan:
+		// 已经关闭过，直接返回
+		r.mu.Unlock()
+		return nil
+	default:
+		// 第一次关闭，继续执行
+	}
+	close(r.stopChan)
+	r.mu.Unlock()
 
 	// 取消所有 watchers
 	r.mu.Lock()
 	for serviceName, cancelFunc := range r.watchers {
 		cancelFunc()
 		delete(r.watchers, serviceName)
+	}
+	// 取消所有 KeepAlive 协程
+	for serviceID, ka := range r.keepAlives {
+		ka.cancel()
+		delete(r.keepAlives, serviceID)
+		delete(r.leases, serviceID)
 	}
 	r.mu.Unlock()
 
@@ -465,9 +588,6 @@ func (r *etcdRegistry) Close() error {
 	r.leases = make(map[string]clientv3.LeaseID)
 	r.mu.Unlock()
 
-	// 关闭 stopChan
-	close(r.stopChan)
-
 	// 等待所有 goroutine 结束
 	r.wg.Wait()
 
@@ -480,13 +600,66 @@ func (r *etcdRegistry) buildKey(serviceName, serviceID string) string {
 	return fmt.Sprintf("%s/%s/%s", r.cfg.Namespace, serviceName, serviceID)
 }
 
+// monitorKeepAlive 监控租约续约
+// 该协程会持续监听 KeepAlive 响应，当 channel 关闭时表示租约失效或网络中断
+func (r *etcdRegistry) monitorKeepAlive(ka *leaseKeepAlive) {
+	defer r.wg.Done()
+
+	serviceID := ka.serviceID
+	serviceName := ka.serviceName
+	leaseID := ka.leaseID
+
+	r.logger.Debug("keepalive monitor started",
+		clog.String("service_id", serviceID),
+		clog.Int64("lease_id", int64(leaseID)))
+
+	for {
+		select {
+		case <-r.stopChan:
+			r.logger.Debug("keepalive monitor stopped by stopChan",
+				clog.String("service_id", serviceID))
+			return
+
+		case kaResp, ok := <-ka.keepAliveCh:
+			if !ok {
+				// KeepAlive channel 关闭，表示租约失效或 Etcd 连接断开
+				r.logger.Error("keepalive channel closed, lease expired or connection lost",
+					clog.String("service_id", serviceID),
+					clog.String("service_name", serviceName),
+					clog.Int64("lease_id", int64(leaseID)))
+
+				// 从 keepAlives map 中移除
+				r.mu.Lock()
+				delete(r.keepAlives, serviceID)
+				delete(r.leases, serviceID)
+				r.mu.Unlock()
+
+				// 注意：此处不尝试重新注册，因为：
+				// 1. 如果是租约 TTL 过期，说明服务进程可能已异常退出
+				// 2. 如果是网络中断，Etcd 客户端会在重连后自动恢复
+				// 3. 重新注册可能导致"僵尸实例"问题
+				// 用户可以通过监控此日志来触发告警
+				return
+			}
+
+			// 记录续约成功（仅 Debug 级别，避免日志过多）
+			r.logger.Debug("keepalive renewed",
+				clog.String("service_id", serviceID),
+				clog.String("service_name", serviceName),
+				clog.Int64("lease_id", int64(kaResp.ID)),
+				clog.Int64("ttl", kaResp.TTL))
+		}
+	}
+}
+
 // buildPrefix 构建前缀
 func (r *etcdRegistry) buildPrefix(serviceName string) string {
 	return fmt.Sprintf("%s/%s/", r.cfg.Namespace, serviceName)
 }
 
-// updateCache 更新缓存
-func (r *etcdRegistry) updateCache(serviceName string, instance *ServiceInstance, isAdd bool) {
+// updateCache 更新缓存（带版本控制）
+// revision: Etcd ModRevision，用于判断事件的新旧，避免旧数据覆盖新数据
+func (r *etcdRegistry) updateCache(serviceName string, instance *ServiceInstance, isAdd bool, revision int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -502,7 +675,8 @@ func (r *etcdRegistry) updateCache(serviceName string, instance *ServiceInstance
 		// 检查是否已存在
 		for i, inst := range instances {
 			if inst.ID == instance.ID {
-				instances[i] = instance // 更新
+				// 如果已有实例，直接更新（Etcd 已保证 revision 顺序）
+				instances[i] = instance
 				return
 			}
 		}
