@@ -46,6 +46,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
+	"github.com/twmb/franz-go/pkg/kgo"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"gorm.io/gorm"
 )
@@ -99,4 +100,10 @@ type EtcdConnector interface {
 // NATSConnector NATS 连接器接口
 type NATSConnector interface {
 	TypedConnector[*nats.Conn]
+}
+
+// KafkaConnector Kafka 连接器接口
+type KafkaConnector interface {
+	TypedConnector[*kgo.Client]
+	Config() *KafkaConfig
 }

@@ -70,6 +70,7 @@ func main() {
 | **MySQL** | `MySQLConnector` | `*gorm.DB`         | `NewMySQL` |
 | **Etcd**  | `EtcdConnector`  | `*clientv3.Client` | `NewEtcd`  |
 | **NATS**  | `NATSConnector`  | `*nats.Conn`       | `NewNATS`  |
+| **Kafka** | `KafkaConnector` | `*kgo.Client`      | `NewKafka` |
 
 ## 5. 资源所有权模型
 

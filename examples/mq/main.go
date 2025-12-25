@@ -36,10 +36,13 @@ func main() {
 	// 2. 演示：广播订阅 (Subscribe)
 	demoSubscribe(mqClient)
 
-	// 3. 演示：队列订阅 (QueueSubscribe)
+	// 3. 演示：队列订阅 (Subscribe with QueueGroup)
 	demoQueueSubscribe(mqClient)
 
-	// 4. 演示：发布消息
+	// 4. 演示：Channel 模式订阅
+	demoSubscribeChan(mqClient)
+
+	// 5. 演示：发布消息
 	demoPublish(mqClient)
 
 	// 等待消息处理完成
@@ -77,21 +80,24 @@ func initMQClient(mode string) (mq.Client, connector.NATSConnector) {
 	}
 
 	// 根据 mode 选择驱动类型
-	driver := mq.DriverNatsJetStream
-	jetStreamConfig := &mq.JetStreamConfig{
-		AutoCreateStream: true,
-	}
+	var driver mq.Driver
 
 	if mode == "core" {
-		driver = mq.DriverNatsCore
-		jetStreamConfig = nil // Core 模式不需要 JetStream 配置
+		driver = mq.NewNatsCoreDriver(natsConn, logger)
+	} else {
+		// JetStream 模式
+		jetStreamConfig := &mq.JetStreamConfig{
+			AutoCreateStream: true,
+		}
+		driver, err = mq.NewNatsJetStreamDriver(natsConn, jetStreamConfig, logger)
+		if err != nil {
+			panic(fmt.Sprintf("failed to create NATS JetStream driver: %v", err))
+		}
 	}
 
 	// 创建 MQ 客户端
-	mqClient, err := mq.New(natsConn, &mq.Config{
-		Driver:    driver,
-		JetStream: jetStreamConfig,
-	}, mq.WithLogger(logger))
+	// 注意：现在 New 接受 Driver 接口，而不是 Connector
+	mqClient, err := mq.New(driver, mq.WithLogger(logger))
 	if err != nil {
 		panic(fmt.Sprintf("failed to create MQ client: %v", err))
 	}
@@ -119,7 +125,7 @@ func demoSubscribe(mqClient mq.Client) {
 }
 
 func demoQueueSubscribe(mqClient mq.Client) {
-	fmt.Println("\n--- 3. Demo: QueueSubscribe (Load Balanced) ---")
+	fmt.Println("\n--- 3. Demo: Subscribe (Load Balanced with QueueGroup) ---")
 	ctx := context.Background()
 
 	// 模拟两个 Worker 订阅同一个队列组 "order_processors"
@@ -129,14 +135,16 @@ func demoQueueSubscribe(mqClient mq.Client) {
 
 	for i := 1; i <= 2; i++ {
 		workerID := i
-		_, err := mqClient.QueueSubscribe(ctx, "orders.created", "order_processors", func(ctx context.Context, msg mq.Message) error {
+		// 使用 WithQueueGroup 选项替代原来的 QueueSubscribe 方法
+		_, err := mqClient.Subscribe(ctx, "orders.created", func(ctx context.Context, msg mq.Message) error {
 			var order Order
 			if err := json.Unmarshal(msg.Data(), &order); err != nil {
 				return err
 			}
 			fmt.Printf("[Worker %d] Processing order: %s, Amount: %.2f\n", workerID, order.ID, order.Amount)
 			return nil // 自动 Ack
-		})
+		}, mq.WithQueueGroup("order_processors"))
+
 		if err != nil {
 			fmt.Printf("Worker %d subscribe failed: %v\n", workerID, err)
 		} else {
@@ -145,8 +153,39 @@ func demoQueueSubscribe(mqClient mq.Client) {
 	}
 }
 
+func demoSubscribeChan(mqClient mq.Client) {
+	fmt.Println("\n--- 4. Demo: SubscribeChan ---")
+	ctx := context.Background()
+
+	// 使用 Channel 模式订阅
+	ch, sub, err := mqClient.SubscribeChan(ctx, "orders.created", mq.WithBufferSize(10))
+	if err != nil {
+		fmt.Printf("SubscribeChan failed: %v\n", err)
+		return
+	}
+
+	// 启动一个 goroutine 来处理消息
+	go func() {
+		defer sub.Unsubscribe()
+		fmt.Println("[ChanListener] Listening for messages...")
+
+		// 简单起见，这里只处理 2 个消息然后退出
+		count := 0
+		for msg := range ch {
+			fmt.Printf("[ChanListener] Received via channel: %s\n", string(msg.Data()))
+			msg.Ack()
+
+			count++
+			if count >= 2 {
+				break
+			}
+		}
+		fmt.Println("[ChanListener] Stopped listening")
+	}()
+}
+
 func demoPublish(mqClient mq.Client) {
-	fmt.Println("\n--- 4. Demo: Publish ---")
+	fmt.Println("\n--- 5. Demo: Publish ---")
 	ctx := context.Background()
 
 	// 发送 5 个订单消息
@@ -163,5 +202,6 @@ func demoPublish(mqClient mq.Client) {
 		} else {
 			fmt.Printf("Published order: %s\n", order.ID)
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
