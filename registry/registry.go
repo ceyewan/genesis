@@ -372,6 +372,8 @@ func (r *etcdRegistry) GetService(ctx context.Context, serviceName string) ([]*S
 }
 
 // Watch 监听服务实例变化
+// 支持自动重连：当 watch channel 关闭或发生错误时，会自动重连
+// 使用 WithRev 从上次处理的位置继续监听，避免事件丢失
 func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan ServiceEvent, error) {
 	if serviceName == "" {
 		return nil, ErrInvalidServiceInstance
@@ -393,64 +395,124 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 		defer r.wg.Done()
 		defer close(eventCh)
 
-		watchCh := r.client.Watch(watchCtx, prefix, clientv3.WithPrefix())
+		var lastRev int64 = 0
+		retryInterval := r.cfg.RetryInterval
+		if retryInterval == 0 {
+			retryInterval = 1 * time.Second
+		}
+
+		// 外层循环：处理重连
 		for {
+			// 构建 watch 选项
+			watchOpts := []clientv3.OpOption{clientv3.WithPrefix()}
+			if lastRev > 0 {
+				// 从上次处理的 revision 之后开始监听
+				watchOpts = append(watchOpts, clientv3.WithRev(lastRev+1))
+			}
+
+			// 创建 watcher
+			watchCh := r.client.Watch(watchCtx, prefix, watchOpts...)
+
+			r.logger.Debug("watch started",
+				clog.String("service_name", serviceName),
+				clog.Int64("from_revision", lastRev+1))
+
+			// 内层循环：处理 watch 事件
+			for watchCh != nil {
+				select {
+				case <-watchCtx.Done():
+					r.logger.Debug("watch stopped by context",
+						clog.String("service_name", serviceName))
+					return
+
+				case wresp, ok := <-watchCh:
+					if !ok {
+						// watch channel 关闭，需要重连
+						r.logger.Warn("watch channel closed, will retry",
+							clog.String("service_name", serviceName),
+							clog.Duration("retry_after", retryInterval))
+						watchCh = nil
+						// 继续外层循环进行重连
+						goto reconnect
+					}
+
+					if wresp.Err() != nil {
+						r.logger.Error("watch error, will retry",
+							clog.String("service_name", serviceName),
+							clog.Error(wresp.Err()),
+							clog.Duration("retry_after", retryInterval))
+						watchCh = nil
+						// 继续外层循环进行重连
+						goto reconnect
+					}
+
+					// 处理事件
+					for _, ev := range wresp.Events {
+						// 更新最后处理的 revision
+						if ev.Kv.ModRevision > lastRev {
+							lastRev = ev.Kv.ModRevision
+						}
+
+						var event ServiceEvent
+						var instance ServiceInstance
+
+						switch ev.Type {
+						case clientv3.EventTypePut:
+							// PUT 事件：反序列化服务实例
+							if err := json.Unmarshal(ev.Kv.Value, &instance); err != nil {
+								r.logger.Warn("failed to unmarshal watch event",
+									clog.String("key", string(ev.Kv.Key)),
+									clog.Error(err))
+								continue
+							}
+							event = ServiceEvent{
+								Type:    EventTypePut,
+								Service: &instance,
+							}
+							// 更新缓存
+							if r.cfg.EnableCache {
+								r.updateCache(serviceName, &instance, true)
+							}
+
+						case clientv3.EventTypeDelete:
+							// DELETE 事件：从 key 中提取服务 ID
+							// Key 格式: /namespace/service_name/instance_id
+							keyParts := strings.Split(string(ev.Kv.Key), "/")
+							if len(keyParts) > 0 {
+								instance.ID = keyParts[len(keyParts)-1]
+								instance.Name = serviceName
+							}
+							event = ServiceEvent{
+								Type:    EventTypeDelete,
+								Service: &instance,
+							}
+							// 更新缓存
+							if r.cfg.EnableCache {
+								r.updateCache(serviceName, &instance, false)
+							}
+						}
+
+						// 发送事件
+						select {
+						case eventCh <- event:
+						case <-watchCtx.Done():
+							return
+						}
+					}
+				}
+			}
+
+		reconnect:
+			// 检查是否应该退出
 			select {
 			case <-watchCtx.Done():
 				return
-			case wresp := <-watchCh:
-				if wresp.Err() != nil {
-					r.logger.Error("watch error",
-						clog.String("service_name", serviceName),
-						clog.Error(wresp.Err()))
-					continue
-				}
-
-				for _, ev := range wresp.Events {
-					var event ServiceEvent
-					var instance ServiceInstance
-
-					switch ev.Type {
-					case clientv3.EventTypePut:
-						// PUT 事件：反序列化服务实例
-						if err := json.Unmarshal(ev.Kv.Value, &instance); err != nil {
-							r.logger.Warn("failed to unmarshal watch event",
-								clog.Error(err))
-							continue
-						}
-						event = ServiceEvent{
-							Type:    EventTypePut,
-							Service: &instance,
-						}
-						// 更新缓存
-						if r.cfg.EnableCache {
-							r.updateCache(serviceName, &instance, true)
-						}
-
-					case clientv3.EventTypeDelete:
-						// DELETE 事件：从 key 中提取服务 ID
-						// Key 格式: /namespace/service_name/instance_id
-						keyParts := strings.Split(string(ev.Kv.Key), "/")
-						if len(keyParts) > 0 {
-							instance.ID = keyParts[len(keyParts)-1]
-							instance.Name = serviceName
-						}
-						event = ServiceEvent{
-							Type:    EventTypeDelete,
-							Service: &instance,
-						}
-						// 更新缓存
-						if r.cfg.EnableCache {
-							r.updateCache(serviceName, &instance, false)
-						}
-					}
-
-					select {
-					case eventCh <- event:
-					case <-watchCtx.Done():
-						return
-					}
-				}
+			default:
+				// 等待后重连（指数退避）
+				r.logger.Info("retrying watch",
+					clog.String("service_name", serviceName),
+					clog.Duration("after", retryInterval))
+				time.Sleep(retryInterval)
 			}
 		}
 	}()
