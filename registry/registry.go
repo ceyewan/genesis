@@ -544,9 +544,23 @@ func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, op
 }
 
 // Close 停止后台任务并清理资源（撤销租约、停止监听）
+// 此方法是幂等的，可以安全地多次调用
 func (r *etcdRegistry) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// 使用 sync.Once 确保 stopChan 只关闭一次
+	r.mu.Lock()
+	select {
+	case <-r.stopChan:
+		// 已经关闭过，直接返回
+		r.mu.Unlock()
+		return nil
+	default:
+		// 第一次关闭，继续执行
+	}
+	close(r.stopChan)
+	r.mu.Unlock()
 
 	// 取消所有 watchers
 	r.mu.Lock()
@@ -573,9 +587,6 @@ func (r *etcdRegistry) Close() error {
 	}
 	r.leases = make(map[string]clientv3.LeaseID)
 	r.mu.Unlock()
-
-	// 关闭 stopChan
-	close(r.stopChan)
 
 	// 等待所有 goroutine 结束
 	r.wg.Wait()
