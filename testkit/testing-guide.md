@@ -84,9 +84,24 @@ func TestRedisCache(t *testing.T) {
 支持的服务：
 -   `testkit.GetRedisClient(t)` / `testkit.GetRedisConnector(t)`
 -   `testkit.GetMySQLDB(t)` / `testkit.GetMySQLConnector(t)`
+-   `testkit.GetSQLiteDB(t)` / `testkit.GetSQLiteConnector(t)` - SQLite 内存或文件数据库
 -   `testkit.GetEtcdClient(t)` / `testkit.GetEtcdConnector(t)`
 -   `testkit.GetNATSConn(t)` / `testkit.GetNATSConnector(t)`
 -   `testkit.GetKafkaClient(t)` / `testkit.GetKafkaConnector(t)`
+
+### 3.5 SQLite 测试支持
+
+SQLite 是嵌入式数据库，无需外部服务，适合快速测试：
+
+```go
+// 使用内存数据库（测试结束自动清理）
+sqliteDB := testkit.GetSQLiteDB(t)
+
+// 或使用持久化文件（存储在临时目录）
+cfg := testkit.GetPersistentSQLiteConfig(t)
+conn := testkit.GetPersistentSQLiteConnector(t)
+// 数据库文件存储在 t.TempDir()，测试结束后自动删除
+```
 
 ### 3.3 Mock 依赖与代码复用
 
