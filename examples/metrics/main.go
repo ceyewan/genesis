@@ -16,13 +16,7 @@ func main() {
 	ctx := context.Background()
 
 	// 1. 创建 Metrics 配置
-	cfg := &metrics.Config{
-		Enabled:     true,
-		ServiceName: "gin-demo",
-		Version:     "v1.0.0",
-		Port:        9090,
-		Path:        "/metrics",
-	}
+	cfg := metrics.NewDevDefaultConfig("gin-demo")
 
 	// 2. 初始化 Metrics
 	meter, err := metrics.New(cfg)

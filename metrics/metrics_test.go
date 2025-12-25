@@ -23,17 +23,8 @@ func TestNew(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "disabled config",
+			name: "minimal config",
 			cfg: &Config{
-				Enabled: false,
-			},
-			opts:    nil,
-			wantErr: false,
-		},
-		{
-			name: "enabled config with minimal settings",
-			cfg: &Config{
-				Enabled:     true,
 				ServiceName: "test-service",
 				Version:     "v1.0.0",
 			},
@@ -41,9 +32,8 @@ func TestNew(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "enabled config with full settings",
+			name: "full config",
 			cfg: &Config{
-				Enabled:     true,
 				ServiceName: "test-service",
 				Version:     "v1.0.0",
 				Port:        9091,
@@ -55,7 +45,6 @@ func TestNew(t *testing.T) {
 		{
 			name: "with logger option",
 			cfg: &Config{
-				Enabled:     true,
 				ServiceName: "test-service",
 				Version:     "v1.0.0",
 			},
@@ -93,48 +82,43 @@ func TestNew(t *testing.T) {
 	}
 }
 
-// TestMust 测试 Must 函数
-func TestMust(t *testing.T) {
-	// 正常情况应该不 panic
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("Must() panicked unexpectedly: %v", r)
-		}
-	}()
-
-	cfg := &Config{
-		Enabled:     true,
-		ServiceName: "test-service",
-		Version:     "v1.0.0",
-	}
-
-	meter := Must(cfg)
+// TestDiscard 测试 Discard 函数
+func TestDiscard(t *testing.T) {
+	meter := Discard()
 	if meter == nil {
-		t.Error("Must() returned nil meter")
+		t.Fatal("Discard() returned nil")
 	}
 
-	// 清理
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	meter.Shutdown(ctx)
-}
+	ctx := context.Background()
 
-// TestMustPanic 测试 Must 在错误时 panic
-func TestMustPanic(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Must() should have panicked")
-		}
-	}()
+	// 所有操作都应该正常但不产生任何效果
+	counter, err := meter.Counter("test", "test")
+	if err != nil {
+		t.Errorf("Counter() error = %v", err)
+	}
+	counter.Inc(ctx)
 
-	// 使用 nil config，应该导致错误并 panic
-	Must(nil)
+	gauge, err := meter.Gauge("test", "test")
+	if err != nil {
+		t.Errorf("Gauge() error = %v", err)
+	}
+	gauge.Set(ctx, 100)
+
+	histogram, err := meter.Histogram("test", "test")
+	if err != nil {
+		t.Errorf("Histogram() error = %v", err)
+	}
+	histogram.Record(ctx, 0.123)
+
+	// Shutdown 应该成功
+	if err := meter.Shutdown(ctx); err != nil {
+		t.Errorf("Shutdown() error = %v", err)
+	}
 }
 
 // TestMeterInterface 测试 Meter 接口的完整实现
 func TestMeterInterface(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
 		ServiceName: "test-service",
 		Version:     "v1.0.0",
 	}
@@ -196,56 +180,9 @@ func TestMeterInterface(t *testing.T) {
 	histogram.Record(ctx, 0.456, L("endpoint", "/api/orders"))
 }
 
-// TestDisabledMeter 测试禁用状态下的 Meter
-func TestDisabledMeter(t *testing.T) {
-	cfg := &Config{
-		Enabled: false,
-	}
-
-	meter, err := New(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create disabled meter: %v", err)
-	}
-
-	ctx := context.Background()
-
-	// 所有指标创建都应该成功但返回 noop 实现
-	counter, err := meter.Counter("test_counter", "测试计数器")
-	if err != nil {
-		t.Errorf("Counter() on disabled meter should not error: %v", err)
-	}
-	if counter == nil {
-		t.Error("Counter() should not return nil even on disabled meter")
-	}
-
-	gauge, err := meter.Gauge("test_gauge", "测试仪表盘")
-	if err != nil {
-		t.Errorf("Gauge() on disabled meter should not error: %v", err)
-	}
-
-	histogram, err := meter.Histogram("test_histogram", "测试直方图")
-	if err != nil {
-		t.Errorf("Histogram() on disabled meter should not error: %v", err)
-	}
-
-	// noop 操作应该不会 panic
-	counter.Inc(ctx, L("status", "success"))
-	counter.Add(ctx, 5, L("method", "POST"))
-	gauge.Set(ctx, 100.5, L("type", "memory"))
-	gauge.Inc(ctx, L("node", "worker1"))
-	gauge.Dec(ctx, L("node", "worker1"))
-	histogram.Record(ctx, 0.123, L("endpoint", "/api/users"))
-
-	// Shutdown 应该成功
-	if err := meter.Shutdown(ctx); err != nil {
-		t.Errorf("Shutdown() on disabled meter should not error: %v", err)
-	}
-}
-
 // TestMetricOptions 测试指标选项
 func TestMetricOptions(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
 		ServiceName: "test-service",
 		Version:     "v1.0.0",
 	}
@@ -293,7 +230,6 @@ func TestMetricOptions(t *testing.T) {
 // TestWithLogger 测试 WithLogger 选项
 func TestWithLogger(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
 		ServiceName: "test-service",
 		Version:     "v1.0.0",
 	}
@@ -321,7 +257,6 @@ func TestWithLogger(t *testing.T) {
 // TestWithLoggerNil 测试传入 nil logger
 func TestWithLoggerNil(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
 		ServiceName: "test-service",
 		Version:     "v1.0.0",
 	}
@@ -342,4 +277,48 @@ func TestWithLoggerNil(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	meter.Shutdown(ctx)
+}
+
+// TestDefaultConfigs 测试默认配置工厂
+func TestDefaultConfigs(t *testing.T) {
+	// 测试开发环境默认配置
+	devCfg := NewDevDefaultConfig("test-service")
+	if devCfg.ServiceName != "test-service" {
+		t.Errorf("ServiceName = %v, want test-service", devCfg.ServiceName)
+	}
+	if devCfg.Version != "dev" {
+		t.Errorf("Version = %v, want dev", devCfg.Version)
+	}
+	if devCfg.Port != 9090 {
+		t.Errorf("Port = %v, want 9090", devCfg.Port)
+	}
+	if devCfg.Path != "/metrics" {
+		t.Errorf("Path = %v, want /metrics", devCfg.Path)
+	}
+
+	// 测试生产环境默认配置
+	prodCfg := NewProdDefaultConfig("prod-service", "v1.2.3")
+	if prodCfg.ServiceName != "prod-service" {
+		t.Errorf("ServiceName = %v, want prod-service", prodCfg.ServiceName)
+	}
+	if prodCfg.Version != "v1.2.3" {
+		t.Errorf("Version = %v, want v1.2.3", prodCfg.Version)
+	}
+	if prodCfg.Port != 9090 {
+		t.Errorf("Port = %v, want 9090", prodCfg.Port)
+	}
+	if prodCfg.Path != "/metrics" {
+		t.Errorf("Path = %v, want /metrics", prodCfg.Path)
+	}
+
+	// 验证配置可以正常创建 Meter
+	meter, err := New(devCfg)
+	if err != nil {
+		t.Errorf("New() with dev config error = %v", err)
+	}
+	if meter != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		meter.Shutdown(ctx)
+	}
 }

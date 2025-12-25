@@ -202,7 +202,6 @@ func initLogger() clog.Logger {
 
 func initMetrics(_ context.Context, logger clog.Logger) metrics.Meter {
 	m, err := metrics.New(&metrics.Config{
-		Enabled:     true,
 		ServiceName: "connector-example",
 		Version:     "1.0.0",
 		Port:        9092,

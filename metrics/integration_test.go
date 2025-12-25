@@ -10,7 +10,6 @@ import (
 func TestPrometheusIntegration(t *testing.T) {
 	// 使用测试端口避免冲突
 	cfg := &Config{
-		Enabled:     true,
 		ServiceName: "test-service",
 		Version:     "v1.0.0",
 		Port:        0, // 让系统选择可用端口
@@ -68,7 +67,6 @@ func TestPrometheusIntegration(t *testing.T) {
 // TestConcurrentMetricOperations 测试并发指标操作
 func TestConcurrentMetricOperations(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
 		ServiceName: "test-service",
 		Version:     "v1.0.0",
 	}
@@ -136,7 +134,6 @@ func TestConcurrentMetricOperations(t *testing.T) {
 // TestMetricsWithDifferentLabels 测试不同标签组合的指标
 func TestMetricsWithDifferentLabels(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
 		ServiceName: "test-service",
 		Version:     "v1.0.0",
 	}
@@ -203,7 +200,6 @@ func TestMetricsWithDifferentLabels(t *testing.T) {
 // TestMeterShutdown 测试 Meter 关闭
 func TestMeterShutdown(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
 		ServiceName: "test-service",
 		Version:     "v1.0.0",
 	}
@@ -235,23 +231,16 @@ func TestMeterShutdown(t *testing.T) {
 	}
 }
 
-// TestDisabledMeterIntegration 测试禁用状态的集成
-func TestDisabledMeterIntegration(t *testing.T) {
-	cfg := &Config{
-		Enabled: false,
-	}
-
-	meter, err := New(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create disabled meter: %v", err)
-	}
+// TestDiscardIntegration 测试 Discard 的集成
+func TestDiscardIntegration(t *testing.T) {
+	meter := Discard()
 
 	ctx := context.Background()
 
 	// 创建指标应该成功
 	counter, err := meter.Counter("test_counter", "测试计数器")
 	if err != nil {
-		t.Fatalf("Failed to create counter on disabled meter: %v", err)
+		t.Fatalf("Failed to create counter on discard meter: %v", err)
 	}
 
 	// 操作指标应该不会 panic
@@ -265,6 +254,6 @@ func TestDisabledMeterIntegration(t *testing.T) {
 	defer cancel()
 
 	if err := meter.Shutdown(shutdownCtx); err != nil {
-		t.Errorf("Shutdown() on disabled meter should not error: %v", err)
+		t.Errorf("Shutdown() on discard meter should not error: %v", err)
 	}
 }
