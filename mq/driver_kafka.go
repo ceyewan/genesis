@@ -28,10 +28,16 @@ func NewKafkaDriver(conn connector.KafkaConnector, logger clog.Logger) *KafkaDri
 }
 
 func (d *KafkaDriver) Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error {
+	var o publishOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	// 使用 Connector 的共享 Client 发送消息
 	record := &kgo.Record{
 		Topic: subject,
 		Value: data,
+		Key:   []byte(o.Key),
 	}
 
 	// 同步发送
@@ -56,6 +62,7 @@ func (d *KafkaDriver) Subscribe(ctx context.Context, subject string, handler Han
 		kgo.SeedBrokers(connCfg.Seed...),
 		kgo.ConsumeTopics(subject),
 		kgo.WithLogger(&kgoLogger{logger: d.logger}),
+		kgo.AllowAutoTopicCreation(),
 	}
 
 	// 认证配置
@@ -123,7 +130,11 @@ func (d *KafkaDriver) Subscribe(ctx context.Context, subject string, handler Han
 
 				if o.AutoAck {
 					if err == nil {
-						msg.Ack()
+						if o.AsyncAck {
+							go func() { _ = msg.Ack() }()
+						} else {
+							_ = msg.Ack()
+						}
 					}
 				}
 			}

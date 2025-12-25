@@ -122,6 +122,18 @@ client.Subscribe(ctx, "topic", handler,
     mq.WithQueueGroup("group1"), // 负载均衡组
     mq.WithManualAck(),          // 关闭自动 Ack
     mq.WithDurable("durable1"),  // 持久化订阅名 (JetStream/Redis)
+    mq.WithBatchSize(50),        // 批量拉取大小 (Kafka/Redis)
+    mq.WithMaxInflight(100),     // 最大在途消息数 (JetStream)
+    mq.WithAsyncAck(),           // 开启异步确认 (提升吞吐)
+    mq.WithDeadLetter(3, "dlq"), // 设置死信队列 (3次失败后转发到 dlq)
+)
+```
+
+### 发布选项
+
+```go
+client.Publish(ctx, "topic", data,
+    mq.WithKey("user_123"),      // 消息 Key (用于 Kafka 分区路由)
 )
 ```
 

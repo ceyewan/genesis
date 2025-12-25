@@ -76,7 +76,7 @@ func (d *RedisDriver) Subscribe(ctx context.Context, subject string, handler Han
 						Group:    group,
 						Consumer: consumer,
 						Streams:  []string{subject, ">"},
-						Count:    10,
+						Count:    int64(o.BatchSize),
 						Block:    2 * time.Second,
 					}).Result()
 
@@ -90,7 +90,7 @@ func (d *RedisDriver) Subscribe(ctx context.Context, subject string, handler Han
 
 					for _, stream := range streams {
 						for _, msg := range stream.Messages {
-							d.processMsg(subCtx, subject, group, msg, handler, o.AutoAck)
+							d.processMsg(subCtx, subject, group, msg, handler, o)
 						}
 					}
 				}
@@ -109,7 +109,7 @@ func (d *RedisDriver) Subscribe(ctx context.Context, subject string, handler Han
 				default:
 					streams, err := d.client.XRead(subCtx, &redis.XReadArgs{
 						Streams: []string{subject, startID},
-						Count:   10,
+						Count:   int64(o.BatchSize),
 						Block:   2 * time.Second,
 					}).Result()
 
@@ -123,7 +123,7 @@ func (d *RedisDriver) Subscribe(ctx context.Context, subject string, handler Han
 
 					for _, stream := range streams {
 						for _, msg := range stream.Messages {
-							d.processMsg(subCtx, subject, "", msg, handler, o.AutoAck)
+							d.processMsg(subCtx, subject, "", msg, handler, o)
 							startID = msg.ID // 更新 lastID
 						}
 					}
@@ -135,7 +135,7 @@ func (d *RedisDriver) Subscribe(ctx context.Context, subject string, handler Han
 	return sub, nil
 }
 
-func (d *RedisDriver) processMsg(ctx context.Context, subject, group string, rMsg redis.XMessage, handler Handler, autoAck bool) {
+func (d *RedisDriver) processMsg(ctx context.Context, subject, group string, rMsg redis.XMessage, handler Handler, o subscribeOptions) {
 	// 提取 payload
 	dataStr, ok := rMsg.Values["payload"].(string)
 	if !ok {
@@ -155,9 +155,13 @@ func (d *RedisDriver) processMsg(ctx context.Context, subject, group string, rMs
 
 	err := handler(ctx, msg)
 
-	if autoAck {
+	if o.AutoAck {
 		if err == nil {
-			msg.Ack()
+			if o.AsyncAck {
+				msg.AckAsync()
+			} else {
+				_ = msg.Ack()
+			}
 		}
 		// Redis 不支持 Nak 重投 (除非配合 Pending 检查机制)，所以 Nak 仅是应用层语义
 	}
@@ -193,6 +197,14 @@ func (m *redisMessage) Ack() error {
 		return m.client.XAck(context.Background(), m.subject, m.group, m.id).Err()
 	}
 	return nil
+}
+
+func (m *redisMessage) AckAsync() {
+	if m.group != "" {
+		go func() {
+			_ = m.client.XAck(context.Background(), m.subject, m.group, m.id).Err()
+		}()
+	}
 }
 
 func (m *redisMessage) Nak() error {

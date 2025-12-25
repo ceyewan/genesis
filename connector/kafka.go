@@ -57,6 +57,7 @@ func (c *kafkaConnector) Connect(ctx context.Context) error {
 		kgo.SeedBrokers(c.cfg.Seed...),
 		kgo.ClientID(c.cfg.ClientID),
 		kgo.WithLogger(&kgoLogger{logger: c.logger}),
+		kgo.AllowAutoTopicCreation(),
 	}
 
 	// SASL Config

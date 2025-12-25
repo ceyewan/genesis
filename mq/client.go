@@ -2,6 +2,7 @@ package mq
 
 import (
 	"context"
+	"sync"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
@@ -77,7 +78,7 @@ func (c *client) SubscribeChan(ctx context.Context, subject string, opts ...Subs
 	sub, err := c.driver.Subscribe(ctx, subject, handler, opts...)
 	if err != nil {
 		close(ch)
-		return nil, nil, err
+		return ch, nil, err
 	}
 
 	// 封装 Subscription 以在 Unsubscribe 时关闭 Channel
@@ -94,25 +95,15 @@ func (c *client) Close() error {
 // chanSubscription 封装 Subscription，增加关闭 Channel 的能力
 type chanSubscription struct {
 	Subscription
-	ch chan Message
+	ch   chan Message
+	once sync.Once
 }
 
 func (s *chanSubscription) Unsubscribe() error {
 	err := s.Subscription.Unsubscribe()
-	// 关闭 Channel
-	// 注意：防止重复关闭
-	select {
-	case <-s.ch:
-		// 已经关闭? 不太好判断，简单起见直接关闭，依赖 runtime panic 保护或 sync.Once
-		// 更好的做法是使用 sync.Once
-	default:
-		// close(s.ch) // 存在并发风险，如果 Driver 还在写入
-	}
-	// 安全起见，这里不关闭 channel，让 GC 回收，或者由发送端（Handler）处理关闭？
-	// Driver 的 Handler 还在运行吗？ Unsubscribe 后应该停止了。
-	// 但 Unsubscribe 可能是异步的。
-	// 简单的做法是不显式 close ch，或者由用户不再读取 ch。
-	// 但通常库应该 close ch 以通知 range 结束。
-	// 这里暂且不 close，以免 panic。或者加个标志位。
+	// 安全关闭 Channel，确保 range 能够结束
+	s.once.Do(func() {
+		close(s.ch)
+	})
 	return err
 }

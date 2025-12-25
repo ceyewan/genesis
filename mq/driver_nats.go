@@ -71,6 +71,12 @@ type NatsJetStreamDriver struct {
 	logger clog.Logger
 }
 
+// JetStreamConfig JetStream 特有配置
+type JetStreamConfig struct {
+	// 是否自动创建 Stream (如果不存在)
+	AutoCreateStream bool `json:"auto_create_stream" yaml:"auto_create_stream"`
+}
+
 // NewNatsJetStreamDriver 创建 NATS JetStream 驱动
 func NewNatsJetStreamDriver(conn connector.NATSConnector, cfg *JetStreamConfig, logger clog.Logger) (*NatsJetStreamDriver, error) {
 	js, err := jetstream.New(conn.GetClient())
@@ -109,6 +115,10 @@ func (d *NatsJetStreamDriver) Subscribe(ctx context.Context, subject string, han
 		FilterSubject: subject,
 	}
 
+	if o.MaxInflight > 0 {
+		consumerConfig.MaxAckPending = o.MaxInflight
+	}
+
 	// 设置队列组/持久化
 	if o.QueueGroup != "" {
 		consumerConfig.Durable = o.QueueGroup
@@ -136,12 +146,20 @@ func (d *NatsJetStreamDriver) Subscribe(ctx context.Context, subject string, han
 		if o.AutoAck {
 			if err != nil {
 				d.logger.Error("消息处理失败，执行 Nak", clog.String("subject", msg.Subject()), clog.Error(err))
-				if nakErr := msg.Nak(); nakErr != nil {
-					d.logger.Error("Nak 失败", clog.Error(nakErr))
+				if o.AsyncAck {
+					go func() { _ = msg.Nak() }()
+				} else {
+					if nakErr := msg.Nak(); nakErr != nil {
+						d.logger.Error("Nak 失败", clog.Error(nakErr))
+					}
 				}
 			} else {
-				if ackErr := msg.Ack(); ackErr != nil {
-					d.logger.Error("Ack 失败", clog.Error(ackErr))
+				if o.AsyncAck {
+					go func() { _ = msg.Ack() }()
+				} else {
+					if ackErr := msg.Ack(); ackErr != nil {
+						d.logger.Error("Ack 失败", clog.Error(ackErr))
+					}
 				}
 			}
 		}
@@ -160,17 +178,20 @@ func (d *NatsJetStreamDriver) Close() error {
 }
 
 func (d *NatsJetStreamDriver) getStreamName(subject string) string {
-	// TODO: 从配置中获取 Stream 映射
-	return "EVENTS"
+	// 简单实现：将 subject 中的非法字符替换，或直接作为 Stream 名 (NATS Stream 名有限制)
+	// 示例中我们直接使用 subject 作为 Stream 名（假设它符合规范）
+	return "S-" + subject
 }
 
 func (d *NatsJetStreamDriver) ensureStream(ctx context.Context, subject string) error {
 	streamName := d.getStreamName(subject)
 	_, err := d.js.Stream(ctx, streamName)
 	if err == nil {
+		// 检查 subject 是否在 stream 的 subjects 中
 		return nil
 	}
 
+	// 自动创建 Stream，覆盖该 subject
 	_, err = d.js.CreateStream(ctx, jetstream.StreamConfig{
 		Name:     streamName,
 		Subjects: []string{subject},

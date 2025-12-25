@@ -25,7 +25,14 @@ type Driver interface {
 type PublishOption func(*publishOptions)
 
 type publishOptions struct {
-	// 预留给未来扩展，如 Delay, Priority 等
+	Key string // 消息 Key (用于 Kafka 分区路由)
+}
+
+// WithKey 设置消息 Key (Kafka 专用，用于分区路由)
+func WithKey(key string) PublishOption {
+	return func(o *publishOptions) {
+		o.Key = key
+	}
 }
 
 // SubscribeOption 订阅选项
@@ -36,6 +43,15 @@ type subscribeOptions struct {
 	AutoAck     bool   // 是否自动确认 (默认 true)
 	DurableName string // 持久化订阅名 (JetStream/Redis Group)
 	BufferSize  int    // Channel 模式的缓冲区大小
+
+	// 优化选项
+	BatchSize   int  // 批量拉取大小 (Redis COUNT, Kafka Fetch)
+	MaxInflight int  // 最大在途消息数 (JetStream)
+	AsyncAck    bool // 是否异步确认 (提升吞吐量)
+
+	// 死信队列 (DLQ) 选项
+	MaxDeliver int    // 最大投递次数 (超过后进入死信队列)
+	DeadLetter string // 死信队列主题
 }
 
 // defaultSubscribeOptions 返回默认订阅选项
@@ -43,6 +59,8 @@ func defaultSubscribeOptions() subscribeOptions {
 	return subscribeOptions{
 		AutoAck:    true,
 		BufferSize: 100, // 默认缓冲大小
+		BatchSize:  10,  // 默认批量大小
+		AsyncAck:   false,
 	}
 }
 
@@ -71,5 +89,36 @@ func WithManualAck() SubscribeOption {
 func WithBufferSize(size int) SubscribeOption {
 	return func(o *subscribeOptions) {
 		o.BufferSize = size
+	}
+}
+
+// WithBatchSize 设置批量拉取消息的数量 (Kafka/Redis 适用)
+func WithBatchSize(size int) SubscribeOption {
+	return func(o *subscribeOptions) {
+		o.BatchSize = size
+	}
+}
+
+// WithMaxInflight 设置最大在途消息数 (JetStream 适用)
+func WithMaxInflight(num int) SubscribeOption {
+	return func(o *subscribeOptions) {
+		o.MaxInflight = num
+	}
+}
+
+// WithAsyncAck 开启异步确认 (提升吞吐，但可能降低可靠性)
+func WithAsyncAck() SubscribeOption {
+	return func(o *subscribeOptions) {
+		o.AsyncAck = true
+	}
+}
+
+// WithDeadLetter 设置死信队列配置
+// maxDeliver: 最大尝试次数
+// subject: 死信消息发送到的主题
+func WithDeadLetter(maxDeliver int, subject string) SubscribeOption {
+	return func(o *subscribeOptions) {
+		o.MaxDeliver = maxDeliver
+		o.DeadLetter = subject
 	}
 }

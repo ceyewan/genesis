@@ -89,7 +89,66 @@ func TestRedisCache(t *testing.T) {
 -   `testkit.GetNATSConn(t)` / `testkit.GetNATSConnector(t)`
 -   `testkit.GetKafkaClient(t)` / `testkit.GetKafkaConnector(t)`
 
-### 3.5 SQLite 测试支持
+### 3.3 MQ 消息队列测试支持
+
+`testkit` 提供了 MQ 组件的测试辅助函数，支持 NATS、Redis Stream、Kafka 三种驱动：
+
+```go
+// NATS 驱动测试
+natsDriver := testkit.GetNATSMQDriver(t)
+natsClient := testkit.GetNATSMQClient(t)
+
+// Redis Stream 驱动测试
+redisDriver := testkit.GetRedisMQDriver(t)
+redisClient := testkit.GetRedisMQClient(t)
+
+// Kafka 驱动测试
+kafkaDriver := testkit.GetKafkaMQDriver(t)
+kafkaClient := testkit.GetKafkaMQClient(t)
+```
+
+完整的 MQ 测试示例：
+
+```go
+func TestMQPublishSubscribe(t *testing.T) {
+    // 获取 MQ 客户端（自动清理）
+    mqClient := testkit.GetNATSMQClient(t)
+
+    ctx := context.Background()
+    subject := testkit.NewTestSubject("orders")
+
+    // 订阅消息
+    var receivedMsg string
+    var wg sync.WaitGroup
+    wg.Add(1)
+
+    sub, err := mqClient.Subscribe(ctx, subject, func(ctx context.Context, msg mq.Message) error {
+        receivedMsg = string(msg.Data())
+        wg.Done()
+        return nil
+    })
+    require.NoError(t, err)
+    defer sub.Unsubscribe()
+
+    // 发布消息
+    err = mqClient.Publish(ctx, subject, []byte("test message"))
+    require.NoError(t, err)
+
+    // 等待接收
+    wg.Wait()
+    assert.Equal(t, "test message", receivedMsg)
+}
+```
+
+MQ 测试的数据隔离策略：
+
+```go
+// 生成唯一的主题/流名称
+subject := testkit.NewTestSubject("orders")      // test.{timestamp}.orders
+group := testkit.NewTestConsumerGroup("workers") // test-group-{timestamp}-workers
+```
+
+### 3.4 SQLite 测试支持
 
 SQLite 是嵌入式数据库，无需外部服务，适合快速测试：
 
@@ -103,13 +162,13 @@ conn := testkit.GetPersistentSQLiteConnector(t)
 // 数据库文件存储在 t.TempDir()，测试结束后自动删除
 ```
 
-### 3.3 Mock 依赖与代码复用
+### 3.5 Mock 依赖与代码复用
 
 -   **复用原则**：凡是可以复用的测试相关代码（如通用接口的 Mock 实现、辅助断言函数等），**必须** 编写在 `testkit` 包中，严禁在不同组件中重复编写。
 -   **Mock 位置**：将通用的 Mock 结构体放在 `testkit` 下（例如 `testkit/mock_logger.go`）。
 -   **单元测试**：对于特定组件的私有接口，使用 `gomock` 或手写 Mock。
 
-### 3.4 数据隔离策略
+### 3.6 数据隔离策略
 
 为了避免测试间的数据污染和冲突（"脏数据"），请遵循以下隔离策略：
 
