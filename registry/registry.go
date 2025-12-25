@@ -469,9 +469,9 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 								Type:    EventTypePut,
 								Service: &instance,
 							}
-							// 更新缓存
+							// 更新缓存（带 revision 版本控制）
 							if r.cfg.EnableCache {
-								r.updateCache(serviceName, &instance, true)
+								r.updateCache(serviceName, &instance, true, ev.Kv.ModRevision)
 							}
 
 						case clientv3.EventTypeDelete:
@@ -486,9 +486,9 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 								Type:    EventTypeDelete,
 								Service: &instance,
 							}
-							// 更新缓存
+							// 更新缓存（带 revision 版本控制）
 							if r.cfg.EnableCache {
-								r.updateCache(serviceName, &instance, false)
+								r.updateCache(serviceName, &instance, false, ev.Kv.ModRevision)
 							}
 						}
 
@@ -646,8 +646,9 @@ func (r *etcdRegistry) buildPrefix(serviceName string) string {
 	return fmt.Sprintf("%s/%s/", r.cfg.Namespace, serviceName)
 }
 
-// updateCache 更新缓存
-func (r *etcdRegistry) updateCache(serviceName string, instance *ServiceInstance, isAdd bool) {
+// updateCache 更新缓存（带版本控制）
+// revision: Etcd ModRevision，用于判断事件的新旧，避免旧数据覆盖新数据
+func (r *etcdRegistry) updateCache(serviceName string, instance *ServiceInstance, isAdd bool, revision int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -663,7 +664,8 @@ func (r *etcdRegistry) updateCache(serviceName string, instance *ServiceInstance
 		// 检查是否已存在
 		for i, inst := range instances {
 			if inst.ID == instance.ID {
-				instances[i] = instance // 更新
+				// 如果已有实例，直接更新（Etcd 已保证 revision 顺序）
+				instances[i] = instance
 				return
 			}
 		}
