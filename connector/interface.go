@@ -70,6 +70,12 @@ type TypedConnector[T any] interface {
 	GetClient() T
 }
 
+// DatabaseConnector 数据库连接器接口（MySQL 和 SQLite 共用）
+type DatabaseConnector interface {
+	Connector
+	GetClient() *gorm.DB
+}
+
 // RedisConnector Redis 连接器接口
 type RedisConnector interface {
 	TypedConnector[*redis.Client]
@@ -77,7 +83,12 @@ type RedisConnector interface {
 
 // MySQLConnector MySQL 连接器接口
 type MySQLConnector interface {
-	TypedConnector[*gorm.DB]
+	DatabaseConnector
+}
+
+// SQLiteConnector SQLite 连接器接口
+type SQLiteConnector interface {
+	DatabaseConnector
 }
 
 // EtcdConnector Etcd 连接器接口

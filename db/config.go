@@ -24,35 +24,32 @@ type ShardingRule struct {
 	Tables []string `json:"tables" yaml:"tables"`
 }
 
-// SetDefaults 设置配置的默认值
-func (c *Config) SetDefaults() {
+// setDefaults 设置配置的默认值（内部使用）
+func (c *Config) setDefaults() {
 	// DB 组件目前没有需要设置默认值的配置项
-	// 保持此方法以符合 Genesis 组件规范
 }
 
-// Validate 验证配置的有效性
-func (c *Config) Validate() error {
+// validate 验证配置的有效性（内部使用）
+func (c *Config) validate() error {
 	// 如果启用分片，必须有分片规则
 	if c.EnableSharding && len(c.ShardingRules) == 0 {
-		return errors.New("db: sharding is enabled but no rules provided")
+		return errors.New("sharding enabled but no rules provided")
 	}
 
 	// 验证每个分片规则
 	for _, rule := range c.ShardingRules {
 		if rule.ShardingKey == "" {
-			return errors.New("db: sharding rule: sharding key cannot be empty")
+			return errors.New("sharding key cannot be empty")
 		}
 		if rule.NumberOfShards == 0 {
-			return errors.New("db: sharding rule: number of shards must be greater than 0")
+			return errors.New("number of shards must be greater than 0")
 		}
 		if len(rule.Tables) == 0 {
-			return errors.New("db: sharding rule: tables cannot be empty")
+			return errors.New("sharding tables cannot be empty")
 		}
-
-		// 验证表名不为空
 		for _, table := range rule.Tables {
 			if table == "" {
-				return errors.New("db: sharding rule: table name cannot be empty")
+				return errors.New("sharding table name cannot be empty")
 			}
 		}
 	}

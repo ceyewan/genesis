@@ -8,7 +8,8 @@ import (
 )
 
 func main() {
-	fmt.Println("=== xerrors 示例 ===\n")
+	fmt.Println("=== xerrors 示例 ===")
+	fmt.Println()
 
 	// 示例 1: 基础错误包装
 	fmt.Println("【示例 1】基础错误包装 (Wrap/Wrapf)")

@@ -5,10 +5,10 @@ import (
 	"github.com/ceyewan/genesis/metrics"
 )
 
-// Option DB 组件选项函数
+// Option 配置 DB 实例的选项
 type Option func(*options)
 
-// options 选项结构（内部使用）
+// options 内部选项结构
 type options struct {
 	logger clog.Logger
 	meter  metrics.Meter
@@ -18,7 +18,7 @@ type options struct {
 func WithLogger(l clog.Logger) Option {
 	return func(o *options) {
 		if l != nil {
-			o.logger = l
+			o.logger = l.WithNamespace("db")
 		}
 	}
 }
@@ -26,6 +26,8 @@ func WithLogger(l clog.Logger) Option {
 // WithMeter 注入指标 Meter
 func WithMeter(m metrics.Meter) Option {
 	return func(o *options) {
-		o.meter = m
+		if m != nil {
+			o.meter = m
+		}
 	}
 }
