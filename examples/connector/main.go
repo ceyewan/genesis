@@ -41,8 +41,10 @@ func main() {
 
 	runRedisExample(ctx, logger, meter)
 	runMySQLExample(ctx, logger, meter)
+	runSQLiteExample(ctx, logger, meter)
 	runEtcdExample(ctx, logger, meter)
 	runNATSExample(ctx, logger, meter)
+	runKafkaExample(ctx, logger, meter)
 
 	logger.Info("=== 示例演示完成 ===")
 	log.Println("指标可在以下地址查看: http://localhost:9092/metrics")
@@ -185,6 +187,77 @@ func runNATSExample(ctx context.Context, logger clog.Logger, meter metrics.Meter
 	logger.Info("NATS 连接状态", clog.String("status", client.Status().String()))
 }
 
+// runKafkaExample 演示 Kafka 连接器的标准用法
+func runKafkaExample(ctx context.Context, logger clog.Logger, meter metrics.Meter) {
+	logger.Info("--- [Kafka] 示例开始 ---")
+
+	cfg := &connector.KafkaConfig{
+		Name:           "kafka-demo",
+		Seed:           []string{getEnvOrDefault("KAFKA_BROKERS", "localhost:9092")},
+		ConnectTimeout: 10 * time.Second,
+		RequestTimeout: 5 * time.Second,
+	}
+
+	conn, err := connector.NewKafka(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
+	if err != nil {
+		logger.Error("创建 Kafka 连接器失败", clog.Error(err))
+		return
+	}
+	defer conn.Close()
+
+	if err := conn.Connect(ctx); err != nil {
+		logger.Error("Kafka 连接失败", clog.Error(err))
+		return
+	}
+
+	logger.Info("Kafka 连接成功", clog.String("brokers", getEnvOrDefault("KAFKA_BROKERS", "localhost:9092")))
+}
+
+// runSQLiteExample 演示 SQLite 连接器的标准用法
+func runSQLiteExample(ctx context.Context, logger clog.Logger, meter metrics.Meter) {
+	logger.Info("--- [SQLite] 示例开始 ---")
+
+	// 使用内存数据库进行演示
+	cfg := &connector.SQLiteConfig{
+		Path: "file::memory:?cache=shared",
+	}
+
+	conn, err := connector.NewSQLite(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
+	if err != nil {
+		logger.Error("创建 SQLite 连接器失败", clog.Error(err))
+		return
+	}
+	defer conn.Close()
+
+	if err := conn.Connect(ctx); err != nil {
+		logger.Error("SQLite 连接失败", clog.Error(err))
+		return
+	}
+
+	// 使用 GORM 客户端
+	db := conn.GetClient()
+
+	// 创建示例表
+	if err := db.Exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)").Error; err != nil {
+		logger.Warn("创建表失败", clog.Error(err))
+		return
+	}
+
+	// 插入数据
+	if err := db.Exec("INSERT INTO users (name) VALUES (?)", "Genesis User").Error; err != nil {
+		logger.Warn("插入数据失败", clog.Error(err))
+		return
+	}
+
+	// 查询数据
+	var name string
+	if err := db.Raw("SELECT name FROM users WHERE id = 1").Scan(&name).Error; err != nil {
+		logger.Warn("查询数据失败", clog.Error(err))
+	} else {
+		logger.Info("SQLite 查询成功", clog.String("name", name))
+	}
+}
+
 // --- 辅助初始化函数 ---
 
 func initLogger() clog.Logger {
@@ -202,7 +275,6 @@ func initLogger() clog.Logger {
 
 func initMetrics(_ context.Context, logger clog.Logger) metrics.Meter {
 	m, err := metrics.New(&metrics.Config{
-		Enabled:     true,
 		ServiceName: "connector-example",
 		Version:     "1.0.0",
 		Port:        9092,

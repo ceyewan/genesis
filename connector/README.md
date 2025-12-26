@@ -1,6 +1,6 @@
 # 连接器 (Connector)
 
-`connector` 是 Genesis 基础设施层的核心组件，负责管理与外部服务（MySQL、Redis、Etcd、NATS）的原始连接。它通过封装复杂的连接细节、提供健康检查、生命周期管理以及与 L0 组件（日志、指标、错误）的深度集成，为上层组件提供稳定、类型安全的连接能力。
+`connector` 是 Genesis 基础设施层的核心组件，负责管理与外部服务（MySQL、SQLite、Redis、Etcd、NATS、Kafka）的原始连接。它通过封装复杂的连接细节、提供健康检查、生命周期管理以及与 L0 组件（日志、指标、错误）的深度集成，为上层组件提供稳定、类型安全的连接能力。
 
 ## 1. 设计原则
 
@@ -64,12 +64,14 @@ func main() {
 
 ## 4. 支持的连接器类型
 
-| 类型      | 接口             | 底层客户端         | 工厂函数   |
-| :-------- | :--------------- | :----------------- | :--------- |
-| **Redis** | `RedisConnector` | `*redis.Client`    | `NewRedis` |
-| **MySQL** | `MySQLConnector` | `*gorm.DB`         | `NewMySQL` |
-| **Etcd**  | `EtcdConnector`  | `*clientv3.Client` | `NewEtcd`  |
-| **NATS**  | `NATSConnector`  | `*nats.Conn`       | `NewNATS`  |
+| 类型       | 接口               | 底层客户端           | 工厂函数     |
+| :--------- | :----------------- | :------------------- | :----------- |
+| **Redis**  | `RedisConnector`  | `*redis.Client`      | `NewRedis`  |
+| **MySQL**  | `MySQLConnector`  | `*gorm.DB`           | `NewMySQL`  |
+| **SQLite** | `SQLiteConnector` | `*gorm.DB`           | `NewSQLite` |
+| **Etcd**   | `EtcdConnector`   | `*clientv3.Client`   | `NewEtcd`   |
+| **NATS**   | `NATSConnector`   | `*nats.Conn`         | `NewNATS`   |
+| **Kafka**  | `KafkaConnector`  | `*kgo.Client`        | `NewKafka`  |
 
 ## 5. 资源所有权模型
 
@@ -243,6 +245,49 @@ func main() {
     // 3. 使用组件
     userSvc := service.NewUserService(db, cache, locker)
 }
+```
+
+### SQLite 连接器
+
+SQLite 是嵌入式数据库，无需外部服务，适合快速开发和测试：
+
+```go
+// 内存数据库 - 测试结束自动清理
+conn, err := connector.NewSQLite(&connector.SQLiteConfig{
+    Path: "file::memory:?cache=shared",
+})
+defer conn.Close()
+conn.Connect(ctx)
+
+db := conn.GetClient()
+db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+// 文件数据库 - 持久化存储
+conn, err = connector.NewSQLite(&connector.SQLiteConfig{
+    Path: "./app.db",
+})
+```
+
+### Kafka 连接器
+
+Kafka 连接器使用 franz-go 客户端：
+
+```go
+conn, err := connector.NewKafka(&connector.KafkaConfig{
+    Name: "order-events",
+    Seed: []string{"localhost:9092"},
+}, connector.WithLogger(logger))
+defer conn.Close()
+
+conn.Connect(ctx)
+
+client := conn.GetClient()
+// 生产消息
+client.Produce(ctx, &kgo.Record{
+    Topic: "orders",
+    Key:   []byte("order-123"),
+    Value: []byte(`{"id": 123, "status": "created"}`),
+})
 ```
 
 ## 11. 最佳实践

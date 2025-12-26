@@ -275,3 +275,42 @@ func (c *NATSConfig) validate() error {
 	}
 	return nil
 }
+
+// KafkaConfig Kafka连接配置
+type KafkaConfig struct {
+	// 基础配置
+	Name string   `mapstructure:"name"` // 连接器名称
+	Seed []string `mapstructure:"seed"` // 初始连接节点 (Brokers)
+
+	// 认证配置
+	User     string `mapstructure:"user"`      // SASL 用户名
+	Password string `mapstructure:"password"`  // SASL 密码
+	ClientID string `mapstructure:"client_id"` // 客户端 ID
+
+	// 连接配置
+	ConnectTimeout time.Duration `mapstructure:"connect_timeout"` // 连接超时
+	RequestTimeout time.Duration `mapstructure:"request_timeout"` // 请求超时
+}
+
+func (c *KafkaConfig) setDefaults() {
+	if c.Name == "" {
+		c.Name = "default"
+	}
+	if c.ConnectTimeout == 0 {
+		c.ConnectTimeout = 10 * time.Second
+	}
+	if c.RequestTimeout == 0 {
+		c.RequestTimeout = 10 * time.Second
+	}
+	if c.ClientID == "" {
+		c.ClientID = "genesis-connector"
+	}
+}
+
+func (c *KafkaConfig) validate() error {
+	c.setDefaults()
+	if len(c.Seed) == 0 {
+		return fmt.Errorf("Kafka seed brokers不能为空")
+	}
+	return nil
+}

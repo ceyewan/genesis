@@ -12,7 +12,8 @@ import (
 )
 
 func main() {
-	fmt.Println("=== Registry Service Registration & Discovery Example ===\n")
+	fmt.Println("=== Registry Service Registration & Discovery Example ===")
+	fmt.Println()
 
 	// 1. 创建 Logger
 	logger, _ := clog.New(&clog.Config{

@@ -47,6 +47,17 @@ make test        # 运行所有测试
 make lint        # 运行代码检查 (golangci-lint)
 make clean       # 清理卷和网络
 
+## 测试指南
+
+本项目遵循严格的测试规范，详情请查阅 [Genesis 测试指南](testkit/testing-guide.md)。
+
+**核心要求**：
+-   **优先使用 testkit**：使用 `github.com/ceyewan/genesis/testkit` 获取测试依赖和基础设施连接。
+-   **真实集成测试**：对于依赖 Redis, MySQL 等组件的测试，使用 `testkit.GetRedisClient(t)` 等方法连接本地环境。
+-   **代码复用**：凡是可复用的测试代码（如常用 Mock），必须写在 `testkit` 包中，供全局复用。
+-   **高覆盖率**：业务核心逻辑覆盖率要求 > 80%。
+-   **TDD**：鼓励测试驱动开发。
+
 # 示例运行
 make examples    # 列出所有可用示例
 make example-<component>  # 运行特定组件示例，如 make example-cache

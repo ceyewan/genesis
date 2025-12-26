@@ -35,7 +35,6 @@ func main() {
 
 	// 2. 创建 Metrics
 	meter, err := metrics.New(&metrics.Config{
-		Enabled:     true,
 		ServiceName: "breaker-example",
 		Version:     "1.0.0",
 		Port:        9090,

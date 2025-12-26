@@ -72,74 +72,41 @@ type database struct {
 
 // DB 定义了数据库组件的核心能力
 type DB interface {
-	// DB 获取底层的 *gorm.DB 实例
-	// 绝大多数业务查询直接使用此方法返回的对象
 	DB(ctx context.Context) *gorm.DB
-
-	// Transaction 执行事务操作
-	// fn 中的 tx 对象仅在当前事务范围内有效
 	Transaction(ctx context.Context, fn func(ctx context.Context, tx *gorm.DB) error) error
-
-	// Close 关闭组件
 	Close() error
 }
 
-// New 创建数据库组件实例 (独立模式)
-// 这是标准的工厂函数，支持在不依赖 Container 的情况下独立实例化
-//
-// 参数:
-//   - conn: MySQL 连接器
-//   - cfg: DB 配置
-//   - opts: 可选参数 (Logger, Meter)
-//
-// 使用示例:
-//
-//	mysqlConn, _ := connector.NewMySQL(mysqlConfig)
-//	database, _ := db.New(mysqlConn, &db.Config{
-//	    EnableSharding: true,
-//	    ShardingRules: []db.ShardingRule{
-//	        {
-//	            ShardingKey:    "user_id",
-//	            NumberOfShards: 64,
-//	            Tables:         []string{"orders"},
-//	        },
-//	    },
-//	}, db.WithLogger(logger))
-func New(conn connector.MySQLConnector, cfg *Config, opts ...Option) (DB, error) {
-	// 验证配置
+// New 创建数据库组件实例
+func New(conn connector.DatabaseConnector, cfg *Config, opts ...Option) (DB, error) {
 	if cfg == nil {
 		cfg = &Config{}
 	}
-	cfg.SetDefaults()
-	if err := cfg.Validate(); err != nil {
-		return nil, xerrors.Wrapf(err, "invalid db config")
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, xerrors.Wrapf(err, "invalid config")
 	}
 
-	// 应用选项
 	opt := options{}
 	for _, o := range opts {
 		o(&opt)
 	}
 
-	// 如果没有提供 Logger，使用默认配置创建
 	if opt.logger == nil {
-		logger, err := clog.New(&clog.Config{
-			Level:  "info",
-			Format: "json",
-			Output: "stdout",
-		})
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "failed to create default logger")
-		}
-		opt.logger = logger.WithNamespace("db")
+		opt.logger = clog.Discard()
+	}
+	if opt.meter == nil {
+		opt.meter = metrics.Discard()
 	}
 
 	gormDB := conn.GetClient()
 
+	// 配置 GORM logger
+	gormDB.Session(&gorm.Session{Logger: newGormLogger(opt.logger)})
+
 	// 注册分片中间件
 	if cfg.EnableSharding && len(cfg.ShardingRules) > 0 {
 		for _, rule := range cfg.ShardingRules {
-			// 将字符串表名转换为 interface{} 切片以适配 Register 方法
 			tables := make([]interface{}, len(rule.Tables))
 			for i, v := range rule.Tables {
 				tables[i] = v
@@ -148,7 +115,7 @@ func New(conn connector.MySQLConnector, cfg *Config, opts ...Option) (DB, error)
 			middleware := sharding.Register(sharding.Config{
 				ShardingKey:         rule.ShardingKey,
 				NumberOfShards:      rule.NumberOfShards,
-				PrimaryKeyGenerator: sharding.PKSnowflake, // 默认使用雪花算法
+				PrimaryKeyGenerator: sharding.PKSnowflake,
 			}, tables...)
 
 			if err := gormDB.Use(middleware); err != nil {
@@ -178,6 +145,5 @@ func (d *database) Transaction(ctx context.Context, fn func(ctx context.Context,
 
 // Close 关闭组件
 func (d *database) Close() error {
-	// GORM 的连接由连接器管理，这里不需要额外关闭
 	return nil
 }

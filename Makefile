@@ -12,17 +12,14 @@ help:
 	@echo "  make logs      - 显示所有服务日志"
 	@echo "  make status    - 查看服务状态"
 	@echo "  make examples  - 运行示例代码"
-
 up:
 	@echo "创建 genesis-net 网络（如果不存在）..."
 	@docker network create genesis-net 2>/dev/null || true
 	@echo "启动开发服务..."
-	@docker compose -f docker-compose.dev.yml up -d
-
+	@docker compose -f docker-compose.yml up -d
 down:
 	@echo "停止开发服务..."
-	@docker compose -f docker-compose.dev.yml down
-
+	@docker compose -f docker-compose.yml down
 test:
 	@echo "运行测试..."
 	@go test ./...
@@ -30,20 +27,16 @@ test:
 lint:
 	@echo "运行代码检查..."
 	@golangci-lint run
-
 clean:
 	@echo "清理卷和网络..."
-	@docker compose -f docker-compose.dev.yml down -v
+	@docker compose -f docker-compose.yml down -v
 	@docker network rm genesis-net 2>/dev/null || true
-
 logs:
 	@echo "显示服务日志..."
-	@docker compose -f docker-compose.dev.yml logs -f
-
+	@docker compose -f docker-compose.yml logs -f
 status:
 	@echo "查看服务状态..."
-	@docker compose -f docker-compose.dev.yml ps
-
+	@docker compose -f docker-compose.yml ps
 # 显示所有示例
 examples:
 	@echo "列出所有示例:"
