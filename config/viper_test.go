@@ -66,12 +66,12 @@ GENESIS_CLOG_FORMAT=json
 	}()
 
 	ctx := context.Background()
-	loader, err := New(
-		WithConfigName("config"),
-		WithConfigPaths(tmpDir),
-		WithConfigType("yaml"),
-		WithEnvPrefix("GENESIS"),
-	)
+	loader, err := New(&Config{
+		Name:     "config",
+		Paths:    []string{tmpDir},
+		FileType: "yaml",
+		EnvPrefix: "GENESIS",
+	})
 	if err != nil {
 		t.Fatalf("Failed to create loader: %v", err)
 	}
@@ -130,20 +130,20 @@ func TestLoaderValidate(t *testing.T) {
 				if err := os.WriteFile(configFile, []byte(content), 0644); err != nil {
 					return nil, err
 				}
-				return New(
-					WithConfigName("config"),
-					WithConfigPaths(tmpDir),
-				)
+				return New(&Config{
+					Name:  "config",
+					Paths: []string{tmpDir},
+				})
 			},
 			wantErr: false,
 		},
 		{
 			name: "empty config",
 			setupLoader: func() (Loader, error) {
-				return New(
-					WithConfigName("nonexistent"),
-					WithConfigPaths("/nonexistent"),
-				)
+				return New(&Config{
+					Name:  "nonexistent",
+					Paths: []string{"/nonexistent"},
+				})
 			},
 			wantErr: true,
 		},
@@ -188,11 +188,11 @@ test:
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	loader, err := New(
-		WithConfigName("watch-test"),
-		WithConfigPaths(tmpDir),
-		WithConfigType("yaml"),
-	)
+	loader, err := New(&Config{
+		Name:     "watch-test",
+		Paths:    []string{tmpDir},
+		FileType: "yaml",
+	})
 	if err != nil {
 		t.Fatalf("Failed to create loader: %v", err)
 	}
@@ -283,10 +283,10 @@ func TestLoaderWatchCancel(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	loader, err := New(
-		WithConfigName("cancel-test"),
-		WithConfigPaths(tmpDir),
-	)
+	loader, err := New(&Config{
+		Name:  "cancel-test",
+		Paths: []string{tmpDir},
+	})
 	if err != nil {
 		t.Fatalf("Failed to create loader: %v", err)
 	}
@@ -329,10 +329,10 @@ func TestLoaderMultipleWatches(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	loader, err := New(
-		WithConfigName("multi-watch"),
-		WithConfigPaths(tmpDir),
-	)
+	loader, err := New(&Config{
+		Name:  "multi-watch",
+		Paths: []string{tmpDir},
+	})
 	if err != nil {
 		t.Fatalf("Failed to create loader: %v", err)
 	}
@@ -412,11 +412,11 @@ func TestLoaderEnvLoading(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	loader, err := New(
-		WithConfigName("config"),
-		WithConfigPaths("./nonexistent"), // 配置文件不存在，只使用环境变量
-		WithEnvPrefix("TEST"),
-	)
+	loader, err := New(&Config{
+		Name:      "config",
+		Paths:     []string{"./nonexistent"}, // 配置文件不存在，只使用环境变量
+		EnvPrefix: "TEST",
+	})
 	if err != nil {
 		t.Fatalf("Failed to create loader: %v", err)
 	}

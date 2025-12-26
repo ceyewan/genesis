@@ -20,23 +20,18 @@ import (
 // loader 实现 Loader 接口
 type loader struct {
 	v         *viper.Viper
-	opts      *Options
+	cfg       *Config
 	mu        sync.RWMutex
 	watches   map[string][]chan Event
 	oldValues map[string]interface{}
 }
 
 // newLoader 创建一个新的配置加载器（内部使用）
-func newLoader(opts ...Option) (Loader, error) {
-	options := defaultOptions()
-	for _, o := range opts {
-		o(options)
-	}
-
+func newLoader(cfg *Config) (Loader, error) {
 	v := viper.New()
 	return &loader{
 		v:         v,
-		opts:      options,
+		cfg:       cfg,
 		watches:   make(map[string][]chan Event),
 		oldValues: make(map[string]interface{}),
 	}, nil
@@ -45,15 +40,15 @@ func newLoader(opts ...Option) (Loader, error) {
 // Load 初始化并从所有来源加载配置
 func (l *loader) Load(ctx context.Context) error {
 	// 1. 配置 Viper
-	l.v.SetConfigName(l.opts.Name)
-	l.v.SetConfigType(l.opts.FileType)
+	l.v.SetConfigName(l.cfg.Name)
+	l.v.SetConfigType(l.cfg.FileType)
 
-	for _, path := range l.opts.Paths {
+	for _, path := range l.cfg.Paths {
 		l.v.AddConfigPath(path)
 	}
 
 	// 2. 环境变量设置（最高优先级）- 先设置，确保能捕获所有环境变量
-	l.v.SetEnvPrefix(l.opts.EnvPrefix)
+	l.v.SetEnvPrefix(l.cfg.EnvPrefix)
 	l.v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	l.v.AutomaticEnv()
 
@@ -65,7 +60,7 @@ func (l *loader) Load(ctx context.Context) error {
 	// 4. 加载基础配置（最低优先级）
 	if err := l.v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return xerrors.Wrapf(err, "failed to read config file %s", l.opts.Name)
+			return xerrors.Wrapf(err, "failed to read config file %s", l.cfg.Name)
 		}
 		fmt.Printf("Warning: no configuration file found at %s\n", l.v.ConfigFileUsed())
 	}
@@ -105,15 +100,15 @@ func (l *loader) loadDotEnv() error {
 	var envLoaded bool
 	var lastErr error
 
-	if err := godotenv.Load(); err == nil {
+	if err := godotenv.Overload(); err == nil {
 		envLoaded = true
 	} else {
 		lastErr = err
 	}
 
-	for _, path := range l.opts.Paths {
+	for _, path := range l.cfg.Paths {
 		envPath := filepath.Join(path, ".env")
-		if err := godotenv.Load(envPath); err == nil {
+		if err := godotenv.Overload(envPath); err == nil {
 			envLoaded = true
 		} else {
 			lastErr = err
@@ -128,13 +123,13 @@ func (l *loader) loadDotEnv() error {
 
 // loadEnvironmentConfig 加载环境特定配置文件
 func (l *loader) loadEnvironmentConfig() error {
-	env := os.Getenv(fmt.Sprintf("%s_ENV", l.opts.EnvPrefix))
+	env := os.Getenv(fmt.Sprintf("%s_ENV", l.cfg.EnvPrefix))
 	if env == "" {
 		return nil
 	}
 
-	originalName := l.opts.Name
-	envConfigName := fmt.Sprintf("%s.%s", l.opts.Name, env)
+	originalName := l.cfg.Name
+	envConfigName := fmt.Sprintf("%s.%s", l.cfg.Name, env)
 	l.v.SetConfigName(envConfigName)
 
 	if err := l.v.MergeInConfig(); err != nil {

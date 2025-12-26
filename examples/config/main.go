@@ -93,12 +93,12 @@ func basicConfigExample() {
 	ctx := context.Background()
 
 	// 创建配置加载器
-	loader, err := config.New(
-		config.WithConfigName("config"),
-		config.WithConfigPath("./config"),
-		config.WithConfigType("yaml"),
-		config.WithEnvPrefix("GENESIS"),
-	)
+	loader, err := config.New(&config.Config{
+		Name:      "config",
+		Paths:     []string{"./config"},
+		FileType:  "yaml",
+		EnvPrefix: "GENESIS",
+	})
 	if err != nil {
 		log.Fatalf("创建配置加载器失败: %v", err)
 	}
@@ -164,12 +164,12 @@ func usageExamples() {
 
 	ctx := context.Background()
 
-	loader, err := config.New(
-		config.WithConfigName("config"),
-		config.WithConfigPath("./config"),
-		config.WithConfigType("yaml"),
-		config.WithEnvPrefix("GENESIS"),
-	)
+	loader, err := config.New(&config.Config{
+		Name:      "config",
+		Paths:     []string{"./config"},
+		FileType:  "yaml",
+		EnvPrefix: "GENESIS",
+	})
 	if err != nil {
 		log.Fatalf("创建配置加载器失败: %v", err)
 	}
@@ -237,12 +237,12 @@ func configWatchExample() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	loader, err := config.New(
-		config.WithConfigName("config"),
-		config.WithConfigPath("./config"),
-		config.WithConfigType("yaml"),
-		config.WithEnvPrefix("GENESIS"),
-	)
+	loader, err := config.New(&config.Config{
+		Name:      "config",
+		Paths:     []string{"./config"},
+		FileType:  "yaml",
+		EnvPrefix: "GENESIS",
+	})
 	if err != nil {
 		log.Fatalf("创建配置加载器失败: %v", err)
 	}
