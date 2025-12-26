@@ -62,19 +62,20 @@ import (
 // Breaker 熔断器核心接口
 type Breaker interface {
 	// Execute 执行受熔断保护的函数
-	// serviceName: 服务名称（用于服务级熔断）
+	// key: 熔断键（可以是服务名、后端地址、方法名等）
 	// fn: 要执行的函数
 	// 返回: 函数执行结果和错误
-	Execute(ctx context.Context, serviceName string, fn func() (interface{}, error)) (interface{}, error)
+	Execute(ctx context.Context, key string, fn func() (interface{}, error)) (interface{}, error)
 
 	// UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器
-	UnaryClientInterceptor() grpc.UnaryClientInterceptor
+	// 支持 InterceptorOption 配置 Key 生成策略
+	UnaryClientInterceptor(opts ...InterceptorOption) grpc.UnaryClientInterceptor
 
 	// StreamClientInterceptor 返回 gRPC 流式调用客户端拦截器
 	StreamClientInterceptor() grpc.StreamClientInterceptor
 
-	// State 获取指定服务的熔断器状态
-	State(serviceName string) (State, error)
+	// State 获取指定键的熔断器状态
+	State(key string) (State, error)
 }
 
 // State 熔断器状态
