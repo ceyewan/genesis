@@ -1,72 +1,65 @@
 package config
 
 // Option 配置选项模式
-type Option func(*Options)
+type Option func(*Config)
 
-type Options struct {
-	Name       string   // 配置文件名称（不含扩展名）
-	Paths      []string // 配置文件搜索路径
-	FileType   string   // 配置文件类型 (yaml, json, etc.)
-	EnvPrefix  string   // 环境变量前缀
-	RemoteOpts *RemoteOptions
+// Config 配置结构
+type Config struct {
+	Name      string   // 配置文件名称（不含扩展名）
+	Paths     []string // 配置文件搜索路径
+	FileType  string   // 配置文件类型 (yaml, json, etc.)
+	EnvPrefix string   // 环境变量前缀
 }
 
-type RemoteOptions struct {
-	Provider string // 远程提供者 (etcd, consul, etc.)
-	Endpoint string // 远程端点
+// validate 设置默认值并验证配置
+func (c *Config) validate() error {
+	// 设置默认值
+	if c.Name == "" {
+		c.Name = "config"
+	}
+	if c.Paths == nil {
+		c.Paths = []string{".", "./config"}
+	}
+	if c.FileType == "" {
+		c.FileType = "yaml"
+	}
+	if c.EnvPrefix == "" {
+		c.EnvPrefix = "GENESIS"
+	}
+	return nil
 }
 
 // WithConfigName 设置配置文件名称（不带扩展名）
 func WithConfigName(name string) Option {
-	return func(o *Options) {
-		o.Name = name
+	return func(c *Config) {
+		c.Name = name
 	}
 }
 
 // WithConfigPath 添加配置文件搜索路径
 func WithConfigPath(path string) Option {
-	return func(o *Options) {
-		o.Paths = append(o.Paths, path)
+	return func(c *Config) {
+		c.Paths = append(c.Paths, path)
 	}
 }
 
 // WithConfigPaths 设置配置文件搜索路径（覆盖默认值）
 func WithConfigPaths(paths ...string) Option {
-	return func(o *Options) {
-		o.Paths = paths
+	return func(c *Config) {
+		c.Paths = paths
 	}
 }
 
 // WithConfigType 设置配置文件类型 (yaml, json, etc.)
 func WithConfigType(typ string) Option {
-	return func(o *Options) {
-		o.FileType = typ
+	return func(c *Config) {
+		c.FileType = typ
 	}
 }
 
 // WithEnvPrefix 设置环境变量前缀
 func WithEnvPrefix(prefix string) Option {
-	return func(o *Options) {
-		o.EnvPrefix = prefix
-	}
-}
-
-// WithRemote 设置远程配置中心选项
-func WithRemote(provider, endpoint string) Option {
-	return func(o *Options) {
-		o.RemoteOpts = &RemoteOptions{
-			Provider: provider,
-			Endpoint: endpoint,
-		}
-	}
-}
-
-// defaultOptions 返回默认选项
-func defaultOptions() *Options {
-	return &Options{
-		Name:      "config",
-		Paths:     []string{".", "./config"},
-		FileType:  "yaml",
-		EnvPrefix: "GENESIS",
+	return func(c *Config) {
+		c.EnvPrefix = prefix
 	}
 }

@@ -12,53 +12,38 @@ import (
 func TestNew(t *testing.T) {
 	tests := []struct {
 		name    string
+		cfg     *Config
 		opts    []Option
 		wantErr bool
 	}{
 		{
-			name:    "default options",
-			opts:    []Option{},
+			name:    "nil config with defaults",
+			cfg:     nil,
 			wantErr: false,
 		},
 		{
-			name: "with config name",
+			name: "with config struct",
+			cfg: &Config{
+				Name:     "test",
+				FileType: "yaml",
+			},
+			wantErr: false,
+		},
+		{
+			name: "empty config with options",
+			cfg:  &Config{},
 			opts: []Option{
 				WithConfigName("test"),
 			},
 			wantErr: false,
 		},
 		{
-			name: "with config path",
-			opts: []Option{
-				WithConfigPath("./test-config"),
+			name: "with options override",
+			cfg: &Config{
+				Name: "original",
 			},
-			wantErr: false,
-		},
-		{
-			name: "with config paths",
 			opts: []Option{
-				WithConfigPaths("./config", "./test"),
-			},
-			wantErr: false,
-		},
-		{
-			name: "with config type",
-			opts: []Option{
-				WithConfigType("json"),
-			},
-			wantErr: false,
-		},
-		{
-			name: "with env prefix",
-			opts: []Option{
-				WithEnvPrefix("TEST"),
-			},
-			wantErr: false,
-		},
-		{
-			name: "with remote options",
-			opts: []Option{
-				WithRemote("etcd", "localhost:2379"),
+				WithConfigName("overridden"),
 			},
 			wantErr: false,
 		},
@@ -66,7 +51,7 @@ func TestNew(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loader, err := New(tt.opts...)
+			loader, err := New(tt.cfg, tt.opts...)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("New() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -76,54 +61,6 @@ func TestNew(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestMustLoad 测试 MustLoad 函数
-func TestMustLoad(t *testing.T) {
-	// 创建临时配置文件
-	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "test.yaml")
-
-	configContent := `
-app:
-  name: "test-app"
-`
-	err := os.WriteFile(configFile, []byte(configContent), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create test config file: %v", err)
-	}
-
-	// 正常情况应该不 panic
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("MustLoad() panicked unexpectedly: %v", r)
-		}
-	}()
-
-	loader := MustLoad(
-		WithConfigName("test"),
-		WithConfigPaths(tmpDir),
-		WithConfigType("yaml"),
-	)
-
-	if loader == nil {
-		t.Error("MustLoad() returned nil loader")
-	}
-}
-
-// TestMustLoadPanic 测试 MustLoad 在错误时 panic
-func TestMustLoadPanic(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("MustLoad() should have panicked")
-		}
-	}()
-
-	// 使用不存在的配置路径，应该导致错误并 panic
-	MustLoad(
-		WithConfigName("nonexistent"),
-		WithConfigPaths("/nonexistent/path"),
-	)
 }
 
 // TestLoaderInterface 测试 Loader 接口的完整实现
@@ -153,11 +90,11 @@ redis:
 	}
 
 	ctx := context.Background()
-	loader, err := New(
-		WithConfigName("test"),
-		WithConfigPaths(tmpDir),
-		WithConfigType("yaml"),
-	)
+	loader, err := New(&Config{
+		Name:     "test",
+		FileType: "yaml",
+		Paths:    []string{tmpDir},
+	})
 	if err != nil {
 		t.Fatalf("Failed to create loader: %v", err)
 	}
@@ -254,11 +191,11 @@ app:
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	loader, err := New(
-		WithConfigName("test"),
-		WithConfigPaths(tmpDir),
-		WithConfigType("yaml"),
-	)
+	loader, err := New(&Config{
+		Name:     "test",
+		FileType: "yaml",
+		Paths:    []string{tmpDir},
+	})
 	if err != nil {
 		t.Fatalf("Failed to create loader: %v", err)
 	}
@@ -308,67 +245,96 @@ app:
 	}
 }
 
-// TestDefaultOptions 测试默认选项
-func TestDefaultOptions(t *testing.T) {
-	opts := defaultOptions()
+// TestConfigDefaults 测试配置默认值
+func TestConfigDefaults(t *testing.T) {
+	cfg := &Config{}
+	cfg.validate()
 
-	if opts.Name != "config" {
-		t.Errorf("defaultOptions().Name = %v, want config", opts.Name)
+	if cfg.Name != "config" {
+		t.Errorf("Config.validate() Name = %v, want config", cfg.Name)
 	}
 
-	if len(opts.Paths) != 2 || opts.Paths[0] != "." || opts.Paths[1] != "./config" {
-		t.Errorf("defaultOptions().Paths = %v, want [., ./config]", opts.Paths)
+	if len(cfg.Paths) != 2 || cfg.Paths[0] != "." || cfg.Paths[1] != "./config" {
+		t.Errorf("Config.validate() Paths = %v, want [., ./config]", cfg.Paths)
 	}
 
-	if opts.FileType != "yaml" {
-		t.Errorf("defaultOptions().FileType = %v, want yaml", opts.FileType)
+	if cfg.FileType != "yaml" {
+		t.Errorf("Config.validate() FileType = %v, want yaml", cfg.FileType)
 	}
 
-	if opts.EnvPrefix != "GENESIS" {
-		t.Errorf("defaultOptions().EnvPrefix = %v, want GENESIS", opts.EnvPrefix)
+	if cfg.EnvPrefix != "GENESIS" {
+		t.Errorf("Config.validate() EnvPrefix = %v, want GENESIS", cfg.EnvPrefix)
 	}
 }
 
-// TestOptionsApply 测试选项应用
-func TestOptionsApply(t *testing.T) {
-	opts := defaultOptions()
+// TestConfigOptions 测试选项应用
+func TestConfigOptions(t *testing.T) {
+	cfg := &Config{}
 
 	// 应用各种选项
-	WithConfigName("test")(opts)
-	WithConfigPath("./test")(opts)
-	WithConfigType("json")(opts)
-	WithEnvPrefix("TEST")(opts)
-	WithRemote("etcd", "localhost:2379")(opts)
+	WithConfigName("test")(cfg)
+	WithConfigPath("./test")(cfg)
+	WithConfigType("json")(cfg)
+	WithEnvPrefix("TEST")(cfg)
 
-	if opts.Name != "test" {
-		t.Errorf("After WithConfigName, Name = %v, want test", opts.Name)
+	if cfg.Name != "test" {
+		t.Errorf("After WithConfigName, Name = %v, want test", cfg.Name)
 	}
 
-	if len(opts.Paths) != 3 || opts.Paths[2] != "./test" {
-		t.Errorf("After WithConfigPath, Paths = %v, want [., ./config, ./test]", opts.Paths)
+	if len(cfg.Paths) != 1 || cfg.Paths[0] != "./test" {
+		t.Errorf("After WithConfigPath, Paths = %v, want [./test]", cfg.Paths)
 	}
 
-	if opts.FileType != "json" {
-		t.Errorf("After WithConfigType, FileType = %v, want json", opts.FileType)
+	if cfg.FileType != "json" {
+		t.Errorf("After WithConfigType, FileType = %v, want json", cfg.FileType)
 	}
 
-	if opts.EnvPrefix != "TEST" {
-		t.Errorf("After WithEnvPrefix, EnvPrefix = %v, want TEST", opts.EnvPrefix)
-	}
-
-	if opts.RemoteOpts == nil || opts.RemoteOpts.Provider != "etcd" || opts.RemoteOpts.Endpoint != "localhost:2379" {
-		t.Errorf("After WithRemote, RemoteOpts = %+v, want etcd/localhost:2379", opts.RemoteOpts)
+	if cfg.EnvPrefix != "TEST" {
+		t.Errorf("After WithEnvPrefix, EnvPrefix = %v, want TEST", cfg.EnvPrefix)
 	}
 }
 
-// TestWithConfigPaths 测试 WithConfigPaths 覆盖默认路径
+// TestWithConfigPaths 测试 WithConfigPaths 覆盖路径
 func TestWithConfigPaths(t *testing.T) {
-	opts := defaultOptions()
+	cfg := &Config{}
+	cfg.validate() // 先设置默认值
 
-	// 覆盖默认路径
-	WithConfigPaths("/etc/app", "./local")(opts)
+	// 覆盖路径
+	WithConfigPaths("/etc/app", "./local")(cfg)
 
-	if len(opts.Paths) != 2 || opts.Paths[0] != "/etc/app" || opts.Paths[1] != "./local" {
-		t.Errorf("WithConfigPaths() Paths = %v, want [/etc/app, ./local]", opts.Paths)
+	if len(cfg.Paths) != 2 || cfg.Paths[0] != "/etc/app" || cfg.Paths[1] != "./local" {
+		t.Errorf("WithConfigPaths() Paths = %v, want [/etc/app, ./local]", cfg.Paths)
+	}
+}
+
+// TestNewWithOptions 测试使用选项创建
+func TestNewWithOptions(t *testing.T) {
+	// 创建临时配置文件
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "app.json")
+
+	configContent := `{"app": {"name": "test"}}`
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to create test config file: %v", err)
+	}
+
+	loader, err := New(nil,
+		WithConfigName("app"),
+		WithConfigPaths(tmpDir),
+		WithConfigType("json"),
+		WithEnvPrefix("MYAPP"),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if loader == nil {
+		t.Fatal("New() returned nil loader")
+	}
+
+	// 验证 loader 可以正常工作
+	ctx := context.Background()
+	if err := loader.Load(ctx); err != nil {
+		t.Errorf("Load() error = %v", err)
 	}
 }
