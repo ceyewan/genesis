@@ -95,6 +95,19 @@ type Limiter interface {
 // 配置定义 (Configuration)
 // ========================================
 
+// Config 限流组件统一配置
+type Config struct {
+	// Mode 限流模式: "standalone" | "distributed"
+	// 空字符串或 "standalone" 时使用单机模式，"distributed" 时使用分布式模式（需通过 WithRedisConnector 注入）
+	Mode string `json:"mode" yaml:"mode"`
+
+	// Standalone 单机限流配置
+	Standalone *StandaloneConfig `json:"standalone" yaml:"standalone"`
+
+	// Distributed 分布式限流配置
+	Distributed *DistributedConfig `json:"distributed" yaml:"distributed"`
+}
+
 // StandaloneConfig 单机限流配置
 type StandaloneConfig struct {
 	// CleanupInterval 清理过期限流器的间隔（默认：1 分钟）
@@ -113,6 +126,80 @@ type DistributedConfig struct {
 // ========================================
 // 工厂函数 (Factory Functions)
 // ========================================
+
+// Discard 返回一个静默的限流器实例（No-op 实现）
+// 返回的 Limiter 实现了接口，但所有方法始终返回 true（允许通过），零开销
+//
+// 使用场景: 配置驱动的条件启用
+//
+//	var limiter ratelimit.Limiter
+//	if cfg.RateLimitEnabled {
+//	    limiter, _ = ratelimit.NewStandalone(&cfg.Standalone, ratelimit.WithLogger(logger))
+//	} else {
+//	    limiter = ratelimit.Discard()  // 零开销
+//	}
+func Discard() Limiter {
+	return &noopLimiter{}
+}
+
+// noopLimiter 空限流器实现（非导出）
+type noopLimiter struct{}
+
+// Allow 始终返回 true（允许通过）
+func (noop *noopLimiter) Allow(ctx context.Context, key string, limit Limit) (bool, error) {
+	return true, nil
+}
+
+// AllowN 始终返回 true（允许通过）
+func (noop *noopLimiter) AllowN(ctx context.Context, key string, limit Limit, n int) (bool, error) {
+	return true, nil
+}
+
+// New 根据配置创建限流器
+// 当 cfg 为 nil 或 Mode 为空时，返回 Discard() 实例（遵循 clog 模式）
+//
+// 使用示例:
+//
+//	// 单机模式
+//	limiter, _ := ratelimit.New(&ratelimit.Config{
+//	    Mode:    "standalone",
+//	    Standalone: &ratelimit.StandaloneConfig{
+//	        CleanupInterval: 1 * time.Minute,
+//	    },
+//	}, ratelimit.WithLogger(logger))
+//
+//	// 分布式模式（需注入 Redis 连接器）
+//	redisConn, _ := connector.NewRedis(&cfg.Redis)
+//	limiter, _ := ratelimit.New(&ratelimit.Config{
+//	    Mode:        "distributed",
+//	    Distributed: &ratelimit.DistributedConfig{Prefix: "myapp:"},
+//	}, ratelimit.WithRedisConnector(redisConn), ratelimit.WithLogger(logger))
+func New(cfg *Config, opts ...Option) (Limiter, error) {
+	// 应用选项（需要先提取 WithRedisConnector）
+	o := options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	// nil 配置返回 Discard（遵循 clog 模式）
+	if cfg == nil {
+		return Discard(), nil
+	}
+
+	switch cfg.Mode {
+	case "standalone", "":
+		return NewStandalone(cfg.Standalone, opts...)
+	case "distributed":
+		// 使用 Option 中注入的 redisConn
+		if o.redisConn == nil {
+			return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required_for_distributed_mode")
+		}
+		return NewDistributed(o.redisConn, cfg.Distributed, opts...)
+	default:
+		// 未知模式默认使用单机
+		return NewStandalone(cfg.Standalone, opts...)
+	}
+}
 
 // NewStandalone 创建单机限流器
 // 这是标准的工厂函数，支持在不依赖其他容器的情况下独立实例化

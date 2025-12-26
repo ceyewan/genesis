@@ -10,7 +10,7 @@ import (
 // GinMiddleware 创建 Gin 限流中间件
 //
 // 参数:
-//   - limiter: 限流器实例
+//   - limiter: 限流器实例，为 nil 时自动使用 Discard()（始终放行）
 //   - keyFunc: 从请求中提取限流键的函数，如果为 nil，默认使用客户端 IP
 //   - limitFunc: 获取限流规则的函数
 //
@@ -28,6 +28,11 @@ func GinMiddleware(
 	keyFunc func(*gin.Context) string,
 	limitFunc func(*gin.Context) Limit,
 ) gin.HandlerFunc {
+	// 如果 limiter 为 nil，使用 Discard() 实例
+	if limiter == nil {
+		limiter = Discard()
+	}
+
 	if keyFunc == nil {
 		// 默认使用客户端 IP 作为限流键
 		keyFunc = func(c *gin.Context) string {

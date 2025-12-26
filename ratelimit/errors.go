@@ -18,4 +18,7 @@ var (
 
 	// ErrInvalidLimit 限流规则无效
 	ErrInvalidLimit = xerrors.New("ratelimit: invalid limit")
+
+	// ErrRateLimitExceeded 限流阈值超出
+	ErrRateLimitExceeded = xerrors.New("ratelimit: rate limit exceeded")
 )
