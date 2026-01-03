@@ -5,7 +5,7 @@ Auth 组件为 Genesis 框架提供统一的认证能力，基于 JWT (JSON Web 
 ## 特性
 
 - **无状态认证**：JWT 自包含用户信息，易于横向扩展。
-- **统一接口**：HTTP 和 WebSocket 使用相同的验证逻辑。
+- **多源 Token 提取**：自动从 Header、Query、Cookie 中提取 Token，开箱即用。
 - **Gin 集成**：提供开箱即用的中间件。
 - **遵循 L0 规范**：集成 `clog`、`metrics`、`xerrors`。
 - **标准协议**：使用 `github.com/golang-jwt/jwt/v5` 标准库。
@@ -19,8 +19,8 @@ auth/
 ├── errors.go       # 哨兵错误
 ├── options.go      # 函数式选项
 ├── claims.go       # Claims 定义
-├── middleware.go   # Gin 中间件
-└── ws.go           # WebSocket 认证
+├── metrics.go      # 指标常量
+└── middleware.go   # Gin 中间件
 ```
 
 ## 核心接口
@@ -66,8 +66,31 @@ auth:
     issuer: "my-service"
     access_token_ttl: 15m
     refresh_token_ttl: 168h
-    token_lookup: "header:Authorization"
+    # token_lookup: 可选，留空则使用默认多源查找
+    # 默认查找顺序: header:Authorization -> query:token -> cookie:jwt
+    token_lookup: "header:Authorization"  # 可指定单一来源
     token_head_name: "Bearer"
+```
+
+### Token 提取方式
+
+默认情况下（`token_lookup` 留空），组件会按以下顺序尝试提取 Token：
+
+1. **Header**: `Authorization: Bearer <token>`
+2. **Query**: `?token=<token>`
+3. **Cookie**: `jwt=<token>`
+
+这种设计使得同一份配置可以同时支持：
+- REST API（使用 Header）
+- WebSocket 连接（使用 Query）
+- 前端应用（使用 Cookie）
+
+如果需要限制只从特定来源提取，可配置 `token_lookup`：
+```go
+&auth.Config{
+    SecretKey: "...",
+    TokenLookup: "query:token",  // 只从 query 提取
+}
 ```
 
 ## 使用示例
@@ -109,9 +132,39 @@ r.GET("/profile", func(c *gin.Context) {
 
 ## 监控指标
 
-| 指标名                                   | 类型      | 描述              |
-| ---------------------------------------- | --------- | ----------------- |
-| `auth_tokens_generated_total`            | Counter   | 生成的 Token 总数 |
-| `auth_tokens_validated_total`            | Counter   | 验证的 Token 总数 |
-| `auth_tokens_refreshed_total`            | Counter   | 刷新的 Token 总数 |
-| `auth_token_validation_duration_seconds` | Histogram | 验证耗时分布      |
+Auth 组件提供以下可观测性指标，业务方可通过导出的常量引用指标名称：
+
+| 指标名 | 类型 | 标签 | 描述 |
+|--------|------|------|------|
+| `auth_tokens_validated_total` | Counter | `status="success\|error"`, `error_type="expired\|invalid_signature\|invalid_token"` | Token 验证计数 |
+| `auth_tokens_refreshed_total` | Counter | `status="success\|error"` | Token 刷新计数 |
+
+### 指标常量引用
+
+```go
+import "github.com/ceyewan/genesis/auth"
+
+// 使用导出的常量引用指标名
+metricName := auth.MetricTokensValidated
+```
+
+### Prometheus 查询示例
+
+```promql
+# 验证成功率
+rate(auth_tokens_validated_total{status="success"}[5m]) / rate(auth_tokens_validated_total[5m])
+
+# 验证失败数（按错误类型分组）
+sum by (error_type) (rate(auth_tokens_validated_total{status="error"}[5m]))
+
+# 刷新成功率
+rate(auth_tokens_refreshed_total{status="success"}[5m]) / rate(auth_tokens_refreshed_total[5m])
+
+# 刷新失败数
+sum(rate(auth_tokens_refreshed_total{status="error"}[5m]))
+```
+
+### 指标说明
+
+- **Token 缺失**（客户端未提供 token）不计入验证失败指标
+- **验证失败** 仅统计提供了 token 但验证失败的情况（过期、签名错误、格式错误）
