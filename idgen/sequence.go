@@ -213,3 +213,94 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 
 	return seqs, nil
 }
+
+// Set 直接设置序列号的值
+//
+// 使用示例:
+//
+//	// IM 场景：初始化会话消息序号
+//	err := sequencer.Set(ctx, "conversation:123", 100)
+//	if err != nil { ... }
+//
+// 警告：此操作会覆盖现有值，请谨慎使用
+func (r *redisSequencer) Set(ctx context.Context, key string, value int64) error {
+	if value < 0 {
+		return xerrors.WithCode(ErrInvalidInput, "negative_value")
+	}
+
+	redisKey := r.buildKey(key)
+	client := r.redis.GetClient()
+
+	if err := client.Set(ctx, redisKey, value, 0).Err(); err != nil {
+		if r.logger != nil {
+			r.logger.Error("failed to set sequence value",
+				clog.Error(err),
+				clog.String("redis_key", redisKey),
+				clog.String("key", key),
+				clog.Int64("value", value),
+			)
+		}
+		return xerrors.Wrap(err, "redis_set_failed")
+	}
+
+	if r.logger != nil {
+		r.logger.Debug("set sequence value",
+			clog.String("redis_key", redisKey),
+			clog.String("key", key),
+			clog.Int64("value", value),
+		)
+	}
+
+	return nil
+}
+
+// SetIfNotExists 仅当键不存在时设置序列号的值
+// 返回 true 表示设置成功，false 表示键已存在
+//
+// 使用示例:
+//
+//	// 安全初始化：仅在首次部署时设置起始值
+//	ok, err := sequencer.SetIfNotExists(ctx, "conversation:123", 100)
+//	if err != nil { ... }
+//	if !ok {
+//	    // 键已存在，可能是其他进程已初始化
+//	}
+func (r *redisSequencer) SetIfNotExists(ctx context.Context, key string, value int64) (bool, error) {
+	if value < 0 {
+		return false, xerrors.WithCode(ErrInvalidInput, "negative_value")
+	}
+
+	redisKey := r.buildKey(key)
+	client := r.redis.GetClient()
+
+	// 使用 SETNX (Set if Not eXists) 命令
+	result, err := client.SetNX(ctx, redisKey, value, 0).Result()
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Error("failed to set sequence if not exists",
+				clog.Error(err),
+				clog.String("redis_key", redisKey),
+				clog.String("key", key),
+				clog.Int64("value", value),
+			)
+		}
+		return false, xerrors.Wrap(err, "redis_setnx_failed")
+	}
+
+	if r.logger != nil {
+		if result {
+			r.logger.Debug("set sequence value (new key)",
+				clog.String("redis_key", redisKey),
+				clog.String("key", key),
+				clog.Int64("value", value),
+			)
+		} else {
+			r.logger.Debug("sequence key already exists",
+				clog.String("redis_key", redisKey),
+				clog.String("key", key),
+			)
+		}
+	}
+
+	return result, nil
+}

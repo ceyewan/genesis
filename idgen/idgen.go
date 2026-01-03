@@ -50,6 +50,14 @@ type Sequencer interface {
 
 	// NextBatch 为指定键批量生成序列号
 	NextBatch(ctx context.Context, key string, count int) ([]int64, error)
+
+	// Set 直接设置序列号的值
+	// 警告：此操作会覆盖现有值，请谨慎使用
+	Set(ctx context.Context, key string, value int64) error
+
+	// SetIfNotExists 仅当键不存在时设置序列号的值
+	// 返回 true 表示设置成功，false 表示键已存在
+	SetIfNotExists(ctx context.Context, key string, value int64) (bool, error)
 }
 
 // ========================================
