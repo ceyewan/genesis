@@ -635,3 +635,235 @@ func TestNextSequence(t *testing.T) {
 		}
 	})
 }
+
+// ========================================
+// Sequencer.Set 测试
+// ========================================
+
+func TestSequencer_Set(t *testing.T) {
+	redis := setupRedisConn(t)
+	if redis == nil {
+		t.Skip("Redis not available")
+	}
+
+	logger := setupLogger(t)
+	gen, err := NewSequencer(&SequenceConfig{
+		KeyPrefix: "test:set:",
+		Step:      1,
+	}, redis, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("Failed to create sequencer: %v", err)
+	}
+
+	ctx := context.Background()
+
+	t.Run("Set sequence value", func(t *testing.T) {
+		key := fmt.Sprintf("key:%d", time.Now().UnixNano())
+
+		// 设置初始值
+		err := gen.Set(ctx, key, 100)
+		if err != nil {
+			t.Fatalf("Failed to set sequence: %v", err)
+		}
+
+		// 验证 Next 从设置值之后开始
+		seq, err := gen.Next(ctx, key)
+		if err != nil {
+			t.Fatalf("Failed to get next sequence: %v", err)
+		}
+		if seq != 101 {
+			t.Errorf("Expected sequence 101, got %d", seq)
+		}
+	})
+
+	t.Run("Set negative value should fail", func(t *testing.T) {
+		key := fmt.Sprintf("neg:%d", time.Now().UnixNano())
+
+		err := gen.Set(ctx, key, -1)
+		if err == nil {
+			t.Error("Expected error for negative value")
+		}
+	})
+
+	t.Run("Set overwrites existing value", func(t *testing.T) {
+		key := fmt.Sprintf("overwrite:%d", time.Now().UnixNano())
+
+		// 先设置一个值
+		_ = gen.Set(ctx, key, 50)
+
+		// 覆盖设置
+		err := gen.Set(ctx, key, 200)
+		if err != nil {
+			t.Fatalf("Failed to overwrite sequence: %v", err)
+		}
+
+		// 验证新值
+		seq, err := gen.Next(ctx, key)
+		if err != nil {
+			t.Fatalf("Failed to get next sequence: %v", err)
+		}
+		if seq != 201 {
+			t.Errorf("Expected sequence 201, got %d", seq)
+		}
+	})
+
+	t.Run("Set with prefix", func(t *testing.T) {
+		// 验证 KeyPrefix 正确工作
+		key := fmt.Sprintf("prefix:%d", time.Now().UnixNano())
+
+		err := gen.Set(ctx, key, 999)
+		if err != nil {
+			t.Fatalf("Failed to set with prefix: %v", err)
+		}
+
+		seq, err := gen.Next(ctx, key)
+		if err != nil {
+			t.Fatalf("Failed to get next: %v", err)
+		}
+		if seq != 1000 {
+			t.Errorf("Expected 1000, got %d", seq)
+		}
+	})
+}
+
+// ========================================
+// Sequencer.SetIfNotExists 测试
+// ========================================
+
+func TestSequencer_SetIfNotExists(t *testing.T) {
+	redis := setupRedisConn(t)
+	if redis == nil {
+		t.Skip("Redis not available")
+	}
+
+	logger := setupLogger(t)
+	gen, err := NewSequencer(&SequenceConfig{
+		KeyPrefix: "test:setnx:",
+		Step:      1,
+	}, redis, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("Failed to create sequencer: %v", err)
+	}
+
+	ctx := context.Background()
+
+	t.Run("SetIfNotExists on new key", func(t *testing.T) {
+		key := fmt.Sprintf("new:%d", time.Now().UnixNano())
+
+		ok, err := gen.SetIfNotExists(ctx, key, 100)
+		if err != nil {
+			t.Fatalf("Failed to set if not exists: %v", err)
+		}
+		if !ok {
+			t.Error("Expected true for new key")
+		}
+
+		// 验证值已设置
+		seq, err := gen.Next(ctx, key)
+		if err != nil {
+			t.Fatalf("Failed to get next: %v", err)
+		}
+		if seq != 101 {
+			t.Errorf("Expected 101, got %d", seq)
+		}
+	})
+
+	t.Run("SetIfNotExists on existing key", func(t *testing.T) {
+		key := fmt.Sprintf("existing:%d", time.Now().UnixNano())
+
+		// 首次设置
+		ok, err := gen.SetIfNotExists(ctx, key, 50)
+		if err != nil {
+			t.Fatalf("Failed to set first time: %v", err)
+		}
+		if !ok {
+			t.Error("Expected true on first set")
+		}
+
+		// 再次设置应该失败
+		ok, err = gen.SetIfNotExists(ctx, key, 999)
+		if err != nil {
+			t.Fatalf("Failed on second set: %v", err)
+		}
+		if ok {
+			t.Error("Expected false on existing key")
+		}
+
+		// 验证原值未被覆盖
+		seq, err := gen.Next(ctx, key)
+		if err != nil {
+			t.Fatalf("Failed to get next: %v", err)
+		}
+		if seq != 51 {
+			t.Errorf("Expected 51 (original value+1), got %d", seq)
+		}
+	})
+
+	t.Run("SetIfNotExists negative value should fail", func(t *testing.T) {
+		key := fmt.Sprintf("neg:%d", time.Now().UnixNano())
+
+		ok, err := gen.SetIfNotExists(ctx, key, -10)
+		if err == nil {
+			t.Error("Expected error for negative value")
+		}
+		if ok {
+			t.Error("Expected false for error case")
+		}
+	})
+
+	t.Run("IM scenario: initialize only once", func(t *testing.T) {
+		// 模拟 IM 系统场景：已有历史消息，最大 seq_id=100
+		key := fmt.Sprintf("im:conv:%d", time.Now().UnixNano())
+
+		// 第一次初始化
+		ok, err := gen.SetIfNotExists(ctx, key, 100)
+		if err != nil {
+			t.Fatalf("Failed to initialize: %v", err)
+		}
+		if !ok {
+			t.Error("Expected true on first initialization")
+		}
+
+		// 模拟另一个进程也尝试初始化（应该失败）
+		ok, err = gen.SetIfNotExists(ctx, key, 200)
+		if err != nil {
+			t.Fatalf("Failed on duplicate init: %v", err)
+		}
+		if ok {
+			t.Error("Expected false on duplicate initialization")
+		}
+
+		// 验证后续 Next 正常工作
+		seq1, _ := gen.Next(ctx, key)
+		seq2, _ := gen.Next(ctx, key)
+
+		if seq1 != 101 {
+			t.Errorf("Expected 101, got %d", seq1)
+		}
+		if seq2 != 102 {
+			t.Errorf("Expected 102, got %d", seq2)
+		}
+	})
+
+	t.Run("SetIfNotExists with Next after Set", func(t *testing.T) {
+		key := fmt.Sprintf("combo:%d", time.Now().UnixNano())
+
+		// 先用 SetIfNotExists 初始化
+		ok, err := gen.SetIfNotExists(ctx, key, 10)
+		if err != nil || !ok {
+			t.Fatalf("SetIfNotExists failed: %v", err)
+		}
+
+		// 多次 Next
+		for i := 0; i < 5; i++ {
+			seq, err := gen.Next(ctx, key)
+			if err != nil {
+				t.Fatalf("Next failed: %v", err)
+			}
+			expected := int64(11 + i)
+			if seq != expected {
+				t.Errorf("Expected %d, got %d", expected, seq)
+			}
+		}
+	})
+}
