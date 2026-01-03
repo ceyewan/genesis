@@ -2,227 +2,112 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
+	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
 func main() {
 	ctx := context.Background()
 
+	// 0. 初始化 Logger (开启 Trace Context 关联)
+	// 这样日志中会自动包含 trace_id 和 span_id，方便与 Metrics 联动排查
+	logger, _ := clog.New(
+		&clog.Config{Level: "info", Format: "console"},
+		clog.WithTraceContext(),
+	)
+
 	// 1. 创建 Metrics 配置
 	cfg := metrics.NewDevDefaultConfig("gin-demo")
+	cfg.EnableRuntime = true
 
-	// 2. 初始化 Metrics
+	// 2. 初始化 Metrics (开启 Runtime 监控)
 	meter, err := metrics.New(cfg)
 	if err != nil {
-		log.Fatalf("Failed to create metrics: %v", err)
+		logger.Fatal("Failed to create metrics", clog.Error(err))
 	}
 	defer func() {
 		if err := meter.Shutdown(ctx); err != nil {
-			log.Printf("Failed to shutdown metrics: %v", err)
+			logger.Error("Failed to shutdown metrics", clog.Error(err))
 		}
 	}()
 
-	// 3. 创建自定义指标
-	requestCounter, err := meter.Counter(
-		"http_requests_total",
-		"Total HTTP requests",
+	// 3. 创建业务自定义指标
+	// 示例：在线用户数（Gauge）
+	onlineUsers, err := meter.Gauge(
+		"im_online_users",
+		"Current online user count",
 	)
 	if err != nil {
-		log.Fatalf("Failed to create counter: %v", err)
+		logger.Fatal("Failed to create gauge", clog.Error(err))
 	}
 
-	requestDuration, err := meter.Histogram(
-		"http_request_duration_seconds",
-		"HTTP request duration in seconds",
+	// 示例：消息处理延迟（Histogram），使用自定义 buckets
+	messageLag, err := meter.Histogram(
+		"im_message_lag_seconds",
+		"Message processing lag",
+		metrics.WithBuckets([]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create histogram: %v", err)
-	}
-
-	activeRequests, err := meter.Gauge(
-		"http_requests_active",
-		"Number of active HTTP requests",
-	)
-	if err != nil {
-		log.Fatalf("Failed to create gauge: %v", err)
+		logger.Fatal("Failed to create histogram", clog.Error(err))
 	}
 
 	// 4. 创建 Gin 路由器
 	router := gin.Default()
 
-	// 5. 添加 Metrics 中间件
-	router.Use(metricsMiddleware(
-		requestCounter,
-		requestDuration,
-		activeRequests,
-	))
+	// 5. 添加 OpenTelemetry 标准中间件
+	// 这一行代码替代了原来的 metricsMiddleware，自动记录 HTTP Method, Path, Status, Duration 等
+	// 并且自动处理 Trace Context
+	router.Use(otelgin.Middleware("gin-demo"))
 
 	// 6. 定义业务路由
 	router.GET("/", func(c *gin.Context) {
+		ctx := c.Request.Context()
+
+		// 模拟用户上线
+		onlineUsers.Inc(ctx, metrics.L("region", "shanghai"))
+
+		// 记录一条带 TraceID 的日志
+		logger.InfoContext(ctx, "User online event received", clog.String("region", "shanghai"))
+
 		c.JSON(http.StatusOK, gin.H{
-			"message": "Hello from Gin Demo",
+			"message": "Hello from Cloud Native Metrics",
 		})
 	})
 
-	// 模拟慢请求，用于演示活跃连接数
-	router.GET("/slow", func(c *gin.Context) {
-		time.Sleep(2 * time.Second) // 模拟 2 秒处理时间
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Slow request completed",
-		})
+	router.POST("/message", func(c *gin.Context) {
+		ctx := c.Request.Context()
+
+		// 模拟消息处理
+		start := time.Now()
+		logger.InfoContext(ctx, "Processing message", clog.String("type", "text"))
+
+		time.Sleep(10 * time.Millisecond) // 模拟处理耗时
+		lag := time.Since(start).Seconds()
+
+		// 记录消息延迟 (支持自定义 Buckets)
+		messageLag.Record(ctx, lag, metrics.L("type", "text"))
+
+		c.JSON(http.StatusOK, gin.H{"status": "sent"})
 	})
 
-	router.POST("/orders", func(c *gin.Context) {
-		// 模拟订单创建
-		var order struct {
-			Name  string  `json:"name" binding:"required"`
-			Price float64 `json:"price" binding:"required,gt=0"`
-		}
-
-		if err := c.ShouldBindJSON(&order); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-
-		// 模拟业务处理
-		time.Sleep(100 * time.Millisecond)
-
-		c.JSON(http.StatusCreated, gin.H{
-			"id":    12345,
-			"name":  order.Name,
-			"price": order.Price,
-		})
-	})
-
-	router.GET("/users/:id", func(c *gin.Context) {
-		id := c.Param("id")
-		c.JSON(http.StatusOK, gin.H{
-			"id":   id,
-			"name": "User " + id,
-		})
-	})
-
-	router.GET("/error", func(c *gin.Context) {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Something went wrong",
-		})
-	})
-
-	// 7. 启动 Gin HTTP 服务（在协程中）
+	// 7. 启动 Gin HTTP 服务
 	go func() {
-		log.Printf("Starting Gin server on :8080")
+		logger.Info("Starting Gin server on :8080")
 		if err := router.Run(":8080"); err != nil {
-			log.Printf("Gin server error: %v", err)
+			logger.Error("Gin server error", clog.Error(err))
 		}
 	}()
 
-	// 8. 模拟客户端请求生成指标
-	log.Printf("Starting client simulator...")
-	go simulateClient()
+	logger.Info("Prometheus metrics available at http://localhost:9090/metrics")
+	logger.Info("Try accessing:")
+	logger.Info("  curl http://localhost:8080/")
+	logger.Info("  curl -X POST http://localhost:8080/message")
 
-	log.Printf("Prometheus metrics available at http://localhost:9090/metrics")
-
-	// 9. 等待退出信号
+	// 8. 等待退出信号
 	select {}
-}
-
-// simulateClient 模拟客户端发送请求以生成指标
-func simulateClient() {
-	time.Sleep(2 * time.Second) // 等待服务器启动
-
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	// 定义要模拟的请求
-	requests := []struct {
-		method  string
-		url     string
-		payload string
-	}{
-		{"GET", "http://localhost:8080/", ""},
-		{"POST", "http://localhost:8080/orders", `{"name":"MacBook Pro","price":2499.99}`},
-		{"GET", "http://localhost:8080/users/123", ""},
-		{"GET", "http://localhost:8080/users/456", ""},
-		{"GET", "http://localhost:8080/error", ""},
-		{"GET", "http://localhost:8080/slow", ""}, // 慢请求，用于演示活跃连接
-		{"GET", "http://localhost:8080/slow", ""}, // 多发几个慢请求
-		{"GET", "http://localhost:8080/slow", ""},
-	}
-
-	// 循环发送请求
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		for _, req := range requests {
-			go func(method, url, payload string) {
-				var httpReq *http.Request
-				var err error
-
-				if method == "POST" {
-					httpReq, err = http.NewRequest(method, url, strings.NewReader(payload))
-					if err == nil {
-						httpReq.Header.Set("Content-Type", "application/json")
-					}
-				} else {
-					httpReq, err = http.NewRequest(method, url, nil)
-				}
-
-				if err != nil {
-					log.Printf("Failed to create request: %v", err)
-					return
-				}
-
-				resp, err := client.Do(httpReq)
-				if err != nil {
-					log.Printf("Request failed: %v", err)
-					return
-				}
-				resp.Body.Close()
-			}(req.method, req.url, req.payload)
-
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-}
-
-// metricsMiddleware 记录 HTTP 请求的指标
-func metricsMiddleware(counter metrics.Counter, duration metrics.Histogram, active metrics.Gauge) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		ctx := c.Request.Context()
-
-		// 增加活跃请求数
-		active.Inc(ctx, metrics.L("method", c.Request.Method))
-
-		// 记录请求耗时
-		start := time.Now()
-		defer func() {
-			elapsed := time.Since(start).Seconds()
-
-			// 记录计数器
-			counter.Inc(ctx,
-				metrics.L("method", c.Request.Method),
-				metrics.L("path", c.Request.URL.Path),
-				metrics.L("status", strconv.Itoa(c.Writer.Status())),
-			)
-
-			// 记录直方图
-			duration.Record(ctx, elapsed,
-				metrics.L("method", c.Request.Method),
-				metrics.L("path", c.Request.URL.Path),
-			)
-
-			// 减少活跃请求数
-			active.Dec(ctx, metrics.L("method", c.Request.Method))
-		}()
-
-		// 继续处理请求
-		c.Next()
-	}
 }

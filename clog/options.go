@@ -13,9 +13,10 @@ type Option func(*options)
 
 // options 内部选项结构，存储 Logger 的配置选项
 type options struct {
-	namespaceParts []string
-	contextFields  []ContextField
-	buffer         *bytes.Buffer // 测试用缓冲区
+	namespaceParts        []string
+	contextFields         []ContextField
+	buffer                *bytes.Buffer // 测试用缓冲区
+	enableTraceExtraction bool
 }
 
 // WithNamespace 设置日志命名空间，支持多级命名空间
@@ -67,6 +68,15 @@ func WithStandardContext() Option {
 			ContextField{Key: "user_id", FieldName: "user_id"},
 			ContextField{Key: "request_id", FieldName: "request_id"},
 		)
+	}
+}
+
+// WithTraceContext 开启 OpenTelemetry TraceID 自动提取
+//
+// 启用后，会自动从 Context 中提取 OTel 的 TraceID 和 SpanID。
+func WithTraceContext() Option {
+	return func(o *options) {
+		o.enableTraceExtraction = true
 	}
 }
 

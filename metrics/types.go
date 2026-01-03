@@ -33,12 +33,20 @@ type MetricOption func(*metricOptions)
 
 // metricOptions 指标选项（内部使用）
 type metricOptions struct {
-	Unit string
+	Unit    string
+	Buckets []float64
 }
 
 // WithUnit 设置指标的单位
 func WithUnit(unit string) MetricOption {
 	return func(o *metricOptions) {
 		o.Unit = unit
+	}
+}
+
+// WithBuckets 设置直方图的桶分布
+func WithBuckets(buckets []float64) MetricOption {
+	return func(o *metricOptions) {
+		o.Buckets = buckets
 	}
 }

@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/ceyewan/genesis/clog"
 )
 
 // TestNew 测试创建 Meter 实例
@@ -13,13 +11,11 @@ func TestNew(t *testing.T) {
 	tests := []struct {
 		name    string
 		cfg     *Config
-		opts    []Option
 		wantErr bool
 	}{
 		{
 			name:    "nil config",
 			cfg:     nil,
-			opts:    nil,
 			wantErr: true,
 		},
 		{
@@ -28,7 +24,6 @@ func TestNew(t *testing.T) {
 				ServiceName: "test-service",
 				Version:     "v1.0.0",
 			},
-			opts:    nil,
 			wantErr: false,
 		},
 		{
@@ -39,26 +34,13 @@ func TestNew(t *testing.T) {
 				Port:        9091,
 				Path:        "/metrics",
 			},
-			opts:    nil,
-			wantErr: false,
-		},
-		{
-			name: "with logger option",
-			cfg: &Config{
-				ServiceName: "test-service",
-				Version:     "v1.0.0",
-			},
-			opts: func() []Option {
-				logger, _ := clog.New(&clog.Config{Level: "debug"})
-				return []Option{WithLogger(logger)}
-			}(),
 			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			meter, err := New(tt.cfg, tt.opts...)
+			meter, err := New(tt.cfg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("New() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -227,58 +209,6 @@ func TestMetricOptions(t *testing.T) {
 	counter.Inc(ctx, L("type", "upload"))
 }
 
-// TestWithLogger 测试 WithLogger 选项
-func TestWithLogger(t *testing.T) {
-	cfg := &Config{
-		ServiceName: "test-service",
-		Version:     "v1.0.0",
-	}
-
-	logger, _ := clog.New(&clog.Config{Level: "debug"})
-
-	// 测试带 logger 的创建
-	meter, err := New(cfg, WithLogger(logger))
-	if err != nil {
-		t.Errorf("New() with logger error = %v", err)
-		return
-	}
-
-	if meter == nil {
-		t.Error("New() with logger returned nil meter")
-		return
-	}
-
-	// 清理
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	meter.Shutdown(ctx)
-}
-
-// TestWithLoggerNil 测试传入 nil logger
-func TestWithLoggerNil(t *testing.T) {
-	cfg := &Config{
-		ServiceName: "test-service",
-		Version:     "v1.0.0",
-	}
-
-	// 传入 nil logger 应该使用默认值
-	meter, err := New(cfg, WithLogger(nil))
-	if err != nil {
-		t.Errorf("New() with nil logger error = %v", err)
-		return
-	}
-
-	if meter == nil {
-		t.Error("New() with nil logger returned nil meter")
-		return
-	}
-
-	// 清理
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	meter.Shutdown(ctx)
-}
-
 // TestDefaultConfigs 测试默认配置工厂
 func TestDefaultConfigs(t *testing.T) {
 	// 测试开发环境默认配置
@@ -295,6 +225,9 @@ func TestDefaultConfigs(t *testing.T) {
 	if devCfg.Path != "/metrics" {
 		t.Errorf("Path = %v, want /metrics", devCfg.Path)
 	}
+	if devCfg.EnableRuntime {
+		t.Errorf("EnableRuntime = %v, want false", devCfg.EnableRuntime)
+	}
 
 	// 测试生产环境默认配置
 	prodCfg := NewProdDefaultConfig("prod-service", "v1.2.3")
@@ -309,6 +242,9 @@ func TestDefaultConfigs(t *testing.T) {
 	}
 	if prodCfg.Path != "/metrics" {
 		t.Errorf("Path = %v, want /metrics", prodCfg.Path)
+	}
+	if prodCfg.EnableRuntime {
+		t.Errorf("EnableRuntime = %v, want false", prodCfg.EnableRuntime)
 	}
 
 	// 验证配置可以正常创建 Meter

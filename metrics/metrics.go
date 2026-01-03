@@ -26,14 +26,17 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/xerrors"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
@@ -53,25 +56,12 @@ func Discard() Meter {
 }
 
 // New 创建一个新的 Meter 实例
-func New(cfg *Config, opts ...Option) (Meter, error) {
+func New(cfg *Config) (Meter, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("config is required")
+		return nil, xerrors.Wrap(xerrors.ErrInvalidInput, "config is required")
 	}
 
-	// 解析 options
-	options := &options{}
-	for _, opt := range opts {
-		opt(options)
-	}
-
-	// 如果没有提供 logger，使用默认值
-	if options.logger == nil {
-		defaultLogger, _ := clog.New(&clog.Config{
-			Level:  "info",
-			Format: "console",
-		})
-		options.logger = defaultLogger.WithNamespace("metrics")
-	}
+	logger := defaultLogger()
 
 	// 创建资源
 	res, err := resource.New(context.Background(),
@@ -81,13 +71,13 @@ func New(cfg *Config, opts ...Option) (Meter, error) {
 		),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
+		return nil, xerrors.Wrap(err, "failed to create resource")
 	}
 
 	// 创建 Prometheus Exporter
 	prometheusExporter, err := prometheus.New()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create prometheus exporter: %w", err)
+		return nil, xerrors.Wrap(err, "failed to create prometheus exporter")
 	}
 
 	// 创建 Meter Provider
@@ -100,20 +90,34 @@ func New(cfg *Config, opts ...Option) (Meter, error) {
 	otel.SetMeterProvider(mp)
 
 	// 启动 Prometheus HTTP 服务器
+	var httpServer *http.Server
 	if cfg.Port > 0 && cfg.Path != "" {
+		addr := fmt.Sprintf(":%d", cfg.Port)
+		mux := http.NewServeMux()
+		mux.Handle(cfg.Path, promhttp.Handler())
+		httpServer = &http.Server{
+			Addr:    addr,
+			Handler: mux,
+		}
 		go func() {
-			addr := fmt.Sprintf(":%d", cfg.Port)
-			mux := http.NewServeMux()
-			mux.Handle(cfg.Path, promhttp.Handler())
-			httpServer := &http.Server{
-				Addr:    addr,
-				Handler: mux,
-			}
-			slog.Default().Info("Starting Prometheus metrics server", "addr", addr, "path", cfg.Path)
-			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Default().Error("Prometheus server error", "error", err)
+			logger.Info("Starting Prometheus metrics server",
+				clog.String("addr", addr),
+				clog.String("path", cfg.Path),
+			)
+			if err := httpServer.ListenAndServe(); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
+				logger.Error("Prometheus server error", clog.Error(err))
 			}
 		}()
+	}
+
+	// 启动 Runtime 监控
+	if cfg.EnableRuntime {
+		if err := runtime.Start(runtime.WithMeterProvider(mp)); err != nil {
+			// Runtime 监控启动失败不应导致服务崩溃，降级为记录日志
+			logger.Error("Failed to start runtime metrics", clog.Error(err))
+		} else {
+			logger.Info("Runtime metrics collection started")
+		}
 	}
 
 	// 获取 OTel Meter
@@ -121,9 +125,11 @@ func New(cfg *Config, opts ...Option) (Meter, error) {
 
 	// 包装为我们的 Meter 实现
 	return &meterImpl{
-		meter:    otelMeter,
-		provider: mp,
-		config:   cfg,
+		meter:      otelMeter,
+		provider:   mp,
+		config:     cfg,
+		httpServer: httpServer,
+		logger:     logger,
 	}, nil
 }
 
@@ -133,14 +139,28 @@ func New(cfg *Config, opts ...Option) (Meter, error) {
 
 // meterImpl 实现 Meter 接口
 type meterImpl struct {
-	meter    metric.Meter
-	provider *sdkmetric.MeterProvider
-	config   *Config
+	meter      metric.Meter
+	provider   *sdkmetric.MeterProvider
+	config     *Config
+	httpServer *http.Server
+	logger     clog.Logger
 }
 
 // Counter 创建累加器
 func (m *meterImpl) Counter(name string, desc string, opts ...MetricOption) (Counter, error) {
-	c, err := m.meter.Int64Counter(name, metric.WithDescription(desc))
+	options := &metricOptions{}
+	for _, o := range opts {
+		o(options)
+	}
+
+	otelOpts := []metric.Float64CounterOption{
+		metric.WithDescription(desc),
+	}
+	if options.Unit != "" {
+		otelOpts = append(otelOpts, metric.WithUnit(options.Unit))
+	}
+
+	c, err := m.meter.Float64Counter(name, otelOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +169,19 @@ func (m *meterImpl) Counter(name string, desc string, opts ...MetricOption) (Cou
 
 // Gauge 创建仪表盘
 func (m *meterImpl) Gauge(name string, desc string, opts ...MetricOption) (Gauge, error) {
-	g, err := m.meter.Float64Gauge(name, metric.WithDescription(desc))
+	options := &metricOptions{}
+	for _, o := range opts {
+		o(options)
+	}
+
+	otelOpts := []metric.Float64GaugeOption{
+		metric.WithDescription(desc),
+	}
+	if options.Unit != "" {
+		otelOpts = append(otelOpts, metric.WithUnit(options.Unit))
+	}
+
+	g, err := m.meter.Float64Gauge(name, otelOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +204,9 @@ func (m *meterImpl) Histogram(name string, desc string, opts ...MetricOption) (H
 	if options.Unit != "" {
 		otelOpts = append(otelOpts, metric.WithUnit(options.Unit))
 	}
+	if len(options.Buckets) > 0 {
+		otelOpts = append(otelOpts, metric.WithExplicitBucketBoundaries(options.Buckets...))
+	}
 
 	h, err := m.meter.Float64Histogram(name, otelOpts...)
 	if err != nil {
@@ -182,7 +217,20 @@ func (m *meterImpl) Histogram(name string, desc string, opts ...MetricOption) (H
 
 // Shutdown 关闭 Meter，刷新所有指标
 func (m *meterImpl) Shutdown(ctx context.Context) error {
-	return m.provider.Shutdown(ctx)
+	var serverErr error
+	if m.httpServer != nil {
+		if err := m.httpServer.Shutdown(ctx); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
+			m.logger.Error("Failed to shutdown metrics server", clog.Error(err))
+			serverErr = xerrors.Wrap(err, "shutdown metrics server")
+		}
+	}
+
+	providerErr := m.provider.Shutdown(ctx)
+	if providerErr != nil {
+		providerErr = xerrors.Wrap(providerErr, "shutdown meter provider")
+	}
+
+	return xerrors.Combine(serverErr, providerErr)
 }
 
 // ============================================================================
@@ -191,7 +239,7 @@ func (m *meterImpl) Shutdown(ctx context.Context) error {
 
 // counterImpl 实现 Counter 接口
 type counterImpl struct {
-	c metric.Int64Counter
+	c metric.Float64Counter
 }
 
 func (c *counterImpl) Inc(ctx context.Context, labels ...Label) {
@@ -199,7 +247,7 @@ func (c *counterImpl) Inc(ctx context.Context, labels ...Label) {
 }
 
 func (c *counterImpl) Add(ctx context.Context, val float64, labels ...Label) {
-	c.c.Add(ctx, int64(val), metric.WithAttributes(toAttributes(labels)...))
+	c.c.Add(ctx, val, metric.WithAttributes(toAttributes(labels)...))
 }
 
 // ============================================================================
@@ -309,9 +357,41 @@ func labelKey(labels []Label) string {
 	if len(labels) == 0 {
 		return ""
 	}
-	parts := make([]string, len(labels))
-	for i, l := range labels {
-		parts[i] = l.Key + "=" + l.Value
+
+	normalized := make([]Label, len(labels))
+	copy(normalized, labels)
+	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i].Key == normalized[j].Key {
+			return normalized[i].Value < normalized[j].Value
+		}
+		return normalized[i].Key < normalized[j].Key
+	})
+
+	var b strings.Builder
+	for i, l := range normalized {
+		if i > 0 {
+			b.WriteByte('|')
+		}
+		writeLabelPart(&b, l.Key)
+		b.WriteByte('=')
+		writeLabelPart(&b, l.Value)
 	}
-	return strings.Join(parts, "|")
+	return b.String()
+}
+
+func writeLabelPart(b *strings.Builder, s string) {
+	b.WriteString(strconv.Itoa(len(s)))
+	b.WriteByte(':')
+	b.WriteString(s)
+}
+
+func defaultLogger() clog.Logger {
+	logger, err := clog.New(&clog.Config{
+		Level:  "info",
+		Format: "console",
+	})
+	if err != nil {
+		return clog.Discard()
+	}
+	return logger.WithNamespace("metrics")
 }
