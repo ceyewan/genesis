@@ -78,7 +78,7 @@ type DB interface {
 }
 
 // New 创建数据库组件实例
-func New(conn connector.DatabaseConnector, cfg *Config, opts ...Option) (DB, error) {
+func New(conn connector.MySQLConnector, cfg *Config, opts ...Option) (DB, error) {
 	if cfg == nil {
 		cfg = &Config{}
 	}
