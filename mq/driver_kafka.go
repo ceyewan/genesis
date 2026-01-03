@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
@@ -13,17 +14,19 @@ import (
 
 // KafkaDriver Kafka 驱动实现
 type KafkaDriver struct {
-	conn   connector.KafkaConnector
-	client *kgo.Client
-	logger clog.Logger
+	conn      connector.KafkaConnector
+	connCfg   *connector.KafkaConfig
+	client    *kgo.Client
+	logger    clog.Logger
 }
 
 // NewKafkaDriver 创建 Kafka 驱动
-func NewKafkaDriver(conn connector.KafkaConnector, logger clog.Logger) *KafkaDriver {
+func NewKafkaDriver(conn connector.KafkaConnector, connCfg *connector.KafkaConfig, logger clog.Logger) *KafkaDriver {
 	return &KafkaDriver{
-		conn:   conn,
-		client: conn.GetClient(),
-		logger: logger,
+		conn:    conn,
+		connCfg: connCfg,
+		client:  conn.GetClient(),
+		logger:  logger,
 	}
 }
 
@@ -54,8 +57,8 @@ func (d *KafkaDriver) Subscribe(ctx context.Context, subject string, handler Han
 	}
 
 	// 为了支持不同的 Consumer Group 和 Topic 订阅，我们需要为每个 Subscription 创建新的 kgo.Client
-	// 复用 Connector 的配置
-	connCfg := d.conn.Config()
+	// 使用传入的配置
+	connCfg := d.connCfg
 
 	// 基础选项
 	kgoOpts := []kgo.Opt{
@@ -65,8 +68,15 @@ func (d *KafkaDriver) Subscribe(ctx context.Context, subject string, handler Han
 		kgo.AllowAutoTopicCreation(),
 	}
 
-	// 认证配置
-	// TODO: 从 connCfg 复制 SASL 配置 (如果实现)
+	// SASL/PLAIN 认证
+	if connCfg.User != "" && connCfg.Password != "" {
+		d.logger.Info("enabling SASL/PLAIN authentication for mq consumer", clog.String("user", connCfg.User))
+		auth := plain.Auth{
+			User: connCfg.User,
+			Pass: connCfg.Password,
+		}
+		kgoOpts = append(kgoOpts, kgo.SASL(auth.AsMechanism()))
+	}
 
 	// 消费组配置
 	if o.QueueGroup != "" {

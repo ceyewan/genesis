@@ -2,6 +2,7 @@ package mq
 
 import (
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
 )
 
@@ -10,8 +11,9 @@ type Option func(*options)
 
 // options 选项结构（内部使用）
 type options struct {
-	Logger clog.Logger
-	Meter  metrics.Meter
+	Logger       clog.Logger
+	Meter        metrics.Meter
+	KafkaConfig  *connector.KafkaConfig // Kafka 配置（使用 Kafka Driver 时需要）
 }
 
 // WithLogger 注入日志记录器
@@ -28,5 +30,12 @@ func WithLogger(l clog.Logger) Option {
 func WithMeter(m metrics.Meter) Option {
 	return func(o *options) {
 		o.Meter = m
+	}
+}
+
+// WithKafkaConfig 注入 Kafka 配置（使用 Kafka Driver 时必须提供）
+func WithKafkaConfig(cfg *connector.KafkaConfig) Option {
+	return func(o *options) {
+		o.KafkaConfig = cfg
 	}
 }

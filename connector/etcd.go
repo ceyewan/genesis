@@ -2,28 +2,20 @@ package connector
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 type etcdConnector struct {
-	cfg                   *EtcdConfig
-	client                *clientv3.Client
-	logger                clog.Logger
-	meter                 metrics.Meter
-	healthy               atomic.Bool
-	mu                    sync.RWMutex
-	totalConnections      metrics.Counter
-	successfulConnections metrics.Counter
-	failedConnections     metrics.Counter
-	activeConnections     metrics.Gauge
+	cfg     *EtcdConfig
+	client  *clientv3.Client
+	logger  clog.Logger
+	healthy atomic.Bool
 }
 
 // NewEtcd 创建 Etcd 连接器
@@ -37,51 +29,11 @@ func NewEtcd(cfg *EtcdConfig, opts ...Option) (EtcdConnector, error) {
 	for _, o := range opts {
 		o(opt)
 	}
-
-	if opt.logger == nil {
-		opt.logger = clog.Discard()
-	}
+	opt.applyDefaults()
 
 	c := &etcdConnector{
 		cfg:    cfg,
 		logger: opt.logger.With(clog.String("connector", "etcd"), clog.String("name", cfg.Name)),
-		meter:  opt.meter,
-	}
-
-	// 创建简化指标
-	if c.meter != nil {
-		var err error
-		c.totalConnections, err = c.meter.Counter(
-			"connector_etcd_total_connections",
-			"Total number of Etcd connection attempts",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create total connections counter")
-		}
-
-		c.successfulConnections, err = c.meter.Counter(
-			"connector_etcd_successful_connections",
-			"Number of successful Etcd connections",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create successful connections counter")
-		}
-
-		c.failedConnections, err = c.meter.Counter(
-			"connector_etcd_failed_connections",
-			"Number of failed Etcd connections",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create failed connections counter")
-		}
-
-		c.activeConnections, err = c.meter.Gauge(
-			"connector_etcd_active_connections",
-			"Number of active Etcd connections",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create active connections gauge")
-		}
 	}
 
 	// 创建 Etcd 客户端配置
@@ -122,14 +74,6 @@ func (c *etcdConnector) getEffectiveDialTimeout() time.Duration {
 
 // Connect 建立连接
 func (c *etcdConnector) Connect(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// 记录总连接尝试
-	if c.totalConnections != nil {
-		c.totalConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
-	}
-
 	c.logger.Info("attempting to connect to etcd", clog.Any("endpoints", c.cfg.Endpoints))
 
 	// 测试连接
@@ -138,20 +82,8 @@ func (c *etcdConnector) Connect(ctx context.Context) error {
 
 	_, err := c.client.Get(testCtx, "health-check")
 	if err != nil && !isEtcdNotFoundErr(err) {
-		// 记录失败连接
-		if c.failedConnections != nil {
-			c.failedConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
-		}
 		c.logger.Error("failed to connect to etcd", clog.Error(err))
 		return xerrors.Wrapf(err, "etcd connector[%s]: connect failed", c.cfg.Name)
-	}
-
-	// 记录成功连接
-	if c.successfulConnections != nil {
-		c.successfulConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
-	}
-	if c.activeConnections != nil {
-		c.activeConnections.Set(ctx, float64(1), metrics.L("connector", c.cfg.Name))
 	}
 
 	c.healthy.Store(true)
@@ -161,17 +93,8 @@ func (c *etcdConnector) Connect(ctx context.Context) error {
 
 // Close 关闭连接
 func (c *etcdConnector) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	c.logger.Info("closing etcd connection")
-
 	c.healthy.Store(false)
-
-	// 减少活跃连接数
-	if c.activeConnections != nil {
-		c.activeConnections.Set(context.Background(), float64(0), metrics.L("connector", c.cfg.Name))
-	}
 
 	if c.client != nil {
 		err := c.client.Close()

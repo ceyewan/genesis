@@ -1,7 +1,6 @@
 package connector
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -9,10 +8,10 @@ import (
 type MySQLConfig struct {
 	// 基础配置（可选，有默认值）
 	Name            string        `mapstructure:"name"`              // 连接器名称 (默认: "default")
-	MaxRetries      int           `mapstructure:"max_retries"`       // 最大重试次数 (默认: 3)
-	RetryInterval   time.Duration `mapstructure:"retry_interval"`    // 重试间隔 (默认: 1s)
-	ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`   // 连接超时 (默认: 5s)
-	HealthCheckFreq time.Duration `mapstructure:"health_check_freq"` // 健康检查频率 (默认: 30s)
+	MaxRetries      int           `mapstructure:"max_retries"`       // [预留] 最大重试次数 (默认: 3)
+	RetryInterval   time.Duration `mapstructure:"retry_interval"`    // [预留] 重试间隔 (默认: 1s)
+	ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`   // [预留] 连接超时 (默认: 5s)
+	HealthCheckFreq time.Duration `mapstructure:"health_check_freq"` // [预留] 健康检查频率 (默认: 30s)
 
 	// 核心配置
 	DSN      string `mapstructure:"dsn"`      // 完整 DSN (可选，若提供则忽略 Host/Port 等，优先级最高)
@@ -27,8 +26,7 @@ type MySQLConfig struct {
 	Timeout         time.Duration `mapstructure:"timeout"`           // 连接超时 (默认: 5s)
 	MaxIdleConns    int           `mapstructure:"max_idle_conns"`    // 最大空闲连接数 (默认: 10)
 	MaxOpenConns    int           `mapstructure:"max_open_conns"`    // 最大打开连接数 (默认: 100)
-	MaxLifetime     time.Duration `mapstructure:"max_lifetime"`      // 连接最大生命周期 (默认: 1h)
-	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"` // 连接最大生命周期 (同 MaxLifetime)
+	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"` // 连接最大生命周期 (默认: 1h)
 }
 
 // setDefaults 设置默认值
@@ -69,17 +67,21 @@ func (c *MySQLConfig) setDefaults() {
 // validate 实现 Configurable 接口
 func (c *MySQLConfig) validate() error {
 	c.setDefaults()
+	// 如果提供了 DSN，则跳过其他字段的校验
+	if c.DSN != "" {
+		return nil
+	}
 	if c.Host == "" {
-		return fmt.Errorf("主机地址不能为空")
+		return ErrConfig
 	}
 	if c.Port <= 0 {
-		return fmt.Errorf("端口必须大于0")
+		return ErrConfig
 	}
 	if c.Username == "" {
-		return fmt.Errorf("用户名不能为空")
+		return ErrConfig
 	}
 	if c.Database == "" {
-		return fmt.Errorf("数据库名不能为空")
+		return ErrConfig
 	}
 	return nil
 }
@@ -88,10 +90,10 @@ func (c *MySQLConfig) validate() error {
 type RedisConfig struct {
 	// 基础配置（可选，有默认值）
 	Name            string        `mapstructure:"name"`              // 连接器名称 (默认: "default")
-	MaxRetries      int           `mapstructure:"max_retries"`       // 最大重试次数 (默认: 3)
-	RetryInterval   time.Duration `mapstructure:"retry_interval"`    // 重试间隔 (默认: 1s)
-	ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`   // 连接超时 (默认: 5s)
-	HealthCheckFreq time.Duration `mapstructure:"health_check_freq"` // 健康检查频率 (默认: 30s)
+	MaxRetries      int           `mapstructure:"max_retries"`       // [预留] 最大重试次数 (默认: 3)
+	RetryInterval   time.Duration `mapstructure:"retry_interval"`    // [预留] 重试间隔 (默认: 1s)
+	ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`   // [预留] 连接超时 (默认: 5s)
+	HealthCheckFreq time.Duration `mapstructure:"health_check_freq"` // [预留] 健康检查频率 (默认: 30s)
 
 	// 核心配置
 	Addr     string `mapstructure:"addr"`     // [必填] 连接地址，如 "127.0.0.1:6379"
@@ -127,7 +129,7 @@ func (c *RedisConfig) setDefaults() {
 	if c.PoolSize <= 0 {
 		c.PoolSize = 10
 	}
-	if c.MinIdleConns < 0 {
+	if c.MinIdleConns <= 0 {
 		c.MinIdleConns = 5
 	}
 	if c.DialTimeout == 0 {
@@ -145,10 +147,10 @@ func (c *RedisConfig) setDefaults() {
 func (c *RedisConfig) validate() error {
 	c.setDefaults()
 	if c.Addr == "" {
-		return fmt.Errorf("Redis地址不能为空")
+		return ErrConfig
 	}
 	if c.DB < 0 {
-		return fmt.Errorf("数据库编号不能小于0")
+		return ErrConfig
 	}
 	return nil
 }
@@ -157,10 +159,10 @@ func (c *RedisConfig) validate() error {
 type EtcdConfig struct {
 	// 基础配置（可选，有默认值）
 	Name            string        `mapstructure:"name"`              // 连接器名称 (默认: "default")
-	MaxRetries      int           `mapstructure:"max_retries"`       // 最大重试次数 (默认: 3)
-	RetryInterval   time.Duration `mapstructure:"retry_interval"`    // 重试间隔 (默认: 1s)
+	MaxRetries      int           `mapstructure:"max_retries"`       // [预留] 最大重试次数 (默认: 3)
+	RetryInterval   time.Duration `mapstructure:"retry_interval"`    // [预留] 重试间隔 (默认: 1s)
 	ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`   // 连接超时 (默认: 5s)
-	HealthCheckFreq time.Duration `mapstructure:"health_check_freq"` // 健康检查频率 (默认: 30s)
+	HealthCheckFreq time.Duration `mapstructure:"health_check_freq"` // [预留] 健康检查频率 (默认: 30s)
 
 	// 核心配置
 	Endpoints []string `mapstructure:"endpoints"` // [必填] 连接地址列表
@@ -207,7 +209,7 @@ func (c *EtcdConfig) setDefaults() {
 func (c *EtcdConfig) validate() error {
 	c.setDefaults()
 	if len(c.Endpoints) == 0 {
-		return fmt.Errorf("Etcd端点不能为空")
+		return ErrConfig
 	}
 	return nil
 }
@@ -216,10 +218,10 @@ func (c *EtcdConfig) validate() error {
 type NATSConfig struct {
 	// 基础配置（可选，有默认值）
 	Name            string        `mapstructure:"name"`              // 连接器名称 (默认: "default")
-	MaxRetries      int           `mapstructure:"max_retries"`       // 最大重试次数 (默认: 3)
-	RetryInterval   time.Duration `mapstructure:"retry_interval"`    // 重试间隔 (默认: 1s)
+	MaxRetries      int           `mapstructure:"max_retries"`       // [预留] 最大重试次数 (默认: 3)
+	RetryInterval   time.Duration `mapstructure:"retry_interval"`    // [预留] 重试间隔 (默认: 1s)
 	ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`   // 连接超时 (默认: 5s)
-	HealthCheckFreq time.Duration `mapstructure:"health_check_freq"` // 健康检查频率 (默认: 30s)
+	HealthCheckFreq time.Duration `mapstructure:"health_check_freq"` // [预留] 健康检查频率 (默认: 30s)
 
 	// 核心配置
 	URL      string `mapstructure:"url"`      // [必填] 连接地址，如 "nats://127.0.0.1:4222"
@@ -271,7 +273,7 @@ func (c *NATSConfig) setDefaults() {
 func (c *NATSConfig) validate() error {
 	c.setDefaults()
 	if c.URL == "" {
-		return fmt.Errorf("NATS URL不能为空")
+		return ErrConfig
 	}
 	return nil
 }
@@ -310,7 +312,7 @@ func (c *KafkaConfig) setDefaults() {
 func (c *KafkaConfig) validate() error {
 	c.setDefaults()
 	if len(c.Seed) == 0 {
-		return fmt.Errorf("Kafka seed brokers不能为空")
+		return ErrConfig
 	}
 	return nil
 }

@@ -7,19 +7,19 @@ import (
 	"testing"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // TestRedisConfigValidation 测试 Redis 配置验证
 func TestRedisConfigValidation(t *testing.T) {
 	tests := []struct {
-		name        string
-		cfg         *RedisConfig
-		wantErr     bool
-		errContains string
+		name    string
+		cfg     *RedisConfig
+		wantErr bool
+		isErr   error
 	}{
 		{
 			name: "valid config with defaults",
@@ -45,8 +45,8 @@ func TestRedisConfigValidation(t *testing.T) {
 			cfg: &RedisConfig{
 				Addr: "",
 			},
-			wantErr:     true,
-			errContains: "地址不能为空",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "negative DB should fail",
@@ -54,8 +54,8 @@ func TestRedisConfigValidation(t *testing.T) {
 				Addr: "localhost:6379",
 				DB:   -1,
 			},
-			wantErr:     true,
-			errContains: "数据库编号不能小于0",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "default values applied",
@@ -71,7 +71,7 @@ func TestRedisConfigValidation(t *testing.T) {
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errContains)
+				assert.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 				// Verify defaults are set
@@ -86,10 +86,10 @@ func TestRedisConfigValidation(t *testing.T) {
 // TestMySQLConfigValidation 测试 MySQL 配置验证
 func TestMySQLConfigValidation(t *testing.T) {
 	tests := []struct {
-		name        string
-		cfg         *MySQLConfig
-		wantErr     bool
-		errContains string
+		name    string
+		cfg     *MySQLConfig
+		wantErr bool
+		isErr   error
 	}{
 		{
 			name: "valid config",
@@ -110,8 +110,8 @@ func TestMySQLConfigValidation(t *testing.T) {
 				Username: "root",
 				Database: "testdb",
 			},
-			wantErr:     true,
-			errContains: "主机地址不能为空",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "negative port should fail",
@@ -121,8 +121,8 @@ func TestMySQLConfigValidation(t *testing.T) {
 				Username: "root",
 				Database: "testdb",
 			},
-			wantErr:     true,
-			errContains: "端口必须大于0",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "empty username should fail",
@@ -132,8 +132,8 @@ func TestMySQLConfigValidation(t *testing.T) {
 				Username: "",
 				Database: "testdb",
 			},
-			wantErr:     true,
-			errContains: "用户名不能为空",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "empty database should fail",
@@ -143,8 +143,8 @@ func TestMySQLConfigValidation(t *testing.T) {
 				Username: "root",
 				Database: "",
 			},
-			wantErr:     true,
-			errContains: "数据库名不能为空",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "zero port gets default value",
@@ -163,7 +163,7 @@ func TestMySQLConfigValidation(t *testing.T) {
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errContains)
+				assert.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 			}
@@ -174,10 +174,10 @@ func TestMySQLConfigValidation(t *testing.T) {
 // TestEtcdConfigValidation 测试 Etcd 配置验证
 func TestEtcdConfigValidation(t *testing.T) {
 	tests := []struct {
-		name        string
-		cfg         *EtcdConfig
-		wantErr     bool
-		errContains string
+		name    string
+		cfg     *EtcdConfig
+		wantErr bool
+		isErr   error
 	}{
 		{
 			name: "valid config",
@@ -191,16 +191,16 @@ func TestEtcdConfigValidation(t *testing.T) {
 			cfg: &EtcdConfig{
 				Endpoints: []string{},
 			},
-			wantErr:     true,
-			errContains: "端点不能为空",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "nil endpoints should fail",
 			cfg: &EtcdConfig{
 				Endpoints: nil,
 			},
-			wantErr:     true,
-			errContains: "端点不能为空",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "multiple endpoints",
@@ -216,7 +216,7 @@ func TestEtcdConfigValidation(t *testing.T) {
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errContains)
+				assert.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 			}
@@ -227,10 +227,10 @@ func TestEtcdConfigValidation(t *testing.T) {
 // TestNATSConfigValidation 测试 NATS 配置验证
 func TestNATSConfigValidation(t *testing.T) {
 	tests := []struct {
-		name        string
-		cfg         *NATSConfig
-		wantErr     bool
-		errContains string
+		name    string
+		cfg     *NATSConfig
+		wantErr bool
+		isErr   error
 	}{
 		{
 			name: "valid config",
@@ -244,8 +244,8 @@ func TestNATSConfigValidation(t *testing.T) {
 			cfg: &NATSConfig{
 				URL: "",
 			},
-			wantErr:     true,
-			errContains: "URL不能为空",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "valid config with auth",
@@ -271,7 +271,7 @@ func TestNATSConfigValidation(t *testing.T) {
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errContains)
+				assert.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 			}
@@ -282,10 +282,10 @@ func TestNATSConfigValidation(t *testing.T) {
 // TestKafkaConfigValidation 测试 Kafka 配置验证
 func TestKafkaConfigValidation(t *testing.T) {
 	tests := []struct {
-		name        string
-		cfg         *KafkaConfig
-		wantErr     bool
-		errContains string
+		name    string
+		cfg     *KafkaConfig
+		wantErr bool
+		isErr   error
 	}{
 		{
 			name: "valid config",
@@ -299,16 +299,16 @@ func TestKafkaConfigValidation(t *testing.T) {
 			cfg: &KafkaConfig{
 				Seed: []string{},
 			},
-			wantErr:     true,
-			errContains: "seed brokers不能为空",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "nil seed should fail",
 			cfg: &KafkaConfig{
 				Seed: nil,
 			},
-			wantErr:     true,
-			errContains: "seed brokers不能为空",
+			wantErr: true,
+			isErr:   ErrConfig,
 		},
 		{
 			name: "multiple brokers",
@@ -333,7 +333,7 @@ func TestKafkaConfigValidation(t *testing.T) {
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errContains)
+				assert.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 			}
@@ -385,31 +385,6 @@ func TestConnectorOptions(t *testing.T) {
 		assert.NotNil(t, conn)
 		conn.Close()
 	})
-
-	t.Run("WithMeter", func(t *testing.T) {
-		cfg := &RedisConfig{
-			Addr: "localhost:6379",
-		}
-		meter := metrics.Discard()
-
-		conn, err := NewRedis(cfg, WithMeter(meter))
-		require.NoError(t, err)
-		assert.NotNil(t, conn)
-		conn.Close()
-	})
-
-	t.Run("WithLoggerAndMeter", func(t *testing.T) {
-		cfg := &RedisConfig{
-			Addr: "localhost:6379",
-		}
-		logger := clog.Discard()
-		meter := metrics.Discard()
-
-		conn, err := NewRedis(cfg, WithLogger(logger), WithMeter(meter))
-		require.NoError(t, err)
-		assert.NotNil(t, conn)
-		conn.Close()
-	})
 }
 
 // TestConnectorInterface 测试连接器接口实现
@@ -451,7 +426,7 @@ func TestConnectorInterface(t *testing.T) {
 
 		var _ Connector = conn
 		var _ MySQLConnector = conn
-		var _ DatabaseConnector = conn
+		var _ TypedConnector[*gorm.DB] = conn
 
 		assert.Equal(t, "default", conn.Name())
 		assert.NotNil(t, conn.GetClient())
@@ -500,7 +475,6 @@ func TestConnectorInterface(t *testing.T) {
 
 		assert.Equal(t, "default", conn.Name())
 		assert.Nil(t, conn.GetClient()) // Not connected yet
-		assert.Equal(t, cfg, conn.Config())
 	})
 
 	t.Run("SQLite connector implements interface", func(t *testing.T) {
@@ -512,7 +486,7 @@ func TestConnectorInterface(t *testing.T) {
 
 		var _ Connector = conn
 		var _ SQLiteConnector = conn
-		var _ DatabaseConnector = conn
+		var _ TypedConnector[*gorm.DB] = conn
 
 		assert.Contains(t, conn.Name(), "sqlite")
 		assert.NotNil(t, conn.GetClient())
@@ -723,48 +697,6 @@ func TestSentinelErrors(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestMetricsCreation 测试指标创建
-func TestMetricsCreation(t *testing.T) {
-	t.Run("metrics creation for Redis", func(t *testing.T) {
-		cfg := &RedisConfig{Addr: "localhost:6379"}
-
-		// Create a real meter for testing
-		meter, err := metrics.New(&metrics.Config{
-			ServiceName: "test-connector",
-			Port:        9093,
-		})
-		require.NoError(t, err)
-		defer meter.Shutdown(context.Background())
-
-		conn, err := NewRedis(cfg, WithMeter(meter))
-		require.NoError(t, err)
-		conn.Close()
-	})
-
-	t.Run("metrics creation for MySQL", func(t *testing.T) {
-		cfg := &MySQLConfig{
-			Host:     "localhost",
-			Port:     3306,
-			Username: "root",
-			Password: "pass",
-			Database: "db",
-		}
-
-		meter, err := metrics.New(&metrics.Config{
-			ServiceName: "test-connector",
-			Port:        9094,
-		})
-		require.NoError(t, err)
-		defer meter.Shutdown(context.Background())
-
-		conn, err := NewMySQL(cfg, WithMeter(meter))
-		if err != nil {
-			t.Skip("MySQL not available for metrics test")
-		}
-		conn.Close()
-	})
 }
 
 // TestContextCancellation 测试上下文取消

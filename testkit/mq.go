@@ -49,7 +49,8 @@ func GetRedisMQClient(t *testing.T) mq.Client {
 // GetKafkaMQDriver 获取 Kafka 驱动用于测试
 func GetKafkaMQDriver(t *testing.T) mq.Driver {
 	kafkaConn := GetKafkaConnector(t)
-	return mq.NewKafkaDriver(kafkaConn, NewLogger())
+	kafkaCfg := GetKafkaConfig()
+	return mq.NewKafkaDriver(kafkaConn, kafkaCfg, NewLogger())
 }
 
 // GetKafkaMQClient 获取 Kafka MQ 客户端
@@ -82,7 +83,8 @@ func GetRedisMQDriverWithConnector(t *testing.T) (mq.Driver, connector.RedisConn
 // GetKafkaMQDriverWithConnector 获取 Kafka 驱动和连接器
 func GetKafkaMQDriverWithConnector(t *testing.T) (mq.Driver, connector.KafkaConnector) {
 	kafkaConn := GetKafkaConnector(t)
-	driver := mq.NewKafkaDriver(kafkaConn, NewLogger())
+	kafkaCfg := GetKafkaConfig()
+	driver := mq.NewKafkaDriver(kafkaConn, kafkaCfg, NewLogger())
 	return driver, kafkaConn
 }
 

@@ -120,17 +120,18 @@ func initRedis(ctx context.Context, logger clog.Logger) (mq.Client, error) {
 }
 
 func initKafka(ctx context.Context, logger clog.Logger) (mq.Client, error) {
-	conn, err := connector.NewKafka(&connector.KafkaConfig{
+	cfg := &connector.KafkaConfig{
 		Name: "genesis-mq-kafka-example",
 		Seed: []string{getEnvOrDefault("KAFKA_BROKERS", "localhost:9092")},
-	}, connector.WithLogger(logger))
+	}
+	conn, err := connector.NewKafka(cfg, connector.WithLogger(logger))
 	if err != nil {
 		return nil, err
 	}
 	if err := conn.Connect(ctx); err != nil {
 		return nil, err
 	}
-	driver := mq.NewKafkaDriver(conn, logger)
+	driver := mq.NewKafkaDriver(conn, cfg, logger)
 	return mq.New(driver, mq.WithLogger(logger))
 }
 

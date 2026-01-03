@@ -369,12 +369,13 @@ func TestKafkaPublishSubscribe(t *testing.T) {
 
 	t.Run("Kafka 基本发布订阅", func(t *testing.T) {
 		// 创建连接器
-		kafkaConn, err := connector.NewKafka(&connector.KafkaConfig{
+		kafkaCfg := &connector.KafkaConfig{
 			Name:           "test-kafka",
 			Seed:           []string{kafkaBrokers},
 			ConnectTimeout: 10 * time.Second,
 			RequestTimeout: 5 * time.Second,
-		}, connector.WithLogger(getTestLogger()))
+		}
+		kafkaConn, err := connector.NewKafka(kafkaCfg, connector.WithLogger(getTestLogger()))
 		require.NoError(t, err)
 
 		ctx := context.Background()
@@ -385,7 +386,7 @@ func TestKafkaPublishSubscribe(t *testing.T) {
 		defer kafkaConn.Close()
 
 		// 创建驱动和客户端
-		driver := NewKafkaDriver(kafkaConn, getTestLogger())
+		driver := NewKafkaDriver(kafkaConn, kafkaCfg, getTestLogger())
 		client, err := New(driver, WithLogger(getTestLogger()))
 		require.NoError(t, err)
 		defer client.Close()
@@ -432,12 +433,13 @@ func TestKafkaPublishSubscribe(t *testing.T) {
 	})
 
 	t.Run("Kafka 消费者组", func(t *testing.T) {
-		kafkaConn, err := connector.NewKafka(&connector.KafkaConfig{
+		kafkaCfg := &connector.KafkaConfig{
 			Name:           "test-kafka-group",
 			Seed:           []string{kafkaBrokers},
 			ConnectTimeout: 10 * time.Second,
 			RequestTimeout: 5 * time.Second,
-		}, connector.WithLogger(getTestLogger()))
+		}
+		kafkaConn, err := connector.NewKafka(kafkaCfg, connector.WithLogger(getTestLogger()))
 		require.NoError(t, err)
 
 		ctx := context.Background()
@@ -449,7 +451,7 @@ func TestKafkaPublishSubscribe(t *testing.T) {
 
 		topic := "test-topic-group-" + fmt.Sprintf("%d", time.Now().UnixNano())
 
-		driver := NewKafkaDriver(kafkaConn, getTestLogger())
+		driver := NewKafkaDriver(kafkaConn, kafkaCfg, getTestLogger())
 		client, err := New(driver, WithLogger(getTestLogger()))
 		require.NoError(t, err)
 		defer client.Close()

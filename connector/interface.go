@@ -3,11 +3,10 @@
 //
 // 特性：
 //   - 统一接口：提供 Connector、TypedConnector 泛型接口
-//   - 多数据源支持：Redis、MySQL、Etcd、NATS
+//   - 多数据源支持：Redis、MySQL、Etcd、NATS、Kafka
 //   - 连接池管理：自动管理连接生命周期
 //   - 健康检查：定期检查连接状态，自动故障恢复
 //   - 配置驱动：基于配置文件的连接参数管理
-//   - 指标集成：集成 OpenTelemetry 指标收集
 //
 // 基本使用：
 //
@@ -19,7 +18,6 @@
 //	}
 //	redisConn, err := connector.NewRedis(cfg,
 //		connector.WithLogger(logger),
-//		connector.WithMeter(meter),
 //	)
 //	if err != nil {
 //		panic(err)
@@ -51,7 +49,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// Connector 基础连接器接口
+// Connector 基础连接器接口，定义所有连接器的通用行为
 type Connector interface {
 	// Connect 建立连接，应幂等且并发安全
 	Connect(ctx context.Context) error
@@ -66,15 +64,10 @@ type Connector interface {
 }
 
 // TypedConnector 泛型接口，提供类型安全的客户端访问
+// 所有具体连接器接口都应基于此定义
 type TypedConnector[T any] interface {
 	Connector
 	GetClient() T
-}
-
-// DatabaseConnector 数据库连接器接口（MySQL 和 SQLite 共用）
-type DatabaseConnector interface {
-	Connector
-	GetClient() *gorm.DB
 }
 
 // RedisConnector Redis 连接器接口
@@ -84,12 +77,12 @@ type RedisConnector interface {
 
 // MySQLConnector MySQL 连接器接口
 type MySQLConnector interface {
-	DatabaseConnector
+	TypedConnector[*gorm.DB]
 }
 
 // SQLiteConnector SQLite 连接器接口
 type SQLiteConnector interface {
-	DatabaseConnector
+	TypedConnector[*gorm.DB]
 }
 
 // EtcdConnector Etcd 连接器接口
@@ -105,5 +98,4 @@ type NATSConnector interface {
 // KafkaConnector Kafka 连接器接口
 type KafkaConnector interface {
 	TypedConnector[*kgo.Client]
-	Config() *KafkaConfig
 }
