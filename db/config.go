@@ -1,9 +1,13 @@
 package db
 
-import "errors"
+import "github.com/ceyewan/genesis/xerrors"
 
 // Config DB 组件配置
 type Config struct {
+	// Driver 指定数据库驱动类型: "mysql" 或 "sqlite"
+	// 默认值: "mysql"
+	Driver string `json:"driver" yaml:"driver"`
+
 	// 是否开启分片特性
 	EnableSharding bool `json:"enable_sharding" yaml:"enable_sharding"`
 
@@ -26,30 +30,37 @@ type ShardingRule struct {
 
 // setDefaults 设置配置的默认值（内部使用）
 func (c *Config) setDefaults() {
-	// DB 组件目前没有需要设置默认值的配置项
+	if c.Driver == "" {
+		c.Driver = "mysql"
+	}
 }
 
 // validate 验证配置的有效性（内部使用）
 func (c *Config) validate() error {
+	// 验证 Driver
+	if c.Driver != "mysql" && c.Driver != "sqlite" {
+		return xerrors.Wrapf(xerrors.ErrInvalidInput, "unsupported driver: %s (must be 'mysql' or 'sqlite')", c.Driver)
+	}
+
 	// 如果启用分片，必须有分片规则
 	if c.EnableSharding && len(c.ShardingRules) == 0 {
-		return errors.New("sharding enabled but no rules provided")
+		return xerrors.Wrap(xerrors.ErrInvalidInput, "sharding enabled but no rules provided")
 	}
 
 	// 验证每个分片规则
 	for _, rule := range c.ShardingRules {
 		if rule.ShardingKey == "" {
-			return errors.New("sharding key cannot be empty")
+			return xerrors.Wrap(xerrors.ErrInvalidInput, "sharding key cannot be empty")
 		}
 		if rule.NumberOfShards == 0 {
-			return errors.New("number of shards must be greater than 0")
+			return xerrors.Wrap(xerrors.ErrInvalidInput, "number of shards must be greater than 0")
 		}
 		if len(rule.Tables) == 0 {
-			return errors.New("sharding tables cannot be empty")
+			return xerrors.Wrap(xerrors.ErrInvalidInput, "sharding tables cannot be empty")
 		}
 		for _, table := range rule.Tables {
 			if table == "" {
-				return errors.New("sharding table name cannot be empty")
+				return xerrors.Wrap(xerrors.ErrInvalidInput, "sharding table name cannot be empty")
 			}
 		}
 	}
