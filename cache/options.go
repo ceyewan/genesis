@@ -2,6 +2,7 @@ package cache
 
 import (
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
 )
 
@@ -10,8 +11,9 @@ type Option func(*options)
 
 // options 选项结构（内部使用）
 type options struct {
-	Logger clog.Logger
-	Meter  metrics.Meter
+	Logger    clog.Logger
+	Meter     metrics.Meter
+	RedisConn connector.RedisConnector
 }
 
 // WithLogger 注入日志记录器
@@ -28,5 +30,12 @@ func WithLogger(l clog.Logger) Option {
 func WithMeter(m metrics.Meter) Option {
 	return func(o *options) {
 		o.Meter = m
+	}
+}
+
+// WithRedisConnector 注入 Redis 连接器 (仅用于分布式模式)
+func WithRedisConnector(conn connector.RedisConnector) Option {
+	return func(o *options) {
+		o.RedisConn = conn
 	}
 }

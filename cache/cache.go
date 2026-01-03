@@ -41,14 +41,14 @@ type Cache interface {
 	Has(ctx context.Context, key string) (bool, error)
 	Expire(ctx context.Context, key string, ttl time.Duration) error
 
-	// --- Hash ---
+	// --- Hash(Distributed Only) ---
 	HSet(ctx context.Context, key string, field string, value any) error
 	HGet(ctx context.Context, key string, field string, dest any) error
 	HGetAll(ctx context.Context, key string, destMap any) error
 	HDel(ctx context.Context, key string, fields ...string) error
 	HIncrBy(ctx context.Context, key string, field string, increment int64) (int64, error)
 
-	// --- Sorted Set ---
+	// --- Sorted Set(Distributed Only) ---
 	ZAdd(ctx context.Context, key string, score float64, member any) error
 	ZRem(ctx context.Context, key string, members ...any) error
 	ZScore(ctx context.Context, key string, member any) (float64, error)
@@ -56,7 +56,7 @@ type Cache interface {
 	ZRevRange(ctx context.Context, key string, start, stop int64, destSlice any) error
 	ZRangeByScore(ctx context.Context, key string, min, max float64, destSlice any) error
 
-	// --- List ---
+	// --- List(Distributed Only) ---
 	LPush(ctx context.Context, key string, values ...any) error
 	RPush(ctx context.Context, key string, values ...any) error
 	LPop(ctx context.Context, key string, dest any) error
@@ -68,22 +68,89 @@ type Cache interface {
 	Close() error
 }
 
-// New 创建缓存实例 (独立模式)
-// 这是标准的工厂函数，支持在不依赖 Container 的情况下独立实例化
+// New 根据配置创建缓存实例
+//
+// 支持单机模式 (standalone) 和分布式模式 (distributed)。
+// 如果 Mode 为 "standalone"，则创建本地内存缓存；
+// 如果 Mode 为 "distributed" 或为空，则创建 Redis 缓存。
+//
+// 注意：分布式模式需要通过 WithRedisConnector 注入 Redis 连接器，
+// 或者使用兼容旧版的 NewWithRedis 函数。
+func New(cfg *Config, opts ...Option) (Cache, error) {
+	if cfg == nil {
+		return nil, xerrors.New("config is nil")
+	}
+
+	// 应用选项
+	opt := options{}
+	for _, o := range opts {
+		o(&opt)
+	}
+
+	// 注入默认日志器
+	if opt.Logger == nil {
+		var err error
+		opt.Logger, err = clog.New(&clog.Config{Level: "info"})
+		if err != nil {
+			return nil, xerrors.New("failed to create default logger: " + err.Error())
+		}
+	}
+
+	switch cfg.Mode {
+	case "standalone":
+		return NewStandalone(cfg.Standalone, opts...)
+	case "distributed", "":
+		if opt.RedisConn == nil {
+			return nil, xerrors.New("redis connector is required for distributed mode, use WithRedisConnector")
+		}
+		return NewWithRedis(opt.RedisConn, cfg, opts...)
+	default:
+		return NewWithRedis(opt.RedisConn, cfg, opts...)
+	}
+}
+
+// NewStandalone 创建单机内存缓存实例
+//
+// 参数:
+//   - cfg: 单机缓存配置
+//   - opts: 可选参数 (Logger, Meter)
+//
+// 使用示例:
+//
+//	cacheClient, _ := cache.NewStandalone(&cache.StandaloneConfig{
+//	    Capacity: 10000,
+//	}, cache.WithLogger(logger))
+func NewStandalone(cfg *StandaloneConfig, opts ...Option) (Cache, error) {
+	if cfg == nil {
+		cfg = &StandaloneConfig{
+			Capacity: 10000,
+		}
+	}
+
+	// 应用选项
+	opt := options{}
+	for _, o := range opts {
+		o(&opt)
+	}
+
+	if opt.Logger == nil {
+		var err error
+		opt.Logger, err = clog.New(&clog.Config{Level: "info"})
+		if err != nil {
+			return nil, xerrors.New("failed to create default logger: " + err.Error())
+		}
+	}
+
+	return newStandalone(cfg, opt.Logger, opt.Meter)
+}
+
+// NewWithRedis 创建 Redis 缓存实例 (兼容旧版)
 //
 // 参数:
 //   - conn: Redis 连接器
 //   - cfg: 缓存配置
 //   - opts: 可选参数 (Logger, Meter)
-//
-// 使用示例:
-//
-//	redisConn, _ := connector.NewRedis(redisConfig)
-//	cache, _ := cache.New(redisConn, &cache.Config{
-//	    Prefix: "myapp:",
-//	    Serializer: "json",
-//	}, cache.WithLogger(logger))
-func New(conn connector.RedisConnector, cfg *Config, opts ...Option) (Cache, error) {
+func NewWithRedis(conn connector.RedisConnector, cfg *Config, opts ...Option) (Cache, error) {
 	// 应用选项
 	opt := options{}
 	for _, o := range opts {
@@ -92,15 +159,11 @@ func New(conn connector.RedisConnector, cfg *Config, opts ...Option) (Cache, err
 
 	// 如果没有提供 Logger，创建默认实例
 	if opt.Logger == nil {
-		logger, err := clog.New(&clog.Config{
-			Level:  "info",
-			Format: "json",
-			Output: "stdout",
-		})
+		var err error
+		opt.Logger, err = clog.New(&clog.Config{Level: "info"})
 		if err != nil {
-			return nil, xerrors.Wrapf(err, "failed to create default logger")
+			return nil, xerrors.New("failed to create default logger: " + err.Error())
 		}
-		opt.Logger = logger
 	}
 
 	return newRedis(conn, cfg, opt.Logger, opt.Meter)
