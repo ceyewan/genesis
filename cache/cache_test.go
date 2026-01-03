@@ -79,6 +79,14 @@ func setupCache(t *testing.T, prefix string) Cache {
 		return nil
 	}
 
+	// 清理测试前缀的数据，防止历史残留
+	ctx := context.Background()
+	client := redisConn.GetClient()
+	keys, _ := client.Keys(ctx, prefix+"*").Result()
+	if len(keys) > 0 {
+		client.Del(ctx, keys...)
+	}
+
 	logger, err := clog.New(&clog.Config{
 		Level:  "info",
 		Format: "json",
@@ -88,10 +96,10 @@ func setupCache(t *testing.T, prefix string) Cache {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
-	cache, err := New(redisConn, &Config{
+	cache, err := New(&Config{
 		Prefix:     prefix,
 		Serializer: "json",
-	}, WithLogger(logger))
+	}, WithRedisConnector(redisConn), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -115,41 +123,45 @@ func TestNew(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		conn        connector.RedisConnector
 		cfg         *Config
 		opts        []Option
 		expectError bool
 	}{
 		{
 			name:        "nil config",
-			conn:        setupRedisConn(t),
 			cfg:         nil,
 			expectError: true,
 		},
 		{
 			name: "valid config without logger",
-			conn: setupRedisConn(t),
 			cfg: &Config{
 				Prefix:     "test:",
 				Serializer: "json",
 			},
+			opts:        []Option{WithRedisConnector(setupRedisConn(t))},
 			expectError: false,
 		},
 		{
 			name: "valid config with logger",
-			conn: setupRedisConn(t),
 			cfg: &Config{
 				Prefix:     "test:",
 				Serializer: "json",
 			},
-			opts:        []Option{WithLogger(logger)},
+			opts:        []Option{WithRedisConnector(setupRedisConn(t)), WithLogger(logger)},
+			expectError: false,
+		},
+		{
+			name: "standalone mode",
+			cfg: &Config{
+				Mode: "standalone",
+			},
 			expectError: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cache, err := New(tt.conn, tt.cfg, tt.opts...)
+			cache, err := New(tt.cfg, tt.opts...)
 			if tt.expectError {
 				if err == nil {
 					t.Error("Expected error but got none")
@@ -726,10 +738,10 @@ func TestCache_Serializer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.serializer, func(t *testing.T) {
-			cache, err := New(redisConn, &Config{
+			cache, err := New(&Config{
 				Prefix:     fmt.Sprintf("test:ser:%s:", tt.serializer),
 				Serializer: tt.serializer,
-			}, WithLogger(logger))
+			}, WithRedisConnector(redisConn), WithLogger(logger))
 
 			if !tt.expectWork {
 				if err == nil {
@@ -773,4 +785,147 @@ func TestCache_Serializer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCache_Standalone(t *testing.T) {
+	logger, _ := clog.New(&clog.Config{Level: "info", Output: "stdout"})
+
+	cache, err := New(&Config{
+		Mode:       "standalone",
+		Standalone: &StandaloneConfig{Capacity: 100},
+	}, WithLogger(logger))
+
+	if err != nil {
+		t.Fatalf("Failed to create standalone cache: %v", err)
+	}
+	defer cache.Close()
+
+	ctx := context.Background()
+
+	t.Run("Basic Key-Value", func(t *testing.T) {
+		key := "local:kv"
+		value := "local_value"
+
+		// Set
+		err := cache.Set(ctx, key, value, time.Minute)
+		if err != nil {
+			t.Fatalf("Failed to set: %v", err)
+		}
+
+		// Has
+		exists, err := cache.Has(ctx, key)
+		if err != nil || !exists {
+			t.Errorf("Expected key to exist, err: %v", err)
+		}
+
+		// Get
+		var result string
+		err = cache.Get(ctx, key, &result)
+		if err != nil {
+			t.Fatalf("Failed to get: %v", err)
+		}
+		if result != value {
+			t.Errorf("Expected %s, got %s", value, result)
+		}
+
+		// Delete
+		err = cache.Delete(ctx, key)
+		if err != nil {
+			t.Fatalf("Failed to delete: %v", err)
+		}
+
+		// Has (should be false)
+		exists, err = cache.Has(ctx, key)
+		if err != nil || exists {
+			t.Errorf("Expected key to not exist")
+		}
+	})
+
+	t.Run("Complex Types (Pointer)", func(t *testing.T) {
+		type User struct {
+			Name string
+			Age  int
+		}
+
+		key := "local:struct"
+		user := &User{Name: "Bob", Age: 30}
+
+		err := cache.Set(ctx, key, user, time.Minute)
+		if err != nil {
+			t.Fatalf("Failed to set struct: %v", err)
+		}
+
+		var result *User
+		err = cache.Get(ctx, key, &result)
+		if err != nil {
+			t.Fatalf("Failed to get struct: %v", err)
+		}
+
+		if result.Name != "Bob" || result.Age != 30 {
+			t.Errorf("Struct mismatch: got %v", result)
+		}
+	})
+
+	t.Run("Unsupported Operations", func(t *testing.T) {
+		key := "local:unsupported"
+
+		// HSet
+		err := cache.HSet(ctx, key, "field", "value")
+		if err == nil || err.Error() != "operation not supported in standalone mode" {
+			t.Errorf("Expected unsupported error for HSet, got %v", err)
+		}
+
+		// ZAdd
+		err = cache.ZAdd(ctx, key, 1.0, "member")
+		if err == nil {
+			t.Error("Expected error for ZAdd")
+		}
+
+		// LPush
+		err = cache.LPush(ctx, key, "item")
+		if err == nil {
+			t.Error("Expected error for LPush")
+		}
+	})
+
+	t.Run("Expire", func(t *testing.T) {
+		key := "local:expire"
+		value := "value"
+
+		// Set with long TTL
+		cache.Set(ctx, key, value, time.Hour)
+
+		// Update TTL to short (500ms)
+		err := cache.Expire(ctx, key, 500*time.Millisecond)
+		if err != nil {
+			t.Fatalf("Failed to expire: %v", err)
+		}
+
+		// Wait enough time (1s)
+		time.Sleep(1000 * time.Millisecond)
+
+		// 使用 Get 来验证过期
+		var res string
+		err = cache.Get(ctx, key, &res)
+		if err == nil {
+			t.Error("Key should have expired (Get should fail)")
+		}
+	})
+
+	t.Run("Get Interface", func(t *testing.T) {
+		key := "local:interface"
+		value := "string_value"
+
+		cache.Set(ctx, key, value, time.Minute)
+
+		var result interface{}
+		err := cache.Get(ctx, key, &result)
+		if err != nil {
+			t.Fatalf("Failed to get interface: %v", err)
+		}
+
+		if str, ok := result.(string); !ok || str != value {
+			t.Errorf("Interface mismatch: got %v", result)
+		}
+	})
 }

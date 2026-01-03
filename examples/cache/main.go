@@ -87,6 +87,9 @@ func main() {
 
 	// 示例 3: 最新消息缓存（定长列表）
 	recentMessagesExample(logger)
+
+	// 示例 4: 单机内存缓存
+	standaloneExample(logger)
 }
 
 func userRouteExample(logger clog.Logger) {
@@ -115,7 +118,7 @@ func userRouteExample(logger clog.Logger) {
 	}
 
 	// 3. 创建缓存实例 (Go Native DI)
-	cacheClient, err := cache.New(redisConn, cacheCfg, cache.WithLogger(logger))
+	cacheClient, err := cache.New(cacheCfg, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
 		return
@@ -173,7 +176,7 @@ func sessionListExample(logger clog.Logger) {
 	}
 
 	// 3. 创建缓存实例
-	cacheClient, err := cache.New(redisConn, cacheCfg, cache.WithLogger(logger))
+	cacheClient, err := cache.New(cacheCfg, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
 		return
@@ -260,7 +263,7 @@ func recentMessagesExample(logger clog.Logger) {
 	}
 
 	// 3. 创建缓存实例
-	cacheClient, err := cache.New(redisConn, cacheCfg, cache.WithLogger(logger))
+	cacheClient, err := cache.New(cacheCfg, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
 		return
@@ -306,5 +309,56 @@ func recentMessagesExample(logger clog.Logger) {
 			clog.String("user_id", msg.UserID),
 			clog.String("time", msg.Timestamp.Format("15:04:05")),
 			clog.String("content", msg.Content))
+	}
+}
+
+func standaloneExample(logger clog.Logger) {
+	logger.Info("--- 示例 4: 单机内存缓存 ---")
+
+	// 1. 配置缓存
+	cacheCfg := &cache.Config{
+		Mode: "standalone",
+		Standalone: &cache.StandaloneConfig{
+			Capacity: 1000,
+		},
+	}
+
+	// 2. 创建缓存实例
+	cacheClient, err := cache.New(cacheCfg, cache.WithLogger(logger))
+	if err != nil {
+		logger.Error("创建单机缓存失败", clog.Error(err))
+		return
+	}
+	defer cacheClient.Close()
+
+	ctx := context.Background()
+
+	// 3. 缓存本地数据
+	key := "local_config"
+	value := map[string]string{
+		"theme": "dark",
+		"lang":  "zh-CN",
+	}
+
+	err = cacheClient.Set(ctx, key, value, 10*time.Minute)
+	if err != nil {
+		logger.Error("设置本地缓存失败", clog.Error(err))
+		return
+	}
+	logger.Info("✓ 已缓存本地配置", clog.Any("config", value))
+
+	// 4. 获取本地数据
+	var cachedValue map[string]string
+	err = cacheClient.Get(ctx, key, &cachedValue)
+	if err != nil {
+		logger.Error("获取本地缓存失败", clog.Error(err))
+		return
+	}
+	logger.Info("✓ 获取到的本地配置", clog.Any("config", cachedValue))
+
+	// 5. 尝试不支持的操作
+	err = cacheClient.HSet(ctx, "hash_key", "field", "value")
+	if err != nil {
+		logger.Info("✓ 验证不支持的操作返回错误: " + err.Error())
 	}
 }
