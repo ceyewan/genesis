@@ -13,7 +13,6 @@ func TestNew(t *testing.T) {
 	tests := []struct {
 		name    string
 		cfg     *Config
-		opts    []Option
 		wantErr bool
 	}{
 		{
@@ -29,29 +28,11 @@ func TestNew(t *testing.T) {
 			},
 			wantErr: false,
 		},
-		{
-			name: "empty config with options",
-			cfg:  &Config{},
-			opts: []Option{
-				WithConfigName("test"),
-			},
-			wantErr: false,
-		},
-		{
-			name: "with options override",
-			cfg: &Config{
-				Name: "original",
-			},
-			opts: []Option{
-				WithConfigName("overridden"),
-			},
-			wantErr: false,
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loader, err := New(tt.cfg, tt.opts...)
+			loader, err := New(tt.cfg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("New() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -267,48 +248,8 @@ func TestConfigDefaults(t *testing.T) {
 	}
 }
 
-// TestConfigOptions 测试选项应用
-func TestConfigOptions(t *testing.T) {
-	cfg := &Config{}
-
-	// 应用各种选项
-	WithConfigName("test")(cfg)
-	WithConfigPath("./test")(cfg)
-	WithConfigType("json")(cfg)
-	WithEnvPrefix("TEST")(cfg)
-
-	if cfg.Name != "test" {
-		t.Errorf("After WithConfigName, Name = %v, want test", cfg.Name)
-	}
-
-	if len(cfg.Paths) != 1 || cfg.Paths[0] != "./test" {
-		t.Errorf("After WithConfigPath, Paths = %v, want [./test]", cfg.Paths)
-	}
-
-	if cfg.FileType != "json" {
-		t.Errorf("After WithConfigType, FileType = %v, want json", cfg.FileType)
-	}
-
-	if cfg.EnvPrefix != "TEST" {
-		t.Errorf("After WithEnvPrefix, EnvPrefix = %v, want TEST", cfg.EnvPrefix)
-	}
-}
-
-// TestWithConfigPaths 测试 WithConfigPaths 覆盖路径
-func TestWithConfigPaths(t *testing.T) {
-	cfg := &Config{}
-	cfg.validate() // 先设置默认值
-
-	// 覆盖路径
-	WithConfigPaths("/etc/app", "./local")(cfg)
-
-	if len(cfg.Paths) != 2 || cfg.Paths[0] != "/etc/app" || cfg.Paths[1] != "./local" {
-		t.Errorf("WithConfigPaths() Paths = %v, want [/etc/app, ./local]", cfg.Paths)
-	}
-}
-
-// TestNewWithOptions 测试使用选项创建
-func TestNewWithOptions(t *testing.T) {
+// TestNewWithConfig 测试使用 Config 创建
+func TestNewWithConfig(t *testing.T) {
 	// 创建临时配置文件
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "app.json")
@@ -318,12 +259,12 @@ func TestNewWithOptions(t *testing.T) {
 		t.Fatalf("Failed to create test config file: %v", err)
 	}
 
-	loader, err := New(nil,
-		WithConfigName("app"),
-		WithConfigPaths(tmpDir),
-		WithConfigType("json"),
-		WithEnvPrefix("MYAPP"),
-	)
+	loader, err := New(&Config{
+		Name:     "app",
+		Paths:    []string{tmpDir},
+		FileType: "json",
+		EnvPrefix: "MYAPP",
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
