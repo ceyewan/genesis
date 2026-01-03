@@ -6,7 +6,6 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -17,33 +16,31 @@ import (
 // redisSequencer Redis 实现的序列号生成器
 type redisSequencer struct {
 	redis  connector.RedisConnector
-	cfg    *SequenceConfig
+	cfg    *SequencerConfig
 	logger clog.Logger
-	meter  metrics.Meter
 }
 
-// NewSequencer 创建序列号生成器
+// NewSequencer 创建序列号生成器（配置驱动，目前仅支持 Redis）
 //
 // 使用示例:
 //
-//	gen, _ := idgen.NewSequencer(&idgen.SequenceConfig{
+//	seq, _ := idgen.NewSequencer(&idgen.SequencerConfig{
 //	    KeyPrefix: "im:seq",
-//	    Step: 1,
-//	    TTL: 3600000000000, // 1 hour in nanoseconds
-//	}, redisConn, idgen.WithLogger(logger))
+//	    Step:      1,
+//	    TTL:       3600, // 1 hour (秒)
+//	}, idgen.WithRedisConnector(redisConn))
 //
 //	// IM 场景使用
-//	seq, _ := gen.Next(ctx, "alice")  // Alice 的消息序号
-//	seq, _ := gen.Next(ctx, "bob")    // Bob 的消息序号
-func NewSequencer(cfg *SequenceConfig, redis connector.RedisConnector, opts ...Option) (Sequencer, error) {
+//	id, _ := seq.Next(ctx, "alice")  // Alice 的消息序号
+//	id, _ := seq.Next(ctx, "bob")    // Bob 的消息序号
+func NewSequencer(cfg *SequencerConfig, opts ...Option) (Sequencer, error) {
 	if cfg == nil {
-		return nil, xerrors.WithCode(ErrInvalidInput, "sequence_config_nil")
+		return nil, xerrors.WithCode(ErrInvalidInput, "config_nil")
 	}
-	if redis == nil {
-		return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_nil")
-	}
-	if cfg.Step <= 0 {
-		cfg.Step = 1
+
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	// 应用选项
@@ -52,19 +49,28 @@ func NewSequencer(cfg *SequenceConfig, redis connector.RedisConnector, opts ...O
 		o(&opt)
 	}
 
-	// 派生 Logger (添加 "sequencer" namespace)
-	if opt.Logger != nil {
-		opt.Logger = opt.Logger.With(clog.String("component", "sequencer"))
+	// 目前仅支持 Redis
+	switch cfg.Driver {
+	case "redis":
+		if opt.RedisConnector == nil {
+			return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required")
+		}
+		return newRedisSequencer(cfg, opt.RedisConnector, opt.Logger)
+	default:
+		return nil, xerrors.WithCode(ErrInvalidInput, "unsupported_driver")
+	}
+}
+
+func newRedisSequencer(cfg *SequencerConfig, redis connector.RedisConnector, logger clog.Logger) (Sequencer, error) {
+	if logger != nil {
+		logger = logger.With(clog.String("component", "sequencer"))
 	}
 
-	gen := &redisSequencer{
+	return &redisSequencer{
 		redis:  redis,
 		cfg:    cfg,
-		logger: opt.Logger,
-		meter:  opt.Meter,
-	}
-
-	return gen, nil
+		logger: logger,
+	}, nil
 }
 
 // buildKey 根据键名构建完整的 Redis 键
@@ -103,13 +109,7 @@ func (r *redisSequencer) Next(ctx context.Context, key string) (int64, error) {
 		return current
 	`
 
-	// TTL 单位为秒
-	ttlSec := int(r.cfg.TTL / 1e9) // 纳秒转秒
-	if r.cfg.TTL > 0 && ttlSec == 0 {
-		ttlSec = 1 // 至少 1 秒
-	}
-
-	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, r.cfg.MaxValue, ttlSec).Result()
+	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, r.cfg.MaxValue, r.cfg.TTL).Result()
 	if err != nil {
 		if r.logger != nil {
 			r.logger.Error("failed to generate sequence",
@@ -171,13 +171,7 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 		return end_seq
 	`
 
-	// TTL 单位为秒
-	ttlSec := int(r.cfg.TTL / 1e9)
-	if r.cfg.TTL > 0 && ttlSec == 0 {
-		ttlSec = 1
-	}
-
-	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, count, r.cfg.MaxValue, ttlSec).Result()
+	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, count, r.cfg.MaxValue, r.cfg.TTL).Result()
 	if err != nil {
 		if r.logger != nil {
 			r.logger.Error("failed to batch generate sequence",
@@ -215,14 +209,6 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 }
 
 // Set 直接设置序列号的值
-//
-// 使用示例:
-//
-//	// IM 场景：初始化会话消息序号
-//	err := sequencer.Set(ctx, "conversation:123", 100)
-//	if err != nil { ... }
-//
-// 警告：此操作会覆盖现有值，请谨慎使用
 func (r *redisSequencer) Set(ctx context.Context, key string, value int64) error {
 	if value < 0 {
 		return xerrors.WithCode(ErrInvalidInput, "negative_value")
@@ -255,16 +241,6 @@ func (r *redisSequencer) Set(ctx context.Context, key string, value int64) error
 }
 
 // SetIfNotExists 仅当键不存在时设置序列号的值
-// 返回 true 表示设置成功，false 表示键已存在
-//
-// 使用示例:
-//
-//	// 安全初始化：仅在首次部署时设置起始值
-//	ok, err := sequencer.SetIfNotExists(ctx, "conversation:123", 100)
-//	if err != nil { ... }
-//	if !ok {
-//	    // 键已存在，可能是其他进程已初始化
-//	}
 func (r *redisSequencer) SetIfNotExists(ctx context.Context, key string, value int64) (bool, error) {
 	if value < 0 {
 		return false, xerrors.WithCode(ErrInvalidInput, "negative_value")

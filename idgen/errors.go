@@ -14,4 +14,7 @@ var (
 
 	// ErrInvalidInput 无效的输入
 	ErrInvalidInput = xerrors.New("idgen: invalid input")
+
+	// ErrLeaseExpired Etcd Lease 已过期
+	ErrLeaseExpired = xerrors.New("idgen: lease expired")
 )

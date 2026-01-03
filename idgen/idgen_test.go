@@ -81,75 +81,33 @@ func setupRedisConn(t *testing.T) connector.RedisConnector {
 // UUID 测试
 // ========================================
 
-func TestNewUUIDV4(t *testing.T) {
-	t.Run("Generate v4 UUID", func(t *testing.T) {
-		uuid := NewUUIDV4()
-		if uuid == "" {
-			t.Error("Expected non-empty UUID")
-		}
-		// UUID v4 should be 36 characters (8-4-4-4-12)
-		if len(uuid) != 36 {
-			t.Errorf("Expected UUID length 36, got %d", len(uuid))
-		}
-	})
-}
-
-func TestNewUUIDV7(t *testing.T) {
-	t.Run("Generate v7 UUID", func(t *testing.T) {
-		uuid := NewUUIDV7()
+func TestUUID(t *testing.T) {
+	t.Run("Generate UUID v7", func(t *testing.T) {
+		uuid := UUID()
 		if uuid == "" {
 			t.Error("Expected non-empty UUID")
 		}
 		if len(uuid) != 36 {
 			t.Errorf("Expected UUID length 36, got %d", len(uuid))
-		}
-	})
-}
-
-func TestNewUUID(t *testing.T) {
-	t.Run("Default v7", func(t *testing.T) {
-		gen := NewUUID()
-		uuid := gen.Next()
-		if uuid == "" {
-			t.Error("Expected non-empty UUID")
-		}
-	})
-
-	t.Run("With v4 option", func(t *testing.T) {
-		gen := NewUUID(WithUUIDVersion("v4"))
-		uuid := gen.Next()
-		if uuid == "" {
-			t.Error("Expected non-empty UUID")
 		}
 	})
 
 	t.Run("Generate unique UUIDs", func(t *testing.T) {
-		gen := NewUUID()
-		uuid1 := gen.Next()
-		uuid2 := gen.Next()
+		uuid1 := UUID()
+		uuid2 := UUID()
 		if uuid1 == uuid2 {
 			t.Error("Expected different UUIDs")
 		}
 	})
-}
 
-func TestNextUUID(t *testing.T) {
-	t.Run("Static method generates UUID", func(t *testing.T) {
-		uuid := NextUUID()
-		if uuid == "" {
-			t.Error("Expected non-empty UUID")
-		}
+	t.Run("UUID format validation", func(t *testing.T) {
+		uuid := UUID()
+		// UUID v7 格式: xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx
 		if len(uuid) != 36 {
 			t.Errorf("Expected UUID length 36, got %d", len(uuid))
 		}
-	})
-
-	t.Run("Static method generates unique UUIDs", func(t *testing.T) {
-		uuid1 := NextUUID()
-		time.Sleep(5 * time.Millisecond) // v7 有时间排序，需要一点延迟
-		uuid2 := NextUUID()
-		if uuid1 == uuid2 {
-			t.Error("Expected different UUIDs")
+		if uuid[14] != '7' {
+			t.Errorf("Expected UUID v7 version at position 14, got %c", uuid[14])
 		}
 	})
 }
@@ -158,49 +116,73 @@ func TestNextUUID(t *testing.T) {
 // Snowflake 测试
 // ========================================
 
-func TestNewSnowflake(t *testing.T) {
+func TestNewGenerator(t *testing.T) {
 	tests := []struct {
 		name        string
-		workerID    int64
-		opts        []SnowflakeOption
+		cfg         *GeneratorConfig
 		expectError bool
 	}{
 		{
-			name:        "valid workerID",
-			workerID:    1,
+			name: "valid workerID",
+			cfg: &GeneratorConfig{
+				WorkerID: 1,
+			},
 			expectError: false,
 		},
 		{
-			name:        "workerID zero",
-			workerID:    0,
+			name: "workerID zero",
+			cfg: &GeneratorConfig{
+				WorkerID: 0,
+			},
 			expectError: false,
 		},
 		{
-			name:        "workerID max",
-			workerID:    1023,
+			name: "workerID max",
+			cfg: &GeneratorConfig{
+				WorkerID: 1023,
+			},
 			expectError: false,
 		},
 		{
-			name:        "with datacenterID",
-			workerID:    30, // Must be <= 31 when using DatacenterID
-			opts:        []SnowflakeOption{WithDatacenterID(1)},
+			name: "with datacenterID",
+			cfg: &GeneratorConfig{
+				WorkerID:     30, // Must be <= 31 when using DatacenterID
+				DatacenterID: 1,
+			},
 			expectError: false,
 		},
 		{
-			name:        "negative workerID",
-			workerID:    -1,
+			name:        "nil config",
+			cfg:         nil,
 			expectError: true,
 		},
 		{
-			name:        "workerID too large",
-			workerID:    1024,
+			name: "negative workerID",
+			cfg: &GeneratorConfig{
+				WorkerID: -1,
+			},
+			expectError: true,
+		},
+		{
+			name: "workerID too large",
+			cfg: &GeneratorConfig{
+				WorkerID: 1024,
+			},
+			expectError: true,
+		},
+		{
+			name: "workerID overflow with datacenterID",
+			cfg: &GeneratorConfig{
+				WorkerID:     100, // > 31
+				DatacenterID: 1,
+			},
 			expectError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sf, err := NewSnowflake(tt.workerID, tt.opts...)
+			sf, err := NewGenerator(tt.cfg)
 			if tt.expectError {
 				if err == nil {
 					t.Error("Expected error but got none")
@@ -218,8 +200,8 @@ func TestNewSnowflake(t *testing.T) {
 	}
 }
 
-func TestSnowflake_NextInt64(t *testing.T) {
-	sf, err := NewSnowflake(1)
+func TestSnowflake_Next(t *testing.T) {
+	sf, err := NewGenerator(&GeneratorConfig{WorkerID: 1})
 	if err != nil {
 		t.Fatalf("Failed to create Snowflake: %v", err)
 	}
@@ -248,54 +230,8 @@ func TestSnowflake_NextInt64(t *testing.T) {
 		}
 	})
 
-	t.Run("Next method returns string", func(t *testing.T) {
-		idStr := fmt.Sprint(sf.Next())
-		if idStr == "" {
-			t.Error("Expected non-empty string")
-		}
-		// Should be parseable as int64
-		if _, err := strconv.ParseInt(idStr, 10, 64); err != nil {
-			t.Errorf("Failed to parse ID as int64: %v", err)
-		}
-	})
-}
-
-func TestSetupAndNext(t *testing.T) {
-	t.Run("Setup and use global Next", func(t *testing.T) {
-		err := Setup(100)
-		if err != nil {
-			t.Fatalf("Failed to setup: %v", err)
-		}
-
-		id := Next()
-		if id == 0 {
-			t.Error("Expected non-zero ID")
-		}
-
-		id2 := Next()
-		if id2 <= id {
-			t.Error("Expected increasing IDs")
-		}
-	})
-
-	t.Run("Setup with datacenterID", func(t *testing.T) {
-		err := Setup(30, WithDatacenterID(1)) // Must be <= 31 when using DatacenterID
-		if err != nil {
-			t.Fatalf("Failed to setup with datacenterID: %v", err)
-		}
-
-		id := Next()
-		if id == 0 {
-			t.Error("Expected non-zero ID")
-		}
-	})
-}
-
-func TestNextString(t *testing.T) {
-	Setup(1)
-
 	t.Run("NextString returns string", func(t *testing.T) {
-		idStr := fmt.Sprint(Next())
+		idStr := sf.NextString()
 		if idStr == "" {
 			t.Error("Expected non-empty string")
 		}
@@ -306,42 +242,88 @@ func TestNextString(t *testing.T) {
 	})
 }
 
+func TestSnowflake_WithLargeDatacenterID(t *testing.T) {
+	sf, err := NewGenerator(&GeneratorConfig{
+		WorkerID:     5,
+		DatacenterID: 15,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create Snowflake with datacenterID: %v", err)
+	}
+
+	id := sf.Next()
+	if id <= 0 {
+		t.Error("Expected positive ID with datacenterID")
+	}
+}
+
 // ========================================
-// AssignInstanceID 测试
+// Allocator 测试
 // ========================================
 
-func TestAssignInstanceID(t *testing.T) {
+func TestRedisAllocator(t *testing.T) {
 	redis := setupRedisConn(t)
 	if redis == nil {
 		t.Skip("Redis not available")
 	}
 
-	t.Run("Assign instance ID successfully", func(t *testing.T) {
+	t.Run("Allocate successfully", func(t *testing.T) {
 		ctx := context.Background()
-		instanceID, stop, _, err := AssignInstanceID(ctx, redis, "test:worker", 100)
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "redis",
+			KeyPrefix: "test:allocator",
+			MaxID:     100,
+			TTL:       30,
+		}, WithRedisConnector(redis))
 		if err != nil {
-			t.Fatalf("Failed to assign instance ID: %v", err)
+			t.Fatalf("Failed to create allocator: %v", err)
 		}
-		defer stop()
+
+		instanceID, err := allocator.Allocate(ctx)
+		if err != nil {
+			t.Fatalf("Failed to allocate: %v", err)
+		}
+		defer allocator.Stop()
 
 		if instanceID < 0 || instanceID >= 100 {
 			t.Errorf("Expected instanceID in [0, 100), got %d", instanceID)
 		}
 	})
 
-	t.Run("Multiple assignments get unique IDs", func(t *testing.T) {
+	t.Run("Multiple allocations get unique IDs", func(t *testing.T) {
 		ctx := context.Background()
-		id1, stop1, _, err := AssignInstanceID(ctx, redis, "test:unique", 50)
-		if err != nil {
-			t.Fatalf("Failed to assign first ID: %v", err)
-		}
-		defer stop1()
 
-		id2, stop2, _, err := AssignInstanceID(ctx, redis, "test:unique", 50)
+		alloc1, err := NewAllocator(&AllocatorConfig{
+			Driver:    "redis",
+			KeyPrefix: "test:unique",
+			MaxID:     50,
+			TTL:       30,
+		}, WithRedisConnector(redis))
 		if err != nil {
-			t.Fatalf("Failed to assign second ID: %v", err)
+			t.Fatalf("Failed to create allocator: %v", err)
 		}
-		defer stop2()
+
+		alloc2, err := NewAllocator(&AllocatorConfig{
+			Driver:    "redis",
+			KeyPrefix: "test:unique",
+			MaxID:     50,
+			TTL:       30,
+		}, WithRedisConnector(redis))
+		if err != nil {
+			t.Fatalf("Failed to create allocator: %v", err)
+		}
+
+		id1, err := alloc1.Allocate(ctx)
+		if err != nil {
+			t.Fatalf("Failed to allocate first ID: %v", err)
+		}
+		defer alloc1.Stop()
+
+		id2, err := alloc2.Allocate(ctx)
+		if err != nil {
+			t.Fatalf("Failed to allocate second ID: %v", err)
+		}
+		defer alloc2.Stop()
 
 		if id1 == id2 {
 			t.Errorf("Expected unique IDs, got both %d", id1)
@@ -350,33 +332,52 @@ func TestAssignInstanceID(t *testing.T) {
 
 	t.Run("Exhaust all IDs", func(t *testing.T) {
 		ctx := context.Background()
-		key := "test:exhaust"
 		maxID := 5
 
 		// 分配所有 ID
-		stops := make([]func(), 0, maxID)
+		allocators := make([]Allocator, 0, maxID)
 		for i := 0; i < maxID; i++ {
-			_, stop, _, err := AssignInstanceID(ctx, redis, key, maxID)
+			alloc, err := NewAllocator(&AllocatorConfig{
+				Driver:    "redis",
+				KeyPrefix: "test:exhaust",
+				MaxID:     maxID,
+				TTL:       30,
+			}, WithRedisConnector(redis))
 			if err != nil {
-				t.Fatalf("Failed to assign ID %d: %v", i, err)
+				t.Fatalf("Failed to create allocator: %v", err)
 			}
-			stops = append(stops, stop)
+
+			_, err = alloc.Allocate(ctx)
+			if err != nil {
+				t.Fatalf("Failed to allocate ID %d: %v", i, err)
+			}
+			allocators = append(allocators, alloc)
 		}
 
 		// 清理
-		for _, stop := range stops {
-			stop()
+		for _, alloc := range allocators {
+			alloc.Stop()
 		}
 
 		// 等待 Redis 释放
 		time.Sleep(100 * time.Millisecond)
 
 		// 再次分配应该成功
-		_, stop, _, err := AssignInstanceID(ctx, redis, key, maxID)
+		alloc, err := NewAllocator(&AllocatorConfig{
+			Driver:    "redis",
+			KeyPrefix: "test:exhaust",
+			MaxID:     maxID,
+			TTL:       30,
+		}, WithRedisConnector(redis))
 		if err != nil {
-			t.Errorf("Expected to assign ID after cleanup, got error: %v", err)
+			t.Fatalf("Failed to create allocator: %v", err)
 		}
-		defer stop()
+
+		_, err = alloc.Allocate(ctx)
+		if err != nil {
+			t.Errorf("Expected to allocate ID after cleanup, got error: %v", err)
+		}
+		defer alloc.Stop()
 	})
 }
 
@@ -394,51 +395,48 @@ func TestNewSequencer(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		cfg         *SequenceConfig
-		redis       connector.RedisConnector
+		cfg         *SequencerConfig
 		opts        []Option
 		expectError bool
 	}{
 		{
 			name:        "nil config",
 			cfg:         nil,
-			redis:       redis,
 			expectError: true,
 		},
 		{
 			name: "nil redis connector",
-			cfg: &SequenceConfig{
+			cfg: &SequencerConfig{
 				KeyPrefix: "test:",
 				Step:      1,
 			},
-			redis:       nil,
+			opts:        []Option{},
 			expectError: true,
 		},
 		{
 			name: "valid config without logger",
-			cfg: &SequenceConfig{
+			cfg: &SequencerConfig{
 				KeyPrefix: "seq:",
 				Step:      1,
 			},
-			redis:       redis,
+			opts:        []Option{WithRedisConnector(redis)},
 			expectError: false,
 		},
 		{
 			name: "valid config with logger",
-			cfg: &SequenceConfig{
+			cfg: &SequencerConfig{
 				KeyPrefix: "seq:",
 				Step:      1,
 				MaxValue:  1000000,
 			},
-			redis:       redis,
-			opts:        []Option{WithLogger(logger)},
+			opts:        []Option{WithRedisConnector(redis), WithLogger(logger)},
 			expectError: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gen, err := NewSequencer(tt.cfg, tt.redis, tt.opts...)
+			gen, err := NewSequencer(tt.cfg, tt.opts...)
 			if tt.expectError {
 				if err == nil {
 					t.Error("Expected error but got none")
@@ -463,10 +461,10 @@ func TestSequencer_Next(t *testing.T) {
 	}
 
 	logger := setupLogger(t)
-	gen, err := NewSequencer(&SequenceConfig{
+	gen, err := NewSequencer(&SequencerConfig{
 		KeyPrefix: "test:seq:",
 		Step:      1,
-	}, redis, WithLogger(logger))
+	}, WithRedisConnector(redis), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create sequencer: %v", err)
 	}
@@ -526,10 +524,10 @@ func TestSequencer_NextBatch(t *testing.T) {
 	}
 
 	logger := setupLogger(t)
-	gen, err := NewSequencer(&SequenceConfig{
+	gen, err := NewSequencer(&SequencerConfig{
 		KeyPrefix: "test:batch:",
 		Step:      1,
-	}, redis, WithLogger(logger))
+	}, WithRedisConnector(redis), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create sequencer: %v", err)
 	}
@@ -554,10 +552,10 @@ func TestSequencer_NextBatch(t *testing.T) {
 	})
 
 	t.Run("Batch with step", func(t *testing.T) {
-		gen2, err := NewSequencer(&SequenceConfig{
+		gen2, err := NewSequencer(&SequencerConfig{
 			KeyPrefix: "test:step2:",
 			Step:      5,
-		}, redis)
+		}, WithRedisConnector(redis))
 		if err != nil {
 			t.Fatalf("Failed to create sequencer with step: %v", err)
 		}
@@ -585,57 +583,6 @@ func TestSequencer_NextBatch(t *testing.T) {
 	})
 }
 
-func TestNextSequence(t *testing.T) {
-	redis := setupRedisConn(t)
-	if redis == nil {
-		t.Skip("Redis not available")
-	}
-
-	ctx := context.Background()
-
-	t.Run("Generate simple sequence", func(t *testing.T) {
-		seq1, err := NextSequence(ctx, redis, "test:static:1")
-		if err != nil {
-			t.Errorf("Failed to generate sequence: %v", err)
-		}
-		if seq1 <= 0 {
-			t.Error("Expected positive sequence number")
-		}
-
-		seq2, err := NextSequence(ctx, redis, "test:static:1")
-		if err != nil {
-			t.Errorf("Failed to generate sequence: %v", err)
-		}
-		if seq2 != seq1+1 {
-			t.Errorf("Expected %d, got %d", seq1+1, seq2)
-		}
-	})
-
-	t.Run("Different keys are independent", func(t *testing.T) {
-		// 使用新键避免之前测试的影响
-		keyA := fmt.Sprintf("test:unique:a:%d", time.Now().UnixNano())
-		keyB := fmt.Sprintf("test:unique:b:%d", time.Now().UnixNano())
-
-		seq1, err := NextSequence(ctx, redis, keyA)
-		if err != nil {
-			t.Errorf("Failed to generate sequence: %v", err)
-		}
-
-		seq2, err := NextSequence(ctx, redis, keyB)
-		if err != nil {
-			t.Errorf("Failed to generate sequence: %v", err)
-		}
-
-		// Should both start from 1
-		if seq1 != 1 {
-			t.Errorf("Expected first key to start at 1, got %d", seq1)
-		}
-		if seq2 != 1 {
-			t.Errorf("Expected second key to start at 1, got %d", seq2)
-		}
-	})
-}
-
 // ========================================
 // Sequencer.Set 测试
 // ========================================
@@ -647,10 +594,10 @@ func TestSequencer_Set(t *testing.T) {
 	}
 
 	logger := setupLogger(t)
-	gen, err := NewSequencer(&SequenceConfig{
+	gen, err := NewSequencer(&SequencerConfig{
 		KeyPrefix: "test:set:",
 		Step:      1,
-	}, redis, WithLogger(logger))
+	}, WithRedisConnector(redis), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create sequencer: %v", err)
 	}
@@ -737,10 +684,10 @@ func TestSequencer_SetIfNotExists(t *testing.T) {
 	}
 
 	logger := setupLogger(t)
-	gen, err := NewSequencer(&SequenceConfig{
+	gen, err := NewSequencer(&SequencerConfig{
 		KeyPrefix: "test:setnx:",
 		Step:      1,
-	}, redis, WithLogger(logger))
+	}, WithRedisConnector(redis), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create sequencer: %v", err)
 	}
