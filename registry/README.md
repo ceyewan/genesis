@@ -178,8 +178,12 @@ for _, instance := range instances {
 ### 3. gRPC 集成（方式一：GetConnection）
 
 ```go
-// 获取 gRPC 连接，开箱即用
-conn, err := reg.GetConnection(ctx, "user-service")
+import "google.golang.org/grpc/credentials/insecure"
+
+// 必须传入 grpc.WithTransportCredentials() 或其他凭证选项
+conn, err := reg.GetConnection(ctx, "user-service",
+    grpc.WithTransportCredentials(insecure.NewCredentials()),
+)
 if err != nil {
     logger.Error("failed to get connection", clog.Error(err))
     return
@@ -350,7 +354,9 @@ func main() {
     defer reg.Deregister(ctx, service.ID)
 
     // 4. 调用其他服务
-    userConn, _ := reg.GetConnection(ctx, "user-service")
+    userConn, _ := reg.GetConnection(ctx, "user-service",
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    )
     defer userConn.Close()
 
     userClient := pb.NewUserServiceClient(userConn)
@@ -505,7 +511,9 @@ func callUserService(reg registry.Registry, logger clog.Logger) {
     ctx := context.Background()
 
     // 方式一：使用 GetConnection
-    conn, err := reg.GetConnection(ctx, "user-service")
+    conn, err := reg.GetConnection(ctx, "user-service",
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    )
     if err != nil {
         logger.Error("failed to get user service connection", clog.Error(err))
         return

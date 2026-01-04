@@ -10,7 +10,6 @@ import (
 	"github.com/ceyewan/genesis/xerrors"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // EndpointPicker 选择实例的一个 endpoint
@@ -364,9 +363,7 @@ func (m *StreamManager) createManagedStream(parent context.Context, instance *Se
 	if conn == nil {
 		dialOpts := m.cfg.DialOptions
 		if len(dialOpts) == 0 {
-			dialOpts = []grpc.DialOption{
-				grpc.WithTransportCredentials(insecure.NewCredentials()),
-			}
+			return nil, xerrors.New("DialOptions required, e.g., grpc.WithTransportCredentials()")
 		}
 
 		conn, err = grpc.NewClient(endpoint, dialOpts...)

@@ -12,6 +12,7 @@ import (
 	pb "github.com/ceyewan/genesis/examples/grpc-registry/proto"
 	"github.com/ceyewan/genesis/registry"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
@@ -100,7 +101,9 @@ func main() {
 
 	// 6. 使用 gRPC resolver 创建连接
 	fmt.Println("\n2. 使用 gRPC resolver 创建连接...")
-	conn, err := reg.GetConnection(ctx, serviceName)
+	conn, err := reg.GetConnection(ctx, serviceName,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
 		logger.Error("failed to create gRPC connection", clog.Error(err))
 		return

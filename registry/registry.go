@@ -84,7 +84,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // New 创建 Registry 实例（基于 Etcd）
@@ -487,17 +486,16 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 }
 
 // GetConnection 获取到指定服务的 gRPC 连接
-// 当 ctx 带有 deadline 时，会主动触发连接并等待 Ready 或超时返回
+//
+// 当 ctx 带有 deadline 时，会主动触发连接并等待 Ready 或超时返回。
+//
+// 注意：必须传入 grpc.WithTransportCredentials() 或其他凭证选项。
 func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
-	// 使用 resolver builder 创建连接
-	target := fmt.Sprintf("%s:///%s", resolverScheme, serviceName)
-
-	// 合并默认选项
-	defaultOpts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`), // 使用轮询负载均衡
+	if len(opts) == 0 {
+		return nil, xerrors.New("dial options required, e.g., grpc.WithTransportCredentials()")
 	}
-	opts = append(defaultOpts, opts...)
+
+	target := fmt.Sprintf("%s:///%s", resolverScheme, serviceName)
 
 	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
