@@ -10,12 +10,12 @@ import (
 )
 
 type client struct {
-	driver Driver
+	driver driver
 	logger clog.Logger
 	meter  metrics.Meter
 }
 
-func newClient(driver Driver, logger clog.Logger, meter metrics.Meter) Client {
+func newClient(driver driver, logger clog.Logger, meter metrics.Meter) Client {
 	return &client{
 		driver: driver,
 		logger: logger,

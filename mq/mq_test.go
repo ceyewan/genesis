@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/nats-io/nats.go"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,43 +72,52 @@ func TestDefaultSubscribeOptions(t *testing.T) {
 	assert.Empty(t, o.DurableName)
 }
 
-// TestNew 测试 MQ 客户端创建
+// TestNew 测试配置驱动创建
 func TestNew(t *testing.T) {
-	t.Run("创建带有默认 logger 的客户端", func(t *testing.T) {
-		// 创建一个 mock driver
-		driver := &mockDriver{}
-
-		client, err := New(driver)
-
-		require.NoError(t, err)
-		assert.NotNil(t, client)
-
-		_ = client.Close()
+	t.Run("配置为空", func(t *testing.T) {
+		client, err := New(nil)
+		require.Error(t, err)
+		assert.Nil(t, client)
 	})
 
-	t.Run("创建带有自定义 logger 的客户端", func(t *testing.T) {
-		driver := &mockDriver{}
-		logger := clog.Discard()
-
-		client, err := New(driver, WithLogger(logger))
-
-		require.NoError(t, err)
-		assert.NotNil(t, client)
-
-		_ = client.Close()
+	t.Run("驱动不支持", func(t *testing.T) {
+		client, err := New(&Config{Driver: DriverType("unknown")})
+		require.Error(t, err)
+		assert.Nil(t, client)
 	})
 
-	t.Run("创建带有 logger 和 meter 的客户端", func(t *testing.T) {
-		driver := &mockDriver{}
-		logger := clog.Discard()
-		meter := metrics.Discard()
+	t.Run("缺少连接器", func(t *testing.T) {
+		client, err := New(&Config{Driver: DriverRedis})
+		require.Error(t, err)
+		assert.Nil(t, client)
+	})
 
-		client, err := New(driver, WithLogger(logger), WithMeter(meter))
+	t.Run("创建客户端", func(t *testing.T) {
+		tests := []struct {
+			name string
+			cfg  *Config
+			opts []Option
+		}{
+			{
+				name: "nats core",
+				cfg:  &Config{Driver: DriverNatsCore},
+				opts: []Option{WithNATSConnector(&mockNATSConnector{})},
+			},
+			{
+				name: "redis stream",
+				cfg:  &Config{Driver: DriverRedis},
+				opts: []Option{WithRedisConnector(&mockRedisConnector{})},
+			},
+		}
 
-		require.NoError(t, err)
-		assert.NotNil(t, client)
-
-		_ = client.Close()
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				client, err := New(tt.cfg, tt.opts...)
+				require.NoError(t, err)
+				assert.NotNil(t, client)
+				_ = client.Close()
+			})
+		}
 	})
 }
 
@@ -144,19 +153,13 @@ func TestSubscriptionInterface(t *testing.T) {
 		// 编译时检查接口实现
 		var _ Subscription = sub
 	})
-
-	t.Run("kafkaSubscription 实现 Subscription 接口", func(t *testing.T) {
-		sub := &kafkaSubscription{}
-		// 编译时检查接口实现
-		var _ Subscription = sub
-	})
 }
 
 // TestClientPublish 测试发布功能
 func TestClientPublish(t *testing.T) {
 	t.Run("发布成功", func(t *testing.T) {
 		driver := &mockDriver{}
-		client, _ := New(driver, WithLogger(clog.Discard()))
+		client := newClient(driver, clog.Discard(), nil)
 
 		ctx := context.Background()
 		err := client.Publish(ctx, "test.subject", []byte("test data"))
@@ -167,7 +170,7 @@ func TestClientPublish(t *testing.T) {
 
 	t.Run("发布失败返回错误", func(t *testing.T) {
 		driver := &mockDriver{publishError: assert.AnError}
-		client, _ := New(driver, WithLogger(clog.Discard()))
+		client := newClient(driver, clog.Discard(), nil)
 
 		ctx := context.Background()
 		err := client.Publish(ctx, "test.subject", []byte("test data"))
@@ -180,7 +183,7 @@ func TestClientPublish(t *testing.T) {
 func TestClientSubscribe(t *testing.T) {
 	t.Run("订阅成功", func(t *testing.T) {
 		driver := &mockDriver{}
-		client, _ := New(driver, WithLogger(clog.Discard()))
+		client := newClient(driver, clog.Discard(), nil)
 
 		ctx := context.Background()
 		handler := func(ctx context.Context, msg Message) error {
@@ -196,7 +199,7 @@ func TestClientSubscribe(t *testing.T) {
 
 	t.Run("订阅失败返回错误", func(t *testing.T) {
 		driver := &mockDriver{subscribeError: assert.AnError}
-		client, _ := New(driver, WithLogger(clog.Discard()))
+		client := newClient(driver, clog.Discard(), nil)
 
 		ctx := context.Background()
 		handler := func(ctx context.Context, msg Message) error {
@@ -214,7 +217,7 @@ func TestClientSubscribe(t *testing.T) {
 func TestClientClose(t *testing.T) {
 	t.Run("关闭客户端", func(t *testing.T) {
 		driver := &mockDriver{}
-		client, _ := New(driver)
+		client := newClient(driver, clog.Discard(), nil)
 
 		err := client.Close()
 
@@ -226,7 +229,7 @@ func TestClientClose(t *testing.T) {
 func TestSubscribeChan(t *testing.T) {
 	t.Run("Channel 模式订阅成功", func(t *testing.T) {
 		driver := &mockDriver{}
-		client, _ := New(driver, WithLogger(clog.Discard()))
+		client := newClient(driver, clog.Discard(), nil)
 
 		ctx := context.Background()
 		ch, sub, err := client.SubscribeChan(ctx, "test.subject")
@@ -241,7 +244,7 @@ func TestSubscribeChan(t *testing.T) {
 
 	t.Run("订阅失败时 Channel 被关闭", func(t *testing.T) {
 		driver := &mockDriver{subscribeError: fmt.Errorf("subscribe failed")}
-		client, _ := New(driver, WithLogger(clog.Discard()))
+		client := newClient(driver, clog.Discard(), nil)
 
 		ctx := context.Background()
 		ch, sub, err := client.SubscribeChan(ctx, "test.subject")
@@ -259,7 +262,7 @@ func TestSubscribeChan(t *testing.T) {
 
 	t.Run("使用自定义缓冲区大小", func(t *testing.T) {
 		driver := &mockDriver{}
-		client, _ := New(driver, WithLogger(clog.Discard()))
+		client := newClient(driver, clog.Discard(), nil)
 
 		ctx := context.Background()
 		ch, sub, err := client.SubscribeChan(ctx, "test.subject", WithBufferSize(10))
@@ -282,7 +285,6 @@ func TestDriverType(t *testing.T) {
 		{"NATS Core", DriverNatsCore, "nats_core"},
 		{"NATS JetStream", DriverNatsJetStream, "nats_jetstream"},
 		{"Redis", DriverRedis, "redis"},
-		{"Kafka", DriverKafka, "kafka"},
 	}
 
 	for _, tt := range tests {
@@ -368,4 +370,56 @@ func (m *mockSubscription) Unsubscribe() error {
 
 func (m *mockSubscription) IsValid() bool {
 	return true
+}
+
+type mockNATSConnector struct{}
+
+func (m *mockNATSConnector) Connect(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockNATSConnector) Close() error {
+	return nil
+}
+
+func (m *mockNATSConnector) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockNATSConnector) IsHealthy() bool {
+	return true
+}
+
+func (m *mockNATSConnector) Name() string {
+	return "mock-nats"
+}
+
+func (m *mockNATSConnector) GetClient() *nats.Conn {
+	return &nats.Conn{}
+}
+
+type mockRedisConnector struct{}
+
+func (m *mockRedisConnector) Connect(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockRedisConnector) Close() error {
+	return nil
+}
+
+func (m *mockRedisConnector) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+func (m *mockRedisConnector) IsHealthy() bool {
+	return true
+}
+
+func (m *mockRedisConnector) Name() string {
+	return "mock-redis"
+}
+
+func (m *mockRedisConnector) GetClient() *redis.Client {
+	return &redis.Client{}
 }

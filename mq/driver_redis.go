@@ -11,21 +11,21 @@ import (
 	"github.com/ceyewan/genesis/connector"
 )
 
-// RedisDriver Redis Stream 驱动实现
-type RedisDriver struct {
+// redisDriver Redis Stream 驱动实现
+type redisDriver struct {
 	client *redis.Client
 	logger clog.Logger
 }
 
-// NewRedisDriver 创建 Redis 驱动
-func NewRedisDriver(conn connector.RedisConnector, logger clog.Logger) *RedisDriver {
-	return &RedisDriver{
+// newRedisDriver 创建 Redis 驱动
+func newRedisDriver(conn connector.RedisConnector, logger clog.Logger) *redisDriver {
+	return &redisDriver{
 		client: conn.GetClient(),
 		logger: logger,
 	}
 }
 
-func (d *RedisDriver) Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error {
+func (d *redisDriver) Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error {
 	// Redis Stream Publish: XADD
 	// subject 作为 key
 	// data 作为 value (字段名 "payload")
@@ -39,7 +39,7 @@ func (d *RedisDriver) Publish(ctx context.Context, subject string, data []byte, 
 	return err
 }
 
-func (d *RedisDriver) Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error) {
+func (d *redisDriver) Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error) {
 	o := defaultSubscribeOptions()
 	for _, opt := range opts {
 		opt(&o)
@@ -135,7 +135,7 @@ func (d *RedisDriver) Subscribe(ctx context.Context, subject string, handler Han
 	return sub, nil
 }
 
-func (d *RedisDriver) processMsg(ctx context.Context, subject, group string, rMsg redis.XMessage, handler Handler, o subscribeOptions) {
+func (d *redisDriver) processMsg(ctx context.Context, subject, group string, rMsg redis.XMessage, handler Handler, o subscribeOptions) {
 	// 提取 payload
 	dataStr, ok := rMsg.Values["payload"].(string)
 	if !ok {
@@ -167,7 +167,7 @@ func (d *RedisDriver) processMsg(ctx context.Context, subject, group string, rMs
 	}
 }
 
-func (d *RedisDriver) Close() error {
+func (d *redisDriver) Close() error {
 	return nil
 }
 

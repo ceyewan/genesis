@@ -27,6 +27,7 @@ var DefaultRetryConfig = RetryConfig{
 }
 
 // WithRetry 返回一个带有指数退避重试逻辑的中间件
+// 该重试发生在应用层，是否触发消息重投由具体驱动的 Ack/Nak 行为决定。
 func WithRetry(cfg RetryConfig, logger clog.Logger) HandlerMiddleware {
 	if cfg.Multiplier <= 1.0 {
 		cfg.Multiplier = 2.0

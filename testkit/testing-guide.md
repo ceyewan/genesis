@@ -91,20 +91,15 @@ func TestRedisCache(t *testing.T) {
 
 ### 3.3 MQ 消息队列测试支持
 
-`testkit` 提供了 MQ 组件的测试辅助函数，支持 NATS、Redis Stream、Kafka 三种驱动：
+`testkit` 提供了 MQ 组件的测试辅助函数，支持 NATS、Redis Stream 两种驱动：
 
 ```go
 // NATS 驱动测试
-natsDriver := testkit.GetNATSMQDriver(t)
 natsClient := testkit.GetNATSMQClient(t)
 
 // Redis Stream 驱动测试
-redisDriver := testkit.GetRedisMQDriver(t)
 redisClient := testkit.GetRedisMQClient(t)
 
-// Kafka 驱动测试
-kafkaDriver := testkit.GetKafkaMQDriver(t)
-kafkaClient := testkit.GetKafkaMQClient(t)
 ```
 
 完整的 MQ 测试示例：
@@ -184,7 +179,7 @@ conn := testkit.GetPersistentSQLiteConnector(t)
     ```
     -   **自动过期**：为测试 Key 设置较短的 TTL，防止长期占用。
 
-3.  **消息队列 (Kafka/NATS)**:
+3.  **消息队列 (NATS/Redis Stream)**:
     -   **随机 Topic/Subject**：使用 `testkit.NewID()` 生成唯一的 Topic 名称。
     ```go
     topic := "test-topic-" + testkit.NewID()

@@ -11,9 +11,10 @@ type Option func(*options)
 
 // options 选项结构（内部使用）
 type options struct {
-	Logger       clog.Logger
-	Meter        metrics.Meter
-	KafkaConfig  *connector.KafkaConfig // Kafka 配置（使用 Kafka Driver 时需要）
+	Logger         clog.Logger
+	Meter          metrics.Meter
+	RedisConnector connector.RedisConnector
+	NATSConnector  connector.NATSConnector
 }
 
 // WithLogger 注入日志记录器
@@ -33,9 +34,20 @@ func WithMeter(m metrics.Meter) Option {
 	}
 }
 
-// WithKafkaConfig 注入 Kafka 配置（使用 Kafka Driver 时必须提供）
-func WithKafkaConfig(cfg *connector.KafkaConfig) Option {
+// WithRedisConnector 注入 Redis 连接器
+func WithRedisConnector(conn connector.RedisConnector) Option {
 	return func(o *options) {
-		o.KafkaConfig = cfg
+		if conn != nil {
+			o.RedisConnector = conn
+		}
+	}
+}
+
+// WithNATSConnector 注入 NATS 连接器
+func WithNATSConnector(conn connector.NATSConnector) Option {
+	return func(o *options) {
+		if conn != nil {
+			o.NATSConnector = conn
+		}
 	}
 }

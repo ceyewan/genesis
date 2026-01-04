@@ -77,10 +77,9 @@ func WithEtcdConnector(conn connector.EtcdConnector) Option
 
 ### 3.5 MQ 组件
 -   **API**:
-    -   `New(driver)` -> 重命名为 `NewClient(driver)`
-    -   新增 `New(cfg, opts...)`
--   **Config**: 新增 `Driver` ("redis", "nats", "kafka")
--   **Options**: 新增 `WithRedisConnector`, `WithNATSConnector`, `WithKafkaConnector`
+    -   仅保留 `New(cfg, opts...)` 作为统一入口
+-   **Config**: 新增 `Driver` ("redis", "nats")
+-   **Options**: 新增 `WithRedisConnector`, `WithNATSConnector`
     -   **建议**: Driver 枚举需区分 NATS Core/JetStream（如 "nats_core"、"nats_jetstream"），避免语义歧义。
 
 ### 3.6 DB 组件
