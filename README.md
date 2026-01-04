@@ -18,7 +18,7 @@ Genesis 旨在为 Go 微服务开发提供一套**统一的架构规范**和**�
 | 层次                        | 核心组件                                       | 职责                         |
 | :-------------------------- | :--------------------------------------------- | :--------------------------- |
 | **Level 3: Governance**     | `auth`, `ratelimit`, `breaker`, `registry`     | 流量治理，身份认证，切面能力 |
-| **Level 2: Business**       | `cache`, `idgen`, `dlock`, `mq`, `idempotency` | 业务能力封装                 |
+| **Level 2: Business**       | `cache`, `idgen`, `dlock`, `mq`, `idem` | 业务能力封装                 |
 | **Level 1: Infrastructure** | `connector`, `db`                              | 连接管理，底层 I/O           |
 | **Level 0: Base**           | `clog`, `config`, `metrics`, `xerrors`         | 框架基石                     |
 
@@ -64,7 +64,7 @@ func main() {
 
     // 4. 初始化组件 (显式注入依赖)
     database, _ := db.New(mysqlConn, &cfg.DB, db.WithLogger(logger))
-    locker, _ := dlock.New(redisConn, &cfg.DLock, dlock.WithLogger(logger))
+    locker, _ := dlock.New(&cfg.DLock, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
 
     // 5. 使用组件
     logger.InfoContext(ctx, "service started")
@@ -98,7 +98,7 @@ func main() {
 - **[cache](./cache)** - 统一缓存接口，支持 Redis
 - **[dlock](./dlock)** - 分布式锁，支持 Redis/Etcd，内置自动续期
 - **[idgen](./idgen)** - ID 生成器，支持 Snowflake/UUID/Sequence
-- **[idempotency](./idempotency)** - 幂等性组件，支持手动调用、Gin、gRPC
+- **[idem](./idem)** - 幂等性组件，支持手动调用、Gin、gRPC
 - **[mq](./mq)** - 消息队列组件，支持 NATS
 
 ### Level 3 - 流量治理
@@ -128,7 +128,7 @@ make example-all
 
 - **Base (L0):** clog, config, metrics, xerrors
 - **Infrastructure (L1):** connector, db
-- **Business (L2):** cache, dlock, idgen, mq, idempotency
+- **Business (L2):** cache, dlock, idgen, mq, idem
 - **Governance (L3):** auth, ratelimit, breaker, registry
 
 ## 📄 License

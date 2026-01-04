@@ -1,10 +1,10 @@
 // Package db 提供了基于 GORM 的数据库组件，支持分库分表功能。
 //
-// db 组件是 Genesis 基础设施层的核心组件，它在 MySQL 连接器的基础上提供了：
+// db 组件是 Genesis 基础设施层的核心组件，它在连接器的基础上提供了：
 // - GORM ORM 功能封装
 // - 事务管理支持
 // - 分库分表能力（基于 gorm.io/sharding）
-// - 与 L0 基础组件（日志、指标、错误）的深度集成
+// - 与 L0 基础组件（日志、链路追踪、错误）的深度集成
 //
 // ## 基本使用
 //
@@ -12,7 +12,8 @@
 //	defer mysqlConn.Close()
 //	mysqlConn.Connect(ctx)
 //
-//	database, _ := db.New(mysqlConn, &db.Config{
+//	database, _ := db.New(&db.Config{
+//		Driver: "mysql",
 //		EnableSharding: true,
 //		ShardingRules: []db.ShardingRule{
 //			{
@@ -21,7 +22,11 @@
 //				Tables:         []string{"orders"},
 //			},
 //		},
-//	}, db.WithLogger(logger))
+//	},
+//		db.WithLogger(logger),
+//		db.WithTracer(otel.GetTracerProvider()),
+//		db.WithMySQLConnector(mysqlConn),
+//	)
 //
 //	// 使用 GORM 进行数据库操作
 //	gormDB := database.DB(ctx)
@@ -45,20 +50,20 @@
 //
 // ## 设计原则
 //
-// - **借用模型**：db 组件借用 MySQL 连接器的连接，不负责连接的生命周期
+// - **借用模型**：db 组件借用连接器的连接，不负责连接的生命周期
+// - **配置驱动**：通过 Config.Driver 字段控制底层实现（mysql/sqlite）
 // - **显式依赖**：通过构造函数显式注入连接器和选项
 // - **简单设计**：使用 Go 原生模式，避免复杂的抽象
-// - **可观测性**：集成 clog 和 metrics，提供完整的日志和指标能力
+// - **可观测性**：集成 clog 和 OpenTelemetry trace，提供完整的日志和链路追踪能力
 package db
 
 import (
 	"context"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
-
+	"github.com/uptrace/opentelemetry-go-extra/otelgorm"
+	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 	"gorm.io/sharding"
 )
@@ -67,7 +72,7 @@ import (
 type database struct {
 	client *gorm.DB
 	logger clog.Logger
-	meter  metrics.Meter
+	tracer trace.Tracer
 }
 
 // DB 定义了数据库组件的核心能力
@@ -78,7 +83,7 @@ type DB interface {
 }
 
 // New 创建数据库组件实例
-func New(conn connector.DatabaseConnector, cfg *Config, opts ...Option) (DB, error) {
+func New(cfg *Config, opts ...Option) (DB, error) {
 	if cfg == nil {
 		cfg = &Config{}
 	}
@@ -95,14 +100,35 @@ func New(conn connector.DatabaseConnector, cfg *Config, opts ...Option) (DB, err
 	if opt.logger == nil {
 		opt.logger = clog.Discard()
 	}
-	if opt.meter == nil {
-		opt.meter = metrics.Discard()
+
+	// 根据 Driver 获取对应连接器
+	var gormDB *gorm.DB
+	switch cfg.Driver {
+	case "mysql":
+		if opt.mysqlConnector == nil {
+			return nil, xerrors.Wrap(xerrors.ErrInvalidInput, "mysql connector is required when driver=mysql")
+		}
+		gormDB = opt.mysqlConnector.GetClient()
+	case "sqlite":
+		if opt.sqliteConnector == nil {
+			return nil, xerrors.Wrap(xerrors.ErrInvalidInput, "sqlite connector is required when driver=sqlite")
+		}
+		gormDB = opt.sqliteConnector.GetClient()
+	default:
+		return nil, xerrors.Wrapf(xerrors.ErrInvalidInput, "unknown driver: %s", cfg.Driver)
 	}
 
-	gormDB := conn.GetClient()
-
 	// 配置 GORM logger
-	gormDB.Session(&gorm.Session{Logger: newGormLogger(opt.logger)})
+	gormDB = gormDB.Session(&gorm.Session{Logger: newGormLogger(opt.logger)})
+
+	// 添加 OpenTelemetry trace 插件
+	if opt.tracer != nil {
+		if err := gormDB.Use(otelgorm.NewPlugin(
+			otelgorm.WithTracerProvider(opt.tracer),
+		)); err != nil {
+			return nil, xerrors.Wrap(err, "failed to register otelgorm plugin")
+		}
+	}
 
 	// 注册分片中间件
 	if cfg.EnableSharding && len(cfg.ShardingRules) > 0 {
@@ -124,10 +150,16 @@ func New(conn connector.DatabaseConnector, cfg *Config, opts ...Option) (DB, err
 		}
 	}
 
+	// 获取 tracer（用于后续可能的 span 创建）
+	var tracer trace.Tracer
+	if opt.tracer != nil {
+		tracer = opt.tracer.Tracer("github.com/ceyewan/genesis/db")
+	}
+
 	return &database{
 		client: gormDB,
 		logger: opt.logger,
-		meter:  opt.meter,
+		tracer: tracer,
 	}, nil
 }
 
@@ -144,6 +176,7 @@ func (d *database) Transaction(ctx context.Context, fn func(ctx context.Context,
 }
 
 // Close 关闭组件
+// db 组件采用借用模型，不负责连接的生命周期，因此 Close 为 no-op
 func (d *database) Close() error {
 	return nil
 }

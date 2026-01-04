@@ -59,9 +59,10 @@ func TestNatsCorePublishSubscribe(t *testing.T) {
 		}
 		defer natsConn.Close()
 
-		// 创建驱动和客户端
-		driver := NewNatsCoreDriver(natsConn, getTestLogger())
-		client, err := New(driver, WithLogger(getTestLogger()))
+		// 创建客户端
+		client, err := New(&Config{
+			Driver: DriverNatsCore,
+		}, WithNATSConnector(natsConn), WithLogger(getTestLogger()))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -107,8 +108,9 @@ func TestNatsCorePublishSubscribe(t *testing.T) {
 		}
 		defer natsConn.Close()
 
-		driver := NewNatsCoreDriver(natsConn, getTestLogger())
-		client, err := New(driver, WithLogger(getTestLogger()))
+		client, err := New(&Config{
+			Driver: DriverNatsCore,
+		}, WithNATSConnector(natsConn), WithLogger(getTestLogger()))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -162,8 +164,9 @@ func TestNatsCorePublishSubscribe(t *testing.T) {
 		}
 		defer natsConn.Close()
 
-		driver := NewNatsCoreDriver(natsConn, getTestLogger())
-		client, err := New(driver, WithLogger(getTestLogger()))
+		client, err := New(&Config{
+			Driver: DriverNatsCore,
+		}, WithNATSConnector(natsConn), WithLogger(getTestLogger()))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -219,9 +222,10 @@ func TestRedisStreamPublishSubscribe(t *testing.T) {
 		testStream := testSubject("redis-basic")
 		defer redisConn.GetClient().Del(ctx, testStream)
 
-		// 创建驱动和客户端
-		driver := NewRedisDriver(redisConn, getTestLogger())
-		client, err := New(driver, WithLogger(getTestLogger()))
+		// 创建客户端
+		client, err := New(&Config{
+			Driver: DriverRedis,
+		}, WithRedisConnector(redisConn), WithLogger(getTestLogger()))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -271,8 +275,9 @@ func TestRedisStreamPublishSubscribe(t *testing.T) {
 		group := testGroup("redis")
 		defer redisConn.GetClient().Del(ctx, testStream)
 
-		driver := NewRedisDriver(redisConn, getTestLogger())
-		client, err := New(driver, WithLogger(getTestLogger()))
+		client, err := New(&Config{
+			Driver: DriverRedis,
+		}, WithRedisConnector(redisConn), WithLogger(getTestLogger()))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -328,8 +333,9 @@ func TestRedisStreamPublishSubscribe(t *testing.T) {
 		group := testGroup("redis-ack")
 		defer redisConn.GetClient().Del(ctx, testStream)
 
-		driver := NewRedisDriver(redisConn, getTestLogger())
-		client, err := New(driver, WithLogger(getTestLogger()))
+		client, err := New(&Config{
+			Driver: DriverRedis,
+		}, WithRedisConnector(redisConn), WithLogger(getTestLogger()))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -359,133 +365,6 @@ func TestRedisStreamPublishSubscribe(t *testing.T) {
 	})
 }
 
-// TestKafkaPublishSubscribe 测试 Kafka 发布订阅
-func TestKafkaPublishSubscribe(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-
-	kafkaBrokers := getEnvOrDefault("KAFKA_BROKERS", "localhost:9092")
-
-	t.Run("Kafka 基本发布订阅", func(t *testing.T) {
-		// 创建连接器
-		kafkaConn, err := connector.NewKafka(&connector.KafkaConfig{
-			Name:           "test-kafka",
-			Seed:           []string{kafkaBrokers},
-			ConnectTimeout: 10 * time.Second,
-			RequestTimeout: 5 * time.Second,
-		}, connector.WithLogger(getTestLogger()))
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		err = kafkaConn.Connect(ctx)
-		if err != nil {
-			t.Skip("Kafka 服务不可用")
-		}
-		defer kafkaConn.Close()
-
-		// 创建驱动和客户端
-		driver := NewKafkaDriver(kafkaConn, getTestLogger())
-		client, err := New(driver, WithLogger(getTestLogger()))
-		require.NoError(t, err)
-		defer client.Close()
-
-		topic := testSubject("kafka-basic")
-		topic = "test-topic-" + topic[len(topic)-10:] // 简化 topic 名
-
-		var receivedMsg string
-		var wg sync.WaitGroup
-		wg.Add(1)
-
-		// 订阅
-		sub, err := client.Subscribe(ctx, topic, func(ctx context.Context, msg Message) error {
-			receivedMsg = string(msg.Data())
-			wg.Done()
-			// 手动 Ack
-			_ = msg.Ack()
-			return nil
-		}, WithQueueGroup(testGroup("kafka")))
-		require.NoError(t, err)
-		defer sub.Unsubscribe()
-
-		// 等待订阅生效
-		time.Sleep(2 * time.Second)
-
-		// 发布
-		testData := "Hello from Kafka"
-		err = client.Publish(ctx, topic, []byte(testData))
-		require.NoError(t, err)
-
-		// 等待接收（Kafka 可能需要更多时间）
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			assert.Equal(t, testData, receivedMsg)
-		case <-time.After(10 * time.Second):
-			t.Skip("Kafka 消息接收超时（可能是首次创建 topic 延迟）")
-		}
-	})
-
-	t.Run("Kafka 消费者组", func(t *testing.T) {
-		kafkaConn, err := connector.NewKafka(&connector.KafkaConfig{
-			Name:           "test-kafka-group",
-			Seed:           []string{kafkaBrokers},
-			ConnectTimeout: 10 * time.Second,
-			RequestTimeout: 5 * time.Second,
-		}, connector.WithLogger(getTestLogger()))
-		require.NoError(t, err)
-
-		ctx := context.Background()
-		err = kafkaConn.Connect(ctx)
-		if err != nil {
-			t.Skip("Kafka 服务不可用")
-		}
-		defer kafkaConn.Close()
-
-		topic := "test-topic-group-" + fmt.Sprintf("%d", time.Now().UnixNano())
-
-		driver := NewKafkaDriver(kafkaConn, getTestLogger())
-		client, err := New(driver, WithLogger(getTestLogger()))
-		require.NoError(t, err)
-		defer client.Close()
-
-		group := testGroup("kafka-consumer")
-
-		// 发布一些消息
-		for i := 1; i <= 3; i++ {
-			err = client.Publish(ctx, topic, []byte(fmt.Sprintf("kafka-msg-%d", i)))
-			require.NoError(t, err)
-		}
-
-		time.Sleep(time.Second)
-
-		var messages []string
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		wg.Add(3)
-
-		// 订阅
-		sub, err := client.Subscribe(ctx, topic, func(ctx context.Context, msg Message) error {
-			mu.Lock()
-			messages = append(messages, string(msg.Data()))
-			mu.Unlock()
-			wg.Done()
-			_ = msg.Ack()
-			return nil
-		}, WithQueueGroup(group))
-		require.NoError(t, err)
-		defer sub.Unsubscribe()
-
-		wg.Wait()
-		assert.Len(t, messages, 3)
-	})
-}
-
 // TestMultipleMessages 测试批量消息
 func TestMultipleMessages(t *testing.T) {
 	if testing.Short() {
@@ -508,8 +387,9 @@ func TestMultipleMessages(t *testing.T) {
 		}
 		defer natsConn.Close()
 
-		driver := NewNatsCoreDriver(natsConn, getTestLogger())
-		client, err := New(driver, WithLogger(getTestLogger()))
+		client, err := New(&Config{
+			Driver: DriverNatsCore,
+		}, WithNATSConnector(natsConn), WithLogger(getTestLogger()))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -566,8 +446,9 @@ func TestSubscriptionUnsubscribe(t *testing.T) {
 		}
 		defer natsConn.Close()
 
-		driver := NewNatsCoreDriver(natsConn, getTestLogger())
-		client, err := New(driver, WithLogger(getTestLogger()))
+		client, err := New(&Config{
+			Driver: DriverNatsCore,
+		}, WithNATSConnector(natsConn), WithLogger(getTestLogger()))
 		require.NoError(t, err)
 		defer client.Close()
 

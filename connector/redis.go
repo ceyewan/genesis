@@ -2,28 +2,21 @@ package connector
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/maintnotifications"
 )
 
 type redisConnector struct {
-	cfg                   *RedisConfig
-	client                *redis.Client
-	logger                clog.Logger
-	meter                 metrics.Meter
-	healthy               atomic.Bool
-	mu                    sync.RWMutex
-	totalConnections      metrics.Counter
-	successfulConnections metrics.Counter
-	failedConnections     metrics.Counter
-	activeConnections     metrics.Gauge
+	cfg     *RedisConfig
+	client  *redis.Client
+	logger  clog.Logger
+	healthy atomic.Bool
 }
 
 // NewRedis 创建 Redis 连接器
@@ -37,51 +30,11 @@ func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
 	for _, o := range opts {
 		o(opt)
 	}
-
-	if opt.logger == nil {
-		opt.logger = clog.Discard()
-	}
+	opt.applyDefaults()
 
 	c := &redisConnector{
 		cfg:    cfg,
 		logger: opt.logger.With(clog.String("connector", "redis"), clog.String("name", cfg.Name)),
-		meter:  opt.meter,
-	}
-
-	// 创建简化指标
-	if c.meter != nil {
-		var err error
-		c.totalConnections, err = c.meter.Counter(
-			"connector_redis_total_connections",
-			"Total number of Redis connection attempts",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create total connections counter")
-		}
-
-		c.successfulConnections, err = c.meter.Counter(
-			"connector_redis_successful_connections",
-			"Number of successful Redis connections",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create successful connections counter")
-		}
-
-		c.failedConnections, err = c.meter.Counter(
-			"connector_redis_failed_connections",
-			"Number of failed Redis connections",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create failed connections counter")
-		}
-
-		c.activeConnections, err = c.meter.Gauge(
-			"connector_redis_active_connections",
-			"Number of active Redis connections",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create active connections gauge")
-		}
 	}
 
 	// 创建 Redis 客户端
@@ -99,36 +52,22 @@ func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
 		},
 	})
 
+	if cfg.EnableTracing {
+		if err := redisotel.InstrumentTracing(c.client); err != nil {
+			return nil, xerrors.Wrapf(err, "redis connector[%s]: enable tracing failed", cfg.Name)
+		}
+	}
+
 	return c, nil
 }
 
 // Connect 建立连接
 func (c *redisConnector) Connect(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// 记录总连接尝试
-	if c.totalConnections != nil {
-		c.totalConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
-	}
-
 	c.logger.Info("attempting to connect to redis", clog.String("addr", c.cfg.Addr))
 
 	if err := c.client.Ping(ctx).Err(); err != nil {
-		// 记录失败连接
-		if c.failedConnections != nil {
-			c.failedConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
-		}
 		c.logger.Error("failed to connect to redis", clog.Error(err), clog.String("addr", c.cfg.Addr))
 		return xerrors.Wrapf(err, "redis connector[%s]: connection failed", c.cfg.Name)
-	}
-
-	// 记录成功连接
-	if c.successfulConnections != nil {
-		c.successfulConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
-	}
-	if c.activeConnections != nil {
-		c.activeConnections.Set(ctx, float64(1), metrics.L("connector", c.cfg.Name))
 	}
 
 	c.healthy.Store(true)
@@ -139,17 +78,8 @@ func (c *redisConnector) Connect(ctx context.Context) error {
 
 // Close 关闭连接
 func (c *redisConnector) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	c.logger.Info("closing redis connection", clog.String("addr", c.cfg.Addr))
-
 	c.healthy.Store(false)
-
-	// 减少活跃连接数
-	if c.activeConnections != nil {
-		c.activeConnections.Set(context.Background(), float64(0), metrics.L("connector", c.cfg.Name))
-	}
 
 	if c.client != nil {
 		err := c.client.Close()

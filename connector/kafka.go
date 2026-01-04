@@ -7,16 +7,15 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
 type kafkaConnector struct {
 	cfg     *KafkaConfig
 	client  *kgo.Client
 	logger  clog.Logger
-	meter   metrics.Meter
 	healthy atomic.Bool
 	mu      sync.RWMutex
 }
@@ -31,15 +30,11 @@ func NewKafka(cfg *KafkaConfig, opts ...Option) (KafkaConnector, error) {
 	for _, o := range opts {
 		o(opt)
 	}
-
-	if opt.logger == nil {
-		opt.logger = clog.Discard()
-	}
+	opt.applyDefaults()
 
 	return &kafkaConnector{
 		cfg:    cfg,
 		logger: opt.logger.With(clog.String("connector", "kafka"), clog.String("name", cfg.Name)),
-		meter:  opt.meter,
 	}, nil
 }
 
@@ -60,12 +55,14 @@ func (c *kafkaConnector) Connect(ctx context.Context) error {
 		kgo.AllowAutoTopicCreation(),
 	}
 
-	// SASL Config
+	// SASL/PLAIN 认证
 	if c.cfg.User != "" && c.cfg.Password != "" {
-		// TODO: 支持 SASL/PLAIN or SCRAM
-		// 由于 franz-go 的 SASL 需要引入 sasl 包，这里暂且留空或支持基础 PLAIN
-		// 为了简单起见，本示例暂不支持 SASL，或后续添加
-		c.logger.Warn("SASL auth configured but not implemented in basic connector yet")
+		c.logger.Info("enabling SASL/PLAIN authentication", clog.String("user", c.cfg.User))
+		auth := plain.Auth{
+			User: c.cfg.User,
+			Pass: c.cfg.Password,
+		}
+		opts = append(opts, kgo.SASL(auth.AsMechanism()))
 	}
 
 	client, err := kgo.NewClient(opts...)
@@ -128,10 +125,6 @@ func (c *kafkaConnector) Name() string {
 
 func (c *kafkaConnector) GetClient() *kgo.Client {
 	return c.client
-}
-
-func (c *kafkaConnector) Config() *KafkaConfig {
-	return c.cfg
 }
 
 type kgoLogger struct {

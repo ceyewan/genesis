@@ -21,7 +21,7 @@ type Config struct {
 // 参数 sourceRoot 推荐设置为你的项目根目录，例如 genesis，以获得更简洁的调用源信息。
 func NewDevDefaultConfig(sourceRoot string) *Config {
 	return &Config{
-		Level:       "debug",
+		Level:       "info",
 		Format:      "console",
 		Output:      "stdout",
 		EnableColor: true,

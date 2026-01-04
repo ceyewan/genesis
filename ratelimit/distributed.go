@@ -2,7 +2,6 @@ package ratelimit
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -10,6 +9,7 @@ import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // luaScript 令牌桶算法的 Lua 脚本
@@ -77,13 +77,14 @@ func newDistributed(
 	meter metrics.Meter,
 ) (Limiter, error) {
 	if redisConn == nil {
-		return nil, fmt.Errorf("redis connector is nil")
+		return nil, ErrConnectorNil
 	}
 
-	prefix := cfg.Prefix
-	if prefix == "" {
-		prefix = "ratelimit:"
+	if cfg == nil {
+		cfg = &DistributedConfig{}
 	}
+	cfg.setDefaults()
+	prefix := cfg.Prefix
 
 	l := &distributedLimiter{
 		client: redisConn.GetClient(),
@@ -116,7 +117,7 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 	}
 
 	if n <= 0 {
-		return false, fmt.Errorf("n must be positive")
+		return false, xerrors.Wrapf(xerrors.ErrInvalidInput, "ratelimit: n must be positive")
 	}
 
 	// 构建 Redis key
@@ -133,18 +134,18 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 				clog.String("key", key),
 				clog.Error(err))
 		}
-		return false, fmt.Errorf("execute lua script: %w", err)
+		return false, xerrors.Wrap(err, "execute lua script")
 	}
 
 	// 解析结果
 	resultSlice, ok := result.([]interface{})
 	if !ok || len(resultSlice) != 2 {
-		return false, fmt.Errorf("invalid lua script result")
+		return false, xerrors.New("invalid lua script result")
 	}
 
 	allowed, ok := resultSlice[0].(int64)
 	if !ok {
-		return false, fmt.Errorf("invalid allowed value")
+		return false, xerrors.New("invalid allowed value")
 	}
 
 	remaining, ok := resultSlice[1].(int64)
@@ -170,4 +171,9 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 func (l *distributedLimiter) Wait(ctx context.Context, key string, limit Limit) error {
 	// 分布式环境下 Wait 难以精确实现且代价高昂
 	return ErrNotSupported
+}
+
+// Close 释放资源（分布式连接由 Connector 管理）
+func (l *distributedLimiter) Close() error {
+	return nil
 }

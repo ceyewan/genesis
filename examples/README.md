@@ -19,10 +19,9 @@
 ### Level 2 - 业务组件示例
 
 - **[cache](./cache/)** - 缓存组件使用示例
-- **[dlock-redis](./dlock-redis/)** - 基于 Redis 的分布式锁示例
-- **[dlock-etcd](./dlock-etcd/)** - 基于 Etcd 的分布式锁示例
+- **[dlock](./dlock/)** - 分布式锁示例（支持 Redis/Etcd）
 - **[idgen](./idgen/)** - ID 生成器示例
-- **[idempotency](./idempotency/)** - 幂等性组件示例
+- **[idem](./idem/)** - 幂等性组件示例
 - **[mq](./mq/)** - 消息队列使用示例
 
 ### Level 3 - 流量治理示例
@@ -32,6 +31,7 @@
 - **[breaker](./breaker/)** - 熔断器示例（包含 gRPC 测试）
 - **[registry](./registry/)** - 服务注册发现示例
 - **[grpc-registry](./grpc-registry/)** - gRPC 服务注册发现示例
+- **[registry-stream](./registry-stream/)** - 流式服务发现与 StreamManager 示例
 
 ## 🚀 运行示例
 
@@ -79,7 +79,7 @@ go run main.go -config config.yaml
 
 - **metrics** 示例包含 Grafana 仪表板配置文件
 - **breaker** 和 **grpc-registry** 示例包含 Protocol Buffer 定义文件
-- **dlock** 提供了 Redis 和 Etcd 两种实现的示例
+- **dlock** 示例支持 Redis 和 Etcd 两种实现
 - **config** 示例展示了多环境配置的使用
 
 ## 🔧 开发环境

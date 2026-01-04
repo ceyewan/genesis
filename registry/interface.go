@@ -24,7 +24,7 @@ type Registry interface {
 	// --- 服务发现 ---
 
 	// GetService 获取服务实例列表
-	// 优先读取本地缓存，缓存未命中或过期时查询注册中心
+	// 每次从注册中心获取服务实例列表
 	GetService(ctx context.Context, serviceName string) ([]*ServiceInstance, error)
 
 	// Watch 监听服务实例变化

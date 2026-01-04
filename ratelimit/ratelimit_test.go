@@ -8,6 +8,19 @@ import (
 	"github.com/ceyewan/genesis/clog"
 )
 
+func newStandaloneLimiter(tb testing.TB, logger clog.Logger) Limiter {
+	tb.Helper()
+
+	limiter, err := New(&Config{
+		Driver:     DriverStandalone,
+		Standalone: &StandaloneConfig{},
+	}, WithLogger(logger))
+	if err != nil {
+		tb.Fatalf("New should not return error, got: %v", err)
+	}
+	return limiter
+}
+
 // TestDiscard 测试 Discard 模式
 func TestDiscard(t *testing.T) {
 	limiter := Discard()
@@ -29,41 +42,37 @@ func TestDiscard(t *testing.T) {
 	if !allowed {
 		t.Fatal("Discard limiter should always allow")
 	}
+
+	if err := limiter.Wait(context.Background(), "any-key", Limit{Rate: 1, Burst: 1}); err != nil {
+		t.Fatalf("Wait should not return error, got: %v", err)
+	}
+	if err := limiter.Close(); err != nil {
+		t.Fatalf("Close should not return error, got: %v", err)
+	}
 }
 
-// TestNewConfigNil 测试 nil 配置时返回 Discard 实例
+// TestNewConfigNil 测试 nil 配置时返回错误
 func TestNewConfigNil(t *testing.T) {
 	limiter, err := New(nil)
 
-	if err != nil {
-		t.Fatalf("New should not return error, got: %v", err)
+	if err == nil {
+		t.Fatal("New should return error for nil config")
 	}
-
-	// 应返回 Discard 实例
-	allowed, _ := limiter.Allow(context.Background(), "key", Limit{Rate: 0, Burst: 0})
-	if !allowed {
-		t.Fatal("Nil config limiter should always allow")
+	if limiter != nil {
+		t.Fatal("Limiter should be nil when config is nil")
 	}
 }
 
-// TestNewConfigEmptyMode 测试空 Mode 时默认使用单机模式
-func TestNewConfigEmptyMode(t *testing.T) {
-	cfg := &Config{Mode: ""}
+// TestNewConfigMissingDriver 测试缺少 Driver 时返回错误
+func TestNewConfigMissingDriver(t *testing.T) {
+	cfg := &Config{}
 	limiter, err := New(cfg)
 
-	if err != nil {
-		t.Fatalf("New should not return error, got: %v", err)
+	if err == nil {
+		t.Fatalf("New should return error when driver is missing")
 	}
-
-	// 空模式默认使用单机限流器（不是 Discard）
-	if limiter == nil {
-		t.Fatal("Empty mode should return standalone limiter")
-	}
-
-	// 验证这是一个实际的限流器
-	allowed, _ := limiter.Allow(context.Background(), "key", Limit{Rate: 1, Burst: 1})
-	if !allowed {
-		t.Fatal("First request should be allowed")
+	if limiter != nil {
+		t.Fatal("Limiter should be nil when driver is missing")
 	}
 }
 
@@ -72,7 +81,7 @@ func TestNewConfigStandalone(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
 
 	cfg := &Config{
-		Mode:    "standalone",
+		Driver: DriverStandalone,
 		Standalone: &StandaloneConfig{
 			CleanupInterval: 1 * time.Minute,
 			IdleTimeout:     5 * time.Minute,
@@ -83,6 +92,7 @@ func TestNewConfigStandalone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New should not return error, got: %v", err)
 	}
+	defer limiter.Close()
 
 	if limiter == nil {
 		t.Fatal("New should return a valid limiter")
@@ -112,50 +122,21 @@ func TestNewConfigStandalone(t *testing.T) {
 	}
 }
 
-// TestNewStandalone 测试单机限流器创建
-func TestNewStandalone(t *testing.T) {
+// TestNewStandaloneDefaults 测试 Standalone 配置默认值
+func TestNewStandaloneDefaults(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
 
-	limiter, err := NewStandalone(&StandaloneConfig{
-		CleanupInterval: 1 * time.Minute,
-		IdleTimeout:     5 * time.Minute,
+	limiter, err := New(&Config{
+		Driver:     DriverStandalone,
+		Standalone: nil,
 	}, WithLogger(logger))
-
 	if err != nil {
-		t.Fatalf("NewStandalone should not return error, got: %v", err)
+		t.Fatalf("New should not return error, got: %v", err)
 	}
+	defer limiter.Close()
 
 	if limiter == nil {
-		t.Fatal("NewStandalone should return a valid limiter")
-	}
-
-	// 测试限流功能
-	ctx := context.Background()
-	key := "test-key"
-	limit := Limit{Rate: 10, Burst: 5}
-
-	// 连续请求应该都被允许（在 burst 范围内）
-	for i := 0; i < 5; i++ {
-		allowed, err := limiter.Allow(ctx, key, limit)
-		if err != nil {
-			t.Fatalf("Allow should not return error, got: %v", err)
-		}
-		if !allowed {
-			t.Fatalf("Request %d should be allowed", i+1)
-		}
-	}
-}
-
-// TestNewStandaloneNilConfig 测试 nil 配置时使用默认值
-func TestNewStandaloneNilConfig(t *testing.T) {
-	limiter, err := NewStandalone(nil)
-
-	if err != nil {
-		t.Fatalf("NewStandalone should not return error, got: %v", err)
-	}
-
-	if limiter == nil {
-		t.Fatal("NewStandalone should return a valid limiter with default config")
+		t.Fatal("New should return a valid limiter with default config")
 	}
 }
 
@@ -163,7 +144,8 @@ func TestNewStandaloneNilConfig(t *testing.T) {
 func TestRateLimiting(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
 
-	limiter, _ := NewStandalone(&StandaloneConfig{}, WithLogger(logger))
+	limiter := newStandaloneLimiter(t, logger)
+	defer limiter.Close()
 
 	ctx := context.Background()
 	key := "rate-limit-test"
@@ -192,7 +174,8 @@ func TestRateLimiting(t *testing.T) {
 func TestAllowN(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
 
-	limiter, _ := NewStandalone(&StandaloneConfig{}, WithLogger(logger))
+	limiter := newStandaloneLimiter(t, logger)
+	defer limiter.Close()
 
 	ctx := context.Background()
 	key := "allown-test"
@@ -221,7 +204,8 @@ func TestAllowN(t *testing.T) {
 func TestInvalidKey(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
 
-	limiter, _ := NewStandalone(&StandaloneConfig{}, WithLogger(logger))
+	limiter := newStandaloneLimiter(t, logger)
+	defer limiter.Close()
 
 	ctx := context.Background()
 	limit := Limit{Rate: 10, Burst: 10}
@@ -234,7 +218,8 @@ func TestInvalidKey(t *testing.T) {
 func TestInvalidLimit(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
 
-	limiter, _ := NewStandalone(&StandaloneConfig{}, WithLogger(logger))
+	limiter := newStandaloneLimiter(t, logger)
+	defer limiter.Close()
 
 	ctx := context.Background()
 	key := "test-key"
@@ -248,7 +233,8 @@ func TestInvalidLimit(t *testing.T) {
 func TestMultipleKeys(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
 
-	limiter, _ := NewStandalone(&StandaloneConfig{}, WithLogger(logger))
+	limiter := newStandaloneLimiter(t, logger)
+	defer limiter.Close()
 
 	ctx := context.Background()
 	limit := Limit{Rate: 1, Burst: 1}
@@ -281,7 +267,10 @@ func BenchmarkDiscard(b *testing.B) {
 // BenchmarkStandaloneLimiter 基准测试单机限流器
 func BenchmarkStandaloneLimiter(b *testing.B) {
 	logger, _ := clog.New(&clog.Config{Level: "error"})
-	limiter, _ := NewStandalone(&StandaloneConfig{}, WithLogger(logger))
+	limiter := newStandaloneLimiter(b, logger)
+	b.Cleanup(func() {
+		_ = limiter.Close()
+	})
 	ctx := context.Background()
 
 	b.ResetTimer()

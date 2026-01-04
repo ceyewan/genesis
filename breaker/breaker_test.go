@@ -118,9 +118,9 @@ func TestStateClosed(t *testing.T) {
 
 	state, err := brk.State("new-service")
 	if err != nil {
-		// 服务不存在时可能返回错误
-		t.Logf("State for non-existent service returned error: %v", err)
-	} else if state != StateClosed && state != StateOpen {
+		t.Fatalf("State should not return error, got: %v", err)
+	}
+	if state != StateClosed && state != StateOpen {
 		t.Errorf("Unexpected state: %v", state)
 	}
 }
@@ -178,62 +178,13 @@ func TestUnaryClientInterceptorWithKeyFunc(t *testing.T) {
 
 	brk, _ := New(cfg, WithLogger(logger))
 
-	// 使用后端级别 Key
-	interceptor := brk.UnaryClientInterceptor(WithBackendLevelKey())
+	// 使用自定义 KeyFunc
+	interceptor := brk.UnaryClientInterceptor(WithKeyFunc(func(ctx context.Context, fullMethod string, cc *grpc.ClientConn) string {
+		return "custom:" + fullMethod
+	}))
 
 	if interceptor == nil {
 		t.Fatal("UnaryClientInterceptor should not return nil")
-	}
-}
-
-// TestKeyFuncVariations 测试不同的 KeyFunc
-func TestKeyFuncVariations(t *testing.T) {
-	ctx := context.Background()
-	method := "/pkg.Service/Method"
-
-	t.Run("MethodLevelKey", func(t *testing.T) {
-		keyFunc := MethodLevelKey()
-		// MethodLevelKey 不依赖 ClientConn
-		key := keyFunc(ctx, method, nil)
-		if key != method {
-			t.Errorf("MethodLevelKey should return method, got: %s", key)
-		}
-	})
-
-	t.Run("BackendLevelKey", func(t *testing.T) {
-		// BackendLevelKey 在没有 Peer 信息时回退到 target，但 nil cc 会 panic
-		// 这里只测试方法级别 KeyFunc
-		t.Skip("BackendLevelKey requires valid ClientConn")
-	})
-
-	t.Run("CompositeKey", func(t *testing.T) {
-		// 组合 MethodLevelKey 和自定义 KeyFunc
-		customKeyFunc := func(ctx context.Context, fullMethod string, cc *grpc.ClientConn) string {
-			return "service"
-		}
-		keyFunc := CompositeKey(customKeyFunc, MethodLevelKey())
-		key := keyFunc(ctx, method, nil)
-		if key == "" {
-			t.Error("CompositeKey should return non-empty key")
-		}
-	})
-}
-
-// TestCompositeKeyWithSeparator 测试自定义分隔符的组合 Key
-func TestCompositeKeyWithSeparator(t *testing.T) {
-	ctx := context.Background()
-	method := "/pkg.Service/Method"
-
-	// 使用不依赖 ClientConn 的 KeyFunc
-	customKeyFunc := func(ctx context.Context, fullMethod string, cc *grpc.ClientConn) string {
-		return "service"
-	}
-
-	keyFunc := CompositeKeyWithSeparator(":", MethodLevelKey(), customKeyFunc)
-	key := keyFunc(ctx, method, nil)
-
-	if key == "" {
-		t.Error("CompositeKeyWithSeparator should return non-empty key")
 	}
 }
 
@@ -250,34 +201,6 @@ func TestInterceptorOption(t *testing.T) {
 
 	brk, _ := New(cfg, WithLogger(logger))
 
-	t.Run("WithServiceLevelKey", func(t *testing.T) {
-		interceptor := brk.UnaryClientInterceptor(WithServiceLevelKey())
-		if interceptor == nil {
-			t.Error("WithServiceLevelKey should return valid interceptor")
-		}
-	})
-
-	t.Run("WithBackendLevelKey", func(t *testing.T) {
-		interceptor := brk.UnaryClientInterceptor(WithBackendLevelKey())
-		if interceptor == nil {
-			t.Error("WithBackendLevelKey should return valid interceptor")
-		}
-	})
-
-	t.Run("WithMethodLevelKey", func(t *testing.T) {
-		interceptor := brk.UnaryClientInterceptor(WithMethodLevelKey())
-		if interceptor == nil {
-			t.Error("WithMethodLevelKey should return valid interceptor")
-		}
-	})
-
-	t.Run("WithCompositeKey", func(t *testing.T) {
-		interceptor := brk.UnaryClientInterceptor(WithCompositeKey())
-		if interceptor == nil {
-			t.Error("WithCompositeKey should return valid interceptor")
-		}
-	})
-
 	t.Run("WithCustomKeyFunc", func(t *testing.T) {
 		customKeyFunc := func(ctx context.Context, fullMethod string, cc *grpc.ClientConn) string {
 			return "custom:" + fullMethod
@@ -287,25 +210,6 @@ func TestInterceptorOption(t *testing.T) {
 			t.Error("WithKeyFunc should return valid interceptor")
 		}
 	})
-}
-
-// TestStreamClientInterceptor 测试流式拦截器
-func TestStreamClientInterceptor(t *testing.T) {
-	logger, _ := clog.New(&clog.Config{Level: "debug"})
-
-	cfg := &Config{
-		MaxRequests:     1,
-		Timeout:         30 * time.Second,
-		FailureRatio:    0.6,
-		MinimumRequests: 10,
-	}
-
-	brk, _ := New(cfg, WithLogger(logger))
-
-	interceptor := brk.StreamClientInterceptor()
-	if interceptor == nil {
-		t.Fatal("StreamClientInterceptor should not return nil")
-	}
 }
 
 // TestFallbackFunc 测试降级函数

@@ -1,7 +1,8 @@
 package idgen
 
 import (
-	"sync"
+	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
@@ -15,144 +16,138 @@ const (
 	smallClockBackwards = 5 * time.Millisecond
 )
 
-// Snowflake 雪花算法生成器
-// 提供高性能的分布式有序 ID 生成能力，无需外部依赖
-type Snowflake struct {
-	mu       sync.Mutex
+// ========================================
+// Snowflake 雪花算法生成器 (实现 Generator 接口)
+// ========================================
+
+// snowflake 雪花算法生成器
+// 实现 Generator 接口，提供高性能的分布式有序 ID 生成能力
+type snowflake struct {
+	// state 包含 48bit lastTime 和 12bit sequence
+	// 使用 atomic 操作保证并发安全
+	state    atomic.Uint64
 	workerID int64
 	dcID     int64
-	sequence int64
-	lastTime int64
 	logger   clog.Logger
 }
 
-// SnowflakeOption Snowflake 初始化选项
-type SnowflakeOption func(*Snowflake)
-
-// WithSnowflakeLogger 设置 Logger
-func WithSnowflakeLogger(logger clog.Logger) SnowflakeOption {
-	return func(s *Snowflake) {
-		s.logger = logger
-	}
-}
-
-// NewSnowflake 创建 Snowflake 生成器
-//
-// 参数:
-//   - workerID: 工作节点 ID [0, 1023] (当 DatacenterID=0 时)
-//   - opts: 可选参数 (DatacenterID, Logger)
-//
-// 注意: workerID 和 datacenterID 的总比特数不能超过 10 bit
-// 默认分配: 5 bit datacenterID + 5 bit workerID
+// NewGenerator 创建 ID 生成器 (Snowflake 实现)
 //
 // 使用示例:
 //
-//	// 简单使用
-//	sf, _ := idgen.NewSnowflake(1)
-//	id := sf.NextInt64()
-//
-//	// 带配置
-//	sf, _ := idgen.NewSnowflake(100,
-//	    idgen.WithDatacenterID(1),
-//	    idgen.WithSnowflakeLogger(logger),
-//	)
-func NewSnowflake(workerID int64, opts ...SnowflakeOption) (*Snowflake, error) {
-	sf := &Snowflake{
-		workerID: workerID,
-		dcID:     0,
+//	gen, _ := idgen.NewGenerator(&idgen.GeneratorConfig{WorkerID: 1})
+//	id := gen.Next()
+func NewGenerator(cfg *GeneratorConfig, opts ...Option) (Generator, error) {
+	if cfg == nil {
+		return nil, xerrors.WithCode(ErrInvalidInput, "config_nil")
 	}
 
-	for _, opt := range opts {
-		opt(sf)
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
-	// 校验位宽冲突
-	// 1. 如果使用了 DatacenterID (>0)，则 WorkerID 只能用 5 bit (Max 31)
-	if sf.dcID > 0 && workerID > 31 {
-		return nil, xerrors.WithCode(ErrInvalidInput, "worker_id_overflow_with_dc")
+	// 应用选项
+	opt := options{}
+	for _, o := range opts {
+		o(&opt)
 	}
 
-	// 2. 如果没有使用 DatacenterID (=0)，则 WorkerID 可以用 10 bit (Max 1023)
-	if workerID < 0 || workerID > 1023 {
-		return nil, xerrors.WithCode(ErrInvalidInput, "worker_id_out_of_range")
+	logger := opt.Logger
+	if logger == nil {
+		logger = clog.Discard()
 	}
 
-	// 确保 logger 不为空，避免后续调用 panic
-	if sf.logger == nil {
-		sf.logger = clog.Discard()
+	sf := &snowflake{
+		workerID: cfg.WorkerID,
+		dcID:     cfg.DatacenterID,
+		logger:   logger.With(clog.String("component", "generator")),
 	}
 
-	sf.logger.Info("snowflake generator created",
-		clog.Int64("worker_id", workerID),
-		clog.Int64("datacenter_id", sf.dcID),
+	sf.logger.Info("generator created",
+		clog.Int64("worker_id", cfg.WorkerID),
+		clog.Int64("datacenter_id", cfg.DatacenterID),
 	)
 
 	return sf, nil
 }
 
-// WithDatacenterID 设置数据中心 ID
-func WithDatacenterID(dcID int64) SnowflakeOption {
-	return func(s *Snowflake) {
-		s.dcID = dcID
-	}
-}
+// nextInt64 生成 int64 ID（内部方法）
+func (s *snowflake) nextInt64() (int64, error) {
+	for {
+		oldState := s.state.Load()
+		lastTime := int64(oldState >> 12)
+		sequence := int64(oldState & 0xFFF)
+		now := time.Now().UnixMilli()
 
-// NextInt64 生成 int64 ID
-func (s *Snowflake) nextInt64() (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+		// 处理时钟回拨
+		if now < lastTime {
+			drift := time.Duration(lastTime-now) * time.Millisecond
 
-	now := time.Now().UnixMilli()
-
-	// 处理时钟回拨
-	if now < s.lastTime {
-		drift := time.Duration(s.lastTime-now) * time.Millisecond
-
-		if drift <= smallClockBackwards {
-			// 1. 微小回拨 (<= 5ms): 尝试复用 lastTime
-			if s.sequence < 0xFFF {
-				now = s.lastTime
-			} else {
-				// 序列号已满，必须等待
+			if drift <= smallClockBackwards {
+				// 1. 微小回拨 (<= 5ms): 尝试复用 lastTime
+				if sequence < 0xFFF {
+					now = lastTime
+				} else {
+					// 序列号已满，必须等待
+					time.Sleep(drift + time.Millisecond)
+					continue
+				}
+			} else if drift <= maxClockBackwards {
+				// 2. 小回拨 (5ms < drift <= 1s): 等待时钟追上
 				time.Sleep(drift + time.Millisecond)
-				now = time.Now().UnixMilli()
-			}
-		} else if drift <= maxClockBackwards {
-			// 2. 小回拨 (5ms < drift <= 1s): 等待时钟追上
-			time.Sleep(drift + time.Millisecond)
-			now = time.Now().UnixMilli()
-		} else {
-			// 3. 大回拨 (> 1s): 拒绝服务
-			return 0, xerrors.Wrapf(ErrClockBackwards, "drift: %v (max: %v)", drift, maxClockBackwards)
-		}
-	}
-
-	if now == s.lastTime {
-		s.sequence = (s.sequence + 1) & 0xFFF // 12 位序列号
-		if s.sequence == 0 {
-			// 序列号溢出，等待下一毫秒
-			for now <= s.lastTime {
-				now = time.Now().UnixMilli()
+				continue
+			} else {
+				// 3. 大回拨 (> 1s): 拒绝服务
+				return 0, xerrors.Wrapf(ErrClockBackwards, "drift: %v (max: %v)", drift, maxClockBackwards)
 			}
 		}
-	} else {
-		s.sequence = 0
+
+		newSequence := int64(0)
+		if now == lastTime {
+			newSequence = (sequence + 1) & 0xFFF
+			if newSequence == 0 {
+				// 序列号溢出，等待下一毫秒
+				time.Sleep(time.Millisecond)
+				continue
+			}
+		}
+
+		// 尝试更新状态
+		newState := (uint64(now) << 12) | uint64(newSequence)
+		if s.state.CompareAndSwap(oldState, newState) {
+			// 标准 Snowflake 位结构 (41+10+12)
+			// 默认: 41bit 时间戳 + 5bit datacenterID + 5bit workerID + 12bit 序列号
+			id := (now << 22) | (s.dcID << 17) | (s.workerID << 12) | newSequence
+			return id, nil
+		}
+		// CAS 失败，重试
 	}
-
-	s.lastTime = now
-
-	// 标准 Snowflake 位结构 (41+10+12)
-	// 默认: 41bit 时间戳 + 5bit datacenterID + 5bit workerID + 12bit 序列号
-	id := (now << 22) | (s.dcID << 17) | (s.workerID << 12) | s.sequence
-
-	return id, nil
 }
 
-// Next 返回字符串形式的 ID
-func (s *Snowflake) Next() int64 {
+// Next 生成下一个 ID
+func (s *snowflake) Next() int64 {
 	id, err := s.nextInt64()
 	if err != nil {
 		return -1
 	}
 	return id
+}
+
+// NextString 生成下一个 ID (字符串形式)
+func (s *snowflake) NextString() string {
+	id, err := s.nextInt64()
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", id)
+}
+
+// ParseGeneratorID 解析 Snowflake ID，返回其组成部分
+func ParseGeneratorID(id int64) (timestamp, datacenterID, workerID, sequence int64) {
+	timestamp = id >> 22
+	datacenterID = (id >> 17) & 0x1F
+	workerID = (id >> 12) & 0x1F
+	sequence = id & 0xFFF
+	return
 }

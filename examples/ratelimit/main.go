@@ -49,15 +49,18 @@ func main() {
 // standaloneExample 单机模式示例
 func standaloneExample(ctx context.Context, logger clog.Logger) {
 	// 创建单机限流器
-	limiter, err := ratelimit.NewStandalone(&ratelimit.StandaloneConfig{
-		CleanupInterval: 1 * time.Minute,
-		IdleTimeout:     5 * time.Minute,
+	limiter, err := ratelimit.New(&ratelimit.Config{
+		Driver: ratelimit.DriverStandalone,
+		Standalone: &ratelimit.StandaloneConfig{
+			CleanupInterval: 1 * time.Minute,
+			IdleTimeout:     5 * time.Minute,
+		},
 	}, ratelimit.WithLogger(logger))
 	if err != nil {
 		logger.Error("failed to create standalone limiter", clog.Error(err))
 		return
 	}
-	// Note: 单机模式的 limiter 会在后台 goroutine 清理，不需要显式关闭
+	defer limiter.Close()
 
 	// 定义限流规则: 5 QPS, 突发 10
 	limit := ratelimit.Limit{
@@ -127,13 +130,17 @@ func distributedExample(ctx context.Context, logger clog.Logger) {
 	}
 
 	// 创建分布式限流器
-	limiter, err := ratelimit.NewDistributed(redisConn, &ratelimit.DistributedConfig{
-		Prefix: "example:ratelimit:",
-	}, ratelimit.WithLogger(logger))
+	limiter, err := ratelimit.New(&ratelimit.Config{
+		Driver: ratelimit.DriverDistributed,
+		Distributed: &ratelimit.DistributedConfig{
+			Prefix: "example:ratelimit:",
+		},
+	}, ratelimit.WithRedisConnector(redisConn), ratelimit.WithLogger(logger))
 	if err != nil {
 		logger.Error("failed to create distributed limiter", clog.Error(err))
 		return
 	}
+	defer limiter.Close()
 
 	// 定义限流规则：更严格的限流，便于观察效果
 	limit := ratelimit.Limit{
@@ -184,14 +191,18 @@ func distributedExample(ctx context.Context, logger clog.Logger) {
 // ginExample Gin 中间件示例
 func ginExample(logger clog.Logger) {
 	// 创建单机限流器
-	limiter, err := ratelimit.NewStandalone(&ratelimit.StandaloneConfig{
-		CleanupInterval: 1 * time.Minute,
-		IdleTimeout:     5 * time.Minute,
+	limiter, err := ratelimit.New(&ratelimit.Config{
+		Driver: ratelimit.DriverStandalone,
+		Standalone: &ratelimit.StandaloneConfig{
+			CleanupInterval: 1 * time.Minute,
+			IdleTimeout:     5 * time.Minute,
+		},
 	}, ratelimit.WithLogger(logger))
 	if err != nil {
 		logger.Error("failed to create limiter", clog.Error(err))
 		return
 	}
+	defer limiter.Close()
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -206,18 +217,19 @@ func ginExample(logger clog.Logger) {
 
 	// 使用路径限流中间件（注意：key 是 IP，所以同一个 IP 访问同一个路径会被限流）
 	apiGroup := r.Group("/api")
-	apiGroup.Use(ratelimit.GinMiddleware(limiter,
-		func(c *gin.Context) string {
+	apiGroup.Use(ratelimit.GinMiddleware(limiter, &ratelimit.GinMiddlewareOptions{
+		KeyFunc: func(c *gin.Context) string {
 			// 只使用路径作为 key，这样所有请求到同一路径都会共享限流器
 			return c.Request.URL.Path
 		},
-		func(c *gin.Context) ratelimit.Limit {
+		LimitFunc: func(c *gin.Context) ratelimit.Limit {
 			// 根据路径返回对应的限流规则
 			if limit, ok := pathLimits[c.Request.URL.Path]; ok {
 				return limit
 			}
 			return ratelimit.Limit{Rate: 50, Burst: 100}
-		}))
+		},
+	}))
 
 	// 测试接口
 	apiGroup.GET("/test", func(c *gin.Context) {
@@ -245,6 +257,41 @@ func ginExample(logger clog.Logger) {
 		})
 	})
 
+	// 使用用户维度限流（示例使用 Header: X-User）
+	userGroup := r.Group("/api-user")
+	userGroup.Use(ratelimit.GinMiddleware(limiter, &ratelimit.GinMiddlewareOptions{
+		KeyFunc: func(c *gin.Context) string {
+			user := c.GetHeader("X-User")
+			if user == "" {
+				return "ip:" + c.ClientIP()
+			}
+			return "user:" + user
+		},
+		LimitFunc: func(c *gin.Context) ratelimit.Limit {
+			return ratelimit.Limit{Rate: 3, Burst: 3}
+		},
+	}))
+
+	userGroup.GET("/echo", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"user": c.GetHeader("X-User"),
+		})
+	})
+
+	// 使用 IP 维度限流（默认使用 ClientIP）
+	ipGroup := r.Group("/api-ip")
+	ipGroup.Use(ratelimit.GinMiddleware(limiter, &ratelimit.GinMiddlewareOptions{
+		LimitFunc: func(c *gin.Context) ratelimit.Limit {
+			return ratelimit.Limit{Rate: 2, Burst: 2}
+		},
+	}))
+
+	ipGroup.GET("/ping", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "pong",
+		})
+	})
+
 	logger.Info("starting gin server on :8080")
 	fmt.Println("\nGin server is running on :8080")
 	fmt.Println("\n测试命令（注意：限流器已修改为按路径限流，所以访问同一路径会触发限流）:")
@@ -260,6 +307,15 @@ func ginExample(logger clog.Logger) {
 	fmt.Println("  # 测试上传接口限流 (Rate=2 QPS, Burst=3)")
 	fmt.Println("  # 快速发送 6 个请求，前 3 个应该通过，后 3 个被限流")
 	fmt.Println("  for i in {1..6}; do curl -X POST http://localhost:8080/api/upload && echo; sleep 0.01; done")
+	fmt.Println()
+	fmt.Println("  # 测试用户维度限流 (Rate=3 QPS, Burst=3)")
+	fmt.Println("  # 同一用户触发限流，不同用户互不影响")
+	fmt.Println("  for i in {1..6}; do curl -H 'X-User: alice' http://localhost:8080/api-user/echo && echo; sleep 0.01; done")
+	fmt.Println("  for i in {1..6}; do curl -H 'X-User: bob' http://localhost:8080/api-user/echo && echo; sleep 0.01; done")
+	fmt.Println()
+	fmt.Println("  # 测试 IP 维度限流 (Rate=2 QPS, Burst=2)")
+	fmt.Println("  # 同一 IP 快速发送 5 个请求，前 2 个应该通过，后 3 个被限流")
+	fmt.Println("  for i in {1..5}; do curl http://localhost:8080/api-ip/ping && echo; sleep 0.01; done")
 	fmt.Println()
 
 	if err := r.Run(":8080"); err != nil {

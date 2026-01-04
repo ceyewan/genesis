@@ -11,7 +11,6 @@
 - **设计原则**：
     - **借用模型**：借用 Etcd 连接器的连接，不负责连接的生命周期
     - **gRPC 原生支持**：实现 gRPC resolver.Builder 接口，支持 `etcd://<service_name>` 解析
-    - **本地缓存**：服务发现内置本地缓存机制，减少对注册中心的直接请求压力
     - **实时监听**：通过 Etcd Watch 机制实时感知服务变化
     - **自动续约**：Lease 机制确保服务可用性，自动处理续租
     - **优雅下线**：Close() 方法自动撤销租约，停止监听器
@@ -50,11 +49,8 @@ etcdConn.Connect(ctx)
 
 // 2. 创建注册组件
 reg, _ := registry.New(etcdConn, &registry.Config{
-    Namespace:       "/genesis/services",
-    Schema:          "etcd",
-    DefaultTTL:      30 * time.Second,
-    EnableCache:     true,
-    CacheExpiration: 10 * time.Second,
+    Namespace:  "/genesis/services",
+    DefaultTTL: 30 * time.Second,
 }, registry.WithLogger(logger))
 defer reg.Close()
 
@@ -121,22 +117,15 @@ type Config struct {
     // Namespace: Etcd Key 前缀，默认 "/genesis/services"
     Namespace string `json:"namespace" yaml:"namespace"`
 
-    // Schema: gRPC resolver 的 schema，默认 "etcd"
-    Schema string `json:"schema" yaml:"schema"`
-
     // DefaultTTL: 默认服务注册租约时长，默认 30s
     DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
 
     // RetryInterval: 重连/重试间隔，默认 1s
     RetryInterval time.Duration `json:"retry_interval" yaml:"retry_interval"`
-
-    // EnableCache: 是否启用本地服务发现缓存，默认 true
-    EnableCache bool `json:"enable_cache" yaml:"enable_cache"`
-
-    // CacheExpiration: 本地缓存过期时间，默认 10s
-    CacheExpiration time.Duration `json:"cache_expiration" yaml:"cache_expiration"`
 }
 ```
+
+说明：gRPC resolver 的 scheme 固定为 `etcd`，无需额外配置。
 
 ## 使用模式
 
@@ -189,8 +178,12 @@ for _, instance := range instances {
 ### 3. gRPC 集成（方式一：GetConnection）
 
 ```go
-// 获取 gRPC 连接，开箱即用
-conn, err := reg.GetConnection(ctx, "user-service")
+import "google.golang.org/grpc/credentials/insecure"
+
+// 必须传入 grpc.WithTransportCredentials() 或其他凭证选项
+conn, err := reg.GetConnection(ctx, "user-service",
+    grpc.WithTransportCredentials(insecure.NewCredentials()),
+)
 if err != nil {
     logger.Error("failed to get connection", clog.Error(err))
     return
@@ -212,7 +205,7 @@ import (
 
 // Registry 初始化时已自动注册 gRPC Resolver Builder
 // 使用标准 gRPC Dial
-conn, err := grpc.Dial(
+conn, err := grpc.NewClient(
     "etcd:///user-service",
     grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
     grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -299,8 +292,8 @@ reg, err := registry.New(etcdConn, cfg,
 ### 配置负载均衡
 
 ```go
-// 在 grpc.Dial 中指定负载均衡策略
-conn, err := grpc.Dial(
+// 在 grpc.NewClient 中指定负载均衡策略
+conn, err := grpc.NewClient(
     "etcd:///user-service",
     grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
     grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -361,12 +354,44 @@ func main() {
     defer reg.Deregister(ctx, service.ID)
 
     // 4. 调用其他服务
-    userConn, _ := reg.GetConnection(ctx, "user-service")
+    userConn, _ := reg.GetConnection(ctx, "user-service",
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    )
     defer userConn.Close()
 
     userClient := pb.NewUserServiceClient(userConn)
     user, err := userClient.GetUser(ctx, &pb.GetUserRequest{ID: "123"})
 }
+```
+
+### 6. StreamManager（每实例一条流）
+
+当需要为每个实例维护一条双向流时，使用 StreamManager 自动管理连接、流和实例上下线：
+
+```go
+manager, err := registry.NewStreamManager(reg, registry.StreamManagerConfig{
+    ServiceName: "stream-service",
+    DialOptions: []grpc.DialOption{
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    },
+    Factory: func(ctx context.Context, conn *grpc.ClientConn, instance *registry.ServiceInstance) (grpc.ClientStream, error) {
+        client := pb.NewTestServiceClient(conn)
+        return client.StreamCall(ctx)
+    },
+})
+if err != nil {
+    logger.Error("failed to create stream manager", clog.Error(err))
+    return
+}
+defer manager.Stop(ctx)
+
+if err := manager.Start(ctx); err != nil {
+    logger.Error("failed to start stream manager", clog.Error(err))
+    return
+}
+
+// 获取当前流快照（instanceID -> stream）
+streams := manager.Streams()
 ```
 
 ## 最佳实践
@@ -416,12 +441,9 @@ func main() {
     }
 
     // 3. 创建 Registry 实例
-    reg, err := registry.New(etcdConn, &registry.Config{
-        Namespace:       "/genesis/services",
-        Schema:          "etcd",
-        DefaultTTL:      30 * time.Second,
-        EnableCache:     true,
-        CacheExpiration: 10 * time.Second,
+reg, err := registry.New(etcdConn, &registry.Config{
+        Namespace:  "/genesis/services",
+        DefaultTTL: 30 * time.Second,
     }, registry.WithLogger(logger))
     if err != nil {
         panic(err)
@@ -463,9 +485,9 @@ func main() {
     select {}
 }
 
-func watchUserService(reg *registry.Registry, logger clog.Logger) {
+func watchUserService(reg registry.Registry, logger clog.Logger) {
     ctx := context.Background()
-    eventCh, err := (*reg).Watch(ctx, "user-service")
+    eventCh, err := reg.Watch(ctx, "user-service")
     if err != nil {
         logger.Error("failed to watch user service", clog.Error(err))
         return
@@ -485,11 +507,13 @@ func watchUserService(reg *registry.Registry, logger clog.Logger) {
     }
 }
 
-func callUserService(reg *registry.Registry, logger clog.Logger) {
+func callUserService(reg registry.Registry, logger clog.Logger) {
     ctx := context.Background()
 
     // 方式一：使用 GetConnection
-    conn, err := (*reg).GetConnection(ctx, "user-service")
+    conn, err := reg.GetConnection(ctx, "user-service",
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    )
     if err != nil {
         logger.Error("failed to get user service connection", clog.Error(err))
         return

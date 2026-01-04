@@ -11,9 +11,12 @@
 // ## 基本使用
 //
 //	// 单机模式
-//	limiter, _ := ratelimit.NewStandalone(&ratelimit.StandaloneConfig{
-//	    CleanupInterval: 1 * time.Minute,
-//	    IdleTimeout:     5 * time.Minute,
+//	limiter, _ := ratelimit.New(&ratelimit.Config{
+//	    Driver: ratelimit.DriverStandalone,
+//	    Standalone: &ratelimit.StandaloneConfig{
+//	        CleanupInterval: 1 * time.Minute,
+//	        IdleTimeout:     5 * time.Minute,
+//	    },
 //	}, ratelimit.WithLogger(logger))
 //
 //	// 检查是否允许请求
@@ -27,24 +30,32 @@
 //	redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
 //	defer redisConn.Close()
 //
-//	limiter, _ := ratelimit.NewDistributed(&ratelimit.DistributedConfig{
-//	    Prefix: "myapp:ratelimit:",
-//	}, redisConn, ratelimit.WithLogger(logger))
+//	limiter, _ := ratelimit.New(&ratelimit.Config{
+//	    Driver: ratelimit.DriverDistributed,
+//	    Distributed: &ratelimit.DistributedConfig{
+//	        Prefix: "myapp:ratelimit:",
+//	    },
+//	}, ratelimit.WithRedisConnector(redisConn), ratelimit.WithLogger(logger))
 //
 //	allowed, _ := limiter.Allow(ctx, "api:/users", ratelimit.Limit{Rate: 100, Burst: 200})
 //
 // ## Gin 中间件
 //
 //	r := gin.New()
-//	r.Use(ratelimit.GinMiddleware(limiter, nil, func(c *gin.Context) ratelimit.Limit {
-//	    return ratelimit.Limit{Rate: 100, Burst: 200}
+//	r.Use(ratelimit.GinMiddleware(limiter, &ratelimit.GinMiddlewareOptions{
+//	    KeyFunc: func(c *gin.Context) string {
+//	        return c.ClientIP()
+//	    },
+//	    LimitFunc: func(c *gin.Context) ratelimit.Limit {
+//	        return ratelimit.Limit{Rate: 100, Burst: 200}
+//	    },
 //	}))
 //
 // ## 可观测性
 //
 // 通过注入 Logger 和 Meter 实现统一的日志和指标收集：
 //
-//	limiter, _ := ratelimit.NewStandalone(cfg,
+//	limiter, _ := ratelimit.New(cfg,
 //	    ratelimit.WithLogger(logger),
 //	    ratelimit.WithMeter(meter),
 //	)
@@ -55,7 +66,7 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -89,17 +100,32 @@ type Limiter interface {
 
 	// AllowN 尝试获取 N 个令牌（非阻塞）
 	AllowN(ctx context.Context, key string, limit Limit, n int) (bool, error)
+
+	// Wait 阻塞等待直到获取 1 个令牌
+	Wait(ctx context.Context, key string, limit Limit) error
+
+	// Close 释放资源（如后台清理协程）
+	Close() error
 }
 
 // ========================================
 // 配置定义 (Configuration)
 // ========================================
 
+// DriverType 限流驱动类型
+type DriverType string
+
+const (
+	// DriverStandalone 单机限流
+	DriverStandalone DriverType = "standalone"
+	// DriverDistributed 分布式限流
+	DriverDistributed DriverType = "distributed"
+)
+
 // Config 限流组件统一配置
 type Config struct {
-	// Mode 限流模式: "standalone" | "distributed"
-	// 空字符串或 "standalone" 时使用单机模式，"distributed" 时使用分布式模式（需通过 WithRedisConnector 注入）
-	Mode string `json:"mode" yaml:"mode"`
+	// Driver 限流模式: "standalone" | "distributed"
+	Driver DriverType `json:"driver" yaml:"driver"`
 
 	// Standalone 单机限流配置
 	Standalone *StandaloneConfig `json:"standalone" yaml:"standalone"`
@@ -123,6 +149,60 @@ type DistributedConfig struct {
 	Prefix string `json:"prefix" yaml:"prefix"`
 }
 
+func (c *Config) setDefaults() {
+	if c == nil {
+		return
+	}
+	switch c.Driver {
+	case DriverStandalone:
+		if c.Standalone == nil {
+			c.Standalone = &StandaloneConfig{}
+		}
+		c.Standalone.setDefaults()
+	case DriverDistributed:
+		if c.Distributed == nil {
+			c.Distributed = &DistributedConfig{}
+		}
+		c.Distributed.setDefaults()
+	}
+}
+
+func (c *Config) validate() error {
+	if c == nil {
+		return ErrConfigNil
+	}
+	if c.Driver == "" {
+		return xerrors.New("ratelimit: driver is required")
+	}
+	switch c.Driver {
+	case DriverStandalone, DriverDistributed:
+		return nil
+	default:
+		return xerrors.New("ratelimit: unsupported driver: " + string(c.Driver))
+	}
+}
+
+func (c *StandaloneConfig) setDefaults() {
+	if c == nil {
+		return
+	}
+	if c.CleanupInterval <= 0 {
+		c.CleanupInterval = 1 * time.Minute
+	}
+	if c.IdleTimeout <= 0 {
+		c.IdleTimeout = 5 * time.Minute
+	}
+}
+
+func (c *DistributedConfig) setDefaults() {
+	if c == nil {
+		return
+	}
+	if c.Prefix == "" {
+		c.Prefix = "ratelimit:"
+	}
+}
+
 // ========================================
 // 工厂函数 (Factory Functions)
 // ========================================
@@ -134,7 +214,10 @@ type DistributedConfig struct {
 //
 //	var limiter ratelimit.Limiter
 //	if cfg.RateLimitEnabled {
-//	    limiter, _ = ratelimit.NewStandalone(&cfg.Standalone, ratelimit.WithLogger(logger))
+//	    limiter, _ = ratelimit.New(&ratelimit.Config{
+//	        Driver: ratelimit.DriverStandalone,
+//	        Standalone: &cfg.Standalone,
+//	    }, ratelimit.WithLogger(logger))
 //	} else {
 //	    limiter = ratelimit.Discard()  // 零开销
 //	}
@@ -155,14 +238,23 @@ func (noop *noopLimiter) AllowN(ctx context.Context, key string, limit Limit, n 
 	return true, nil
 }
 
+// Wait 始终返回 nil
+func (noop *noopLimiter) Wait(ctx context.Context, key string, limit Limit) error {
+	return nil
+}
+
+// Close 始终返回 nil
+func (noop *noopLimiter) Close() error {
+	return nil
+}
+
 // New 根据配置创建限流器
-// 当 cfg 为 nil 或 Mode 为空时，返回 Discard() 实例（遵循 clog 模式）
 //
 // 使用示例:
 //
 //	// 单机模式
 //	limiter, _ := ratelimit.New(&ratelimit.Config{
-//	    Mode:    "standalone",
+//	    Driver: ratelimit.DriverStandalone,
 //	    Standalone: &ratelimit.StandaloneConfig{
 //	        CleanupInterval: 1 * time.Minute,
 //	    },
@@ -171,116 +263,44 @@ func (noop *noopLimiter) AllowN(ctx context.Context, key string, limit Limit, n 
 //	// 分布式模式（需注入 Redis 连接器）
 //	redisConn, _ := connector.NewRedis(&cfg.Redis)
 //	limiter, _ := ratelimit.New(&ratelimit.Config{
-//	    Mode:        "distributed",
+//	    Driver: ratelimit.DriverDistributed,
 //	    Distributed: &ratelimit.DistributedConfig{Prefix: "myapp:"},
 //	}, ratelimit.WithRedisConnector(redisConn), ratelimit.WithLogger(logger))
 func New(cfg *Config, opts ...Option) (Limiter, error) {
+	if cfg == nil {
+		return nil, ErrConfigNil
+	}
+
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
 	// 应用选项（需要先提取 WithRedisConnector）
 	o := options{}
 	for _, opt := range opts {
 		opt(&o)
 	}
 
-	// nil 配置返回 Discard（遵循 clog 模式）
-	if cfg == nil {
-		return Discard(), nil
+	if o.logger == nil {
+		o.logger = clog.Discard()
+	}
+	if o.meter == nil {
+		o.meter = metrics.Discard()
 	}
 
-	switch cfg.Mode {
-	case "standalone", "":
-		return NewStandalone(cfg.Standalone, opts...)
-	case "distributed":
+	logger := o.logger.With(clog.String("component", "ratelimit"))
+
+	switch cfg.Driver {
+	case DriverStandalone:
+		return newStandalone(cfg.Standalone, logger, o.meter)
+	case DriverDistributed:
 		// 使用 Option 中注入的 redisConn
 		if o.redisConn == nil {
 			return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required_for_distributed_mode")
 		}
-		return NewDistributed(o.redisConn, cfg.Distributed, opts...)
+		return newDistributed(cfg.Distributed, o.redisConn, logger, o.meter)
 	default:
-		// 未知模式默认使用单机
-		return NewStandalone(cfg.Standalone, opts...)
+		return nil, xerrors.New("ratelimit: unsupported driver: " + string(cfg.Driver))
 	}
-}
-
-// NewStandalone 创建单机限流器
-// 这是标准的工厂函数，支持在不依赖其他容器的情况下独立实例化
-//
-// 参数:
-//   - cfg: 单机限流配置
-//   - opts: 可选参数 (Logger, Meter)
-//
-// 使用示例:
-//
-//	limiter, _ := ratelimit.NewStandalone(&ratelimit.StandaloneConfig{
-//	    CleanupInterval: 1 * time.Minute,
-//	    IdleTimeout:     5 * time.Minute,
-//	}, ratelimit.WithLogger(logger))
-func NewStandalone(cfg *StandaloneConfig, opts ...Option) (Limiter, error) {
-	if cfg == nil {
-		cfg = &StandaloneConfig{
-			CleanupInterval: 1 * time.Minute,
-			IdleTimeout:     5 * time.Minute,
-		}
-	}
-
-	// 应用选项
-	opt := options{}
-	for _, o := range opts {
-		o(&opt)
-	}
-
-	// 派生 Logger（添加 component 字段）
-	logger := opt.logger
-	if logger != nil {
-		logger = logger.With(clog.String("component", "ratelimit"))
-	}
-
-	if logger != nil {
-		logger.Info("creating standalone rate limiter")
-	}
-
-	return newStandalone(cfg, logger, opt.meter)
-}
-
-// NewDistributed 创建分布式限流器
-// 这是标准的工厂函数，支持在不依赖其他容器的情况下独立实例化
-//
-// 参数:
-//   - redisConn: Redis 连接器
-//   - cfg: 分布式限流配置
-//   - opts: 可选参数 (Logger, Meter)
-//
-// 使用示例:
-//
-//	redisConn, _ := connector.NewRedis(redisConfig)
-//	limiter, _ := ratelimit.NewDistributed(redisConn, &ratelimit.DistributedConfig{
-//	    Prefix: "myapp:ratelimit:",
-//	}, ratelimit.WithLogger(logger))
-func NewDistributed(redisConn connector.RedisConnector, cfg *DistributedConfig, opts ...Option) (Limiter, error) {
-	if redisConn == nil {
-		return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required")
-	}
-
-	if cfg == nil {
-		cfg = &DistributedConfig{
-			Prefix: "ratelimit:",
-		}
-	}
-
-	// 应用选项
-	opt := options{}
-	for _, o := range opts {
-		o(&opt)
-	}
-
-	// 派生 Logger（添加 component 字段）
-	logger := opt.logger
-	if logger != nil {
-		logger = logger.With(clog.String("component", "ratelimit"))
-	}
-
-	if logger != nil {
-		logger.Info("creating distributed rate limiter")
-	}
-
-	return newDistributed(cfg, redisConn, logger, opt.meter)
 }

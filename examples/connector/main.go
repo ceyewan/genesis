@@ -63,7 +63,7 @@ func runRedisExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 	}
 
 	// 2. 创建实例 (Fail-fast: 验证配置)
-	conn, err := connector.NewRedis(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
+	conn, err := connector.NewRedis(cfg, connector.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建 Redis 连接器失败", clog.Error(err))
 		return
@@ -108,7 +108,7 @@ func runMySQLExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 		MaxOpenConns: 20,
 	}
 
-	conn, err := connector.NewMySQL(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
+	conn, err := connector.NewMySQL(cfg, connector.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建 MySQL 连接器失败", clog.Error(err))
 		return
@@ -140,7 +140,7 @@ func runEtcdExample(ctx context.Context, logger clog.Logger, meter metrics.Meter
 		DialTimeout: 5 * time.Second,
 	}
 
-	conn, err := connector.NewEtcd(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
+	conn, err := connector.NewEtcd(cfg, connector.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建 Etcd 连接器失败", clog.Error(err))
 		return
@@ -171,7 +171,7 @@ func runNATSExample(ctx context.Context, logger clog.Logger, meter metrics.Meter
 		Timeout: 5 * time.Second,
 	}
 
-	conn, err := connector.NewNATS(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
+	conn, err := connector.NewNATS(cfg, connector.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建 NATS 连接器失败", clog.Error(err))
 		return
@@ -193,12 +193,12 @@ func runKafkaExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 
 	cfg := &connector.KafkaConfig{
 		Name:           "kafka-demo",
-		Seed:           []string{getEnvOrDefault("KAFKA_BROKERS", "localhost:9092")},
+		Seed:           []string{getEnvOrDefault("KAFKA_BROKERS", "127.0.0.1:9092")},
 		ConnectTimeout: 10 * time.Second,
 		RequestTimeout: 5 * time.Second,
 	}
 
-	conn, err := connector.NewKafka(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
+	conn, err := connector.NewKafka(cfg, connector.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建 Kafka 连接器失败", clog.Error(err))
 		return
@@ -222,7 +222,7 @@ func runSQLiteExample(ctx context.Context, logger clog.Logger, meter metrics.Met
 		Path: "file::memory:?cache=shared",
 	}
 
-	conn, err := connector.NewSQLite(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
+	conn, err := connector.NewSQLite(cfg, connector.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建 SQLite 连接器失败", clog.Error(err))
 		return

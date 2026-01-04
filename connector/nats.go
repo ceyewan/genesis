@@ -6,23 +6,17 @@ import (
 	"sync/atomic"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 
 	"github.com/nats-io/nats.go"
 )
 
 type natsConnector struct {
-	cfg                   *NATSConfig
-	conn                  *nats.Conn
-	logger                clog.Logger
-	meter                 metrics.Meter
-	healthy               atomic.Bool
-	mu                    sync.RWMutex
-	totalConnections      metrics.Counter
-	successfulConnections metrics.Counter
-	failedConnections     metrics.Counter
-	activeConnections     metrics.Gauge
+	cfg     *NATSConfig
+	conn    *nats.Conn
+	logger  clog.Logger
+	healthy atomic.Bool
+	mu      sync.RWMutex
 }
 
 // NewNATS 创建 NATS 连接器
@@ -36,51 +30,11 @@ func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
 	for _, o := range opts {
 		o(opt)
 	}
-
-	if opt.logger == nil {
-		opt.logger = clog.Discard()
-	}
+	opt.applyDefaults()
 
 	c := &natsConnector{
 		cfg:    cfg,
 		logger: opt.logger.With(clog.String("connector", "nats"), clog.String("name", cfg.Name)),
-		meter:  opt.meter,
-	}
-
-	// 创建简化指标
-	if c.meter != nil {
-		var err error
-		c.totalConnections, err = c.meter.Counter(
-			"connector_nats_total_connections",
-			"Total number of NATS connection attempts",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create total connections counter")
-		}
-
-		c.successfulConnections, err = c.meter.Counter(
-			"connector_nats_successful_connections",
-			"Number of successful NATS connections",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create successful connections counter")
-		}
-
-		c.failedConnections, err = c.meter.Counter(
-			"connector_nats_failed_connections",
-			"Number of failed NATS connections",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create failed connections counter")
-		}
-
-		c.activeConnections, err = c.meter.Gauge(
-			"connector_nats_active_connections",
-			"Number of active NATS connections",
-		)
-		if err != nil {
-			return nil, xerrors.Wrapf(err, "create active connections gauge")
-		}
 	}
 
 	return c, nil
@@ -90,11 +44,6 @@ func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
 func (c *natsConnector) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	// 记录总连接尝试
-	if c.totalConnections != nil {
-		c.totalConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
-	}
 
 	c.logger.Info("attempting to connect to nats", clog.String("url", c.cfg.URL))
 
@@ -118,24 +67,11 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 	// 建立连接
 	conn, err := nats.Connect(c.cfg.URL, natsOpts...)
 	if err != nil {
-		// 记录失败连接
-		if c.failedConnections != nil {
-			c.failedConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
-		}
 		c.logger.Error("failed to connect to nats", clog.Error(err), clog.String("url", c.cfg.URL))
 		return xerrors.Wrapf(err, "nats connector[%s]: connection failed", c.cfg.Name)
 	}
 
 	c.conn = conn
-
-	// 记录成功连接
-	if c.successfulConnections != nil {
-		c.successfulConnections.Inc(ctx, metrics.L("connector", c.cfg.Name))
-	}
-	if c.activeConnections != nil {
-		c.activeConnections.Set(ctx, float64(1), metrics.L("connector", c.cfg.Name))
-	}
-
 	c.healthy.Store(true)
 	c.logger.Info("successfully connected to nats", clog.String("url", c.cfg.URL))
 
@@ -148,13 +84,7 @@ func (c *natsConnector) Close() error {
 	defer c.mu.Unlock()
 
 	c.logger.Info("closing nats connection", clog.String("url", c.cfg.URL))
-
 	c.healthy.Store(false)
-
-	// 减少活跃连接数
-	if c.activeConnections != nil {
-		c.activeConnections.Set(context.Background(), float64(0), metrics.L("connector", c.cfg.Name))
-	}
 
 	if c.conn != nil {
 		c.conn.Close()

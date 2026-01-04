@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 )
 
 // Option 组件初始化选项函数
@@ -24,7 +23,6 @@ type FallbackFunc func(ctx context.Context, serviceName string, err error) error
 // options 组件初始化选项配置（内部使用，小写）
 type options struct {
 	logger   clog.Logger
-	meter    metrics.Meter
 	fallback FallbackFunc
 }
 
@@ -32,13 +30,6 @@ type options struct {
 func WithLogger(logger clog.Logger) Option {
 	return func(o *options) {
 		o.logger = logger
-	}
-}
-
-// WithMeter 设置 Meter
-func WithMeter(meter metrics.Meter) Option {
-	return func(o *options) {
-		o.meter = meter
 	}
 }
 

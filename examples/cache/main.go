@@ -113,6 +113,7 @@ func userRouteExample(logger clog.Logger) {
 
 	// 2. 配置缓存
 	cacheCfg := &cache.Config{
+		Driver:     cache.DriverRedis,
 		Prefix:     "im:route:",
 		Serializer: "json",
 	}
@@ -171,6 +172,7 @@ func sessionListExample(logger clog.Logger) {
 
 	// 2. 配置缓存
 	cacheCfg := &cache.Config{
+		Driver:     cache.DriverRedis,
 		Prefix:     "im:session:",
 		Serializer: "json",
 	}
@@ -258,6 +260,7 @@ func recentMessagesExample(logger clog.Logger) {
 
 	// 2. 配置缓存
 	cacheCfg := &cache.Config{
+		Driver:     cache.DriverRedis,
 		Prefix:     "im:message:",
 		Serializer: "json",
 	}
@@ -317,7 +320,7 @@ func standaloneExample(logger clog.Logger) {
 
 	// 1. 配置缓存
 	cacheCfg := &cache.Config{
-		Mode: "standalone",
+		Driver: cache.DriverMemory,
 		Standalone: &cache.StandaloneConfig{
 			Capacity: 1000,
 		},

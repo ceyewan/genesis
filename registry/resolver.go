@@ -6,37 +6,60 @@ import (
 	"sync"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/xerrors"
 
 	"google.golang.org/grpc/resolver"
 )
 
-// etcdResolverBuilder 实现 gRPC resolver.Builder 接口
-type etcdResolverBuilder struct {
-	registry *etcdRegistry
-	scheme   string
+const resolverScheme = "etcd"
+
+var (
+	defaultRegistryMu sync.RWMutex
+	defaultRegistry   *etcdRegistry
+)
+
+func init() {
+	resolver.Register(&etcdResolverBuilder{})
 }
 
-// newEtcdResolverBuilder 创建 resolver builder
-func newEtcdResolverBuilder(registry *etcdRegistry, scheme string) *etcdResolverBuilder {
-	return &etcdResolverBuilder{
-		registry: registry,
-		scheme:   scheme,
+func setDefaultRegistry(registry *etcdRegistry) {
+	if registry == nil {
+		return
 	}
+	defaultRegistryMu.Lock()
+	defaultRegistry = registry
+	defaultRegistryMu.Unlock()
 }
+
+func getDefaultRegistry() *etcdRegistry {
+	defaultRegistryMu.RLock()
+	defer defaultRegistryMu.RUnlock()
+	return defaultRegistry
+}
+
+// etcdResolverBuilder 实现 gRPC resolver.Builder 接口
+type etcdResolverBuilder struct{}
 
 // Build 创建 resolver
 func (b *etcdResolverBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
+	registry := getDefaultRegistry()
+	if registry == nil {
+		return nil, xerrors.New("registry not initialized")
+	}
+
 	serviceName := target.Endpoint()
 	if serviceName == "" {
 		serviceName = target.URL.Path
 		serviceName = strings.TrimPrefix(serviceName, "/")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	r := &etcdResolver{
-		registry:    b.registry,
+		registry:    registry,
 		serviceName: serviceName,
 		cc:          cc,
-		closeCh:     make(chan struct{}),
+		ctx:         ctx,
+		cancel:      cancel,
 		localCache:  make(map[string]resolver.Address),
 	}
 
@@ -48,7 +71,7 @@ func (b *etcdResolverBuilder) Build(target resolver.Target, cc resolver.ClientCo
 
 // Scheme 返回 scheme
 func (b *etcdResolverBuilder) Scheme() string {
-	return b.scheme
+	return resolverScheme
 }
 
 // etcdResolver 实现 gRPC resolver.Resolver 接口
@@ -57,7 +80,8 @@ type etcdResolver struct {
 	registry    *etcdRegistry
 	serviceName string
 	cc          resolver.ClientConn
-	closeCh     chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
 	localCache  map[string]resolver.Address // instanceID -> Address
 	cacheMu     sync.RWMutex
 	initialized bool
@@ -65,10 +89,8 @@ type etcdResolver struct {
 
 // start 启动 resolver
 func (r *etcdResolver) start() {
-	ctx := context.Background()
-
 	// 监听服务变化
-	eventCh, err := r.registry.Watch(ctx, r.serviceName)
+	eventCh, err := r.registry.Watch(r.ctx, r.serviceName)
 	if err != nil {
 		r.registry.logger.Error("failed to watch service for resolver",
 			clog.String("service_name", r.serviceName),
@@ -82,7 +104,7 @@ func (r *etcdResolver) start() {
 	// 持续监听变化并增量更新
 	for {
 		select {
-		case <-r.closeCh:
+		case <-r.ctx.Done():
 			return
 		case event, ok := <-eventCh:
 			if !ok {
@@ -214,7 +236,7 @@ func (r *etcdResolver) ResolveNow(opts resolver.ResolveNowOptions) {
 
 // Close 关闭 resolver
 func (r *etcdResolver) Close() {
-	close(r.closeCh)
+	r.cancel()
 }
 
 // parseEndpoint 解析 endpoint 地址

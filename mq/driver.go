@@ -4,9 +4,9 @@ import (
 	"context"
 )
 
-// Driver 定义底层 MQ 驱动的行为
-// 所有具体的 MQ 实现（NATS, Kafka, Redis 等）都必须实现此接口
-type Driver interface {
+// driver 定义底层 MQ 驱动的行为（内部使用）
+// 所有具体的 MQ 实现（NATS, Redis 等）都必须实现此接口
+type driver interface {
 	// Publish 发布消息
 	// data: 消息体
 	// opts: 发布选项（如延迟发送、优先级等，取决于实现）
@@ -25,27 +25,26 @@ type Driver interface {
 type PublishOption func(*publishOptions)
 
 type publishOptions struct {
-	Key string // 消息 Key (用于 Kafka 分区路由)
+	Key     string  // 可选消息 Key，用于部分驱动的路由
+	Headers Headers // 消息头 (用于 trace 等元数据透传)
 }
 
-// WithKey 设置消息 Key (Kafka 专用，用于分区路由)
-func WithKey(key string) PublishOption {
-	return func(o *publishOptions) {
-		o.Key = key
-	}
+// defaultPublishOptions 返回默认发布选项
+func defaultPublishOptions() publishOptions {
+	return publishOptions{}
 }
 
 // SubscribeOption 订阅选项
 type SubscribeOption func(*subscribeOptions)
 
 type subscribeOptions struct {
-	QueueGroup  string // 负载均衡组 (对应 NATS Queue, Kafka Consumer Group)
-	AutoAck     bool   // 是否自动确认 (默认 true)
+	QueueGroup  string // 负载均衡组 (对应 NATS Queue, Redis Consumer Group)
+	AutoAck     bool   // 是否自动确认 (默认 true)。手动 Ack/Nak 请用 WithManualAck 关闭自动确认
 	DurableName string // 持久化订阅名 (JetStream/Redis Group)
 	BufferSize  int    // Channel 模式的缓冲区大小
 
 	// 优化选项
-	BatchSize   int  // 批量拉取大小 (Redis COUNT, Kafka Fetch)
+	BatchSize   int  // 批量拉取大小 (Redis COUNT)
 	MaxInflight int  // 最大在途消息数 (JetStream)
 	AsyncAck    bool // 是否异步确认 (提升吞吐量)
 
@@ -78,7 +77,8 @@ func WithDurable(name string) SubscribeOption {
 	}
 }
 
-// WithManualAck 关闭自动确认，用户需要在 Handler 中手动调用 msg.Ack()
+// WithManualAck 关闭自动确认，适用于 Handler 内部显式 Ack/Nak 的场景
+// 例如 SubscribeChan 模式下，用户在消费端手动调用 msg.Ack() 时应启用此选项，避免重复确认。
 func WithManualAck() SubscribeOption {
 	return func(o *subscribeOptions) {
 		o.AutoAck = false
@@ -92,7 +92,7 @@ func WithBufferSize(size int) SubscribeOption {
 	}
 }
 
-// WithBatchSize 设置批量拉取消息的数量 (Kafka/Redis 适用)
+// WithBatchSize 设置批量拉取消息的数量 (Redis 适用)
 func WithBatchSize(size int) SubscribeOption {
 	return func(o *subscribeOptions) {
 		o.BatchSize = size
@@ -116,9 +116,29 @@ func WithAsyncAck() SubscribeOption {
 // WithDeadLetter 设置死信队列配置
 // maxDeliver: 最大尝试次数
 // subject: 死信消息发送到的主题
+//
+// 注意：当前为预留配置，NATS Core / Redis Stream 驱动不会处理该选项。
 func WithDeadLetter(maxDeliver int, subject string) SubscribeOption {
 	return func(o *subscribeOptions) {
 		o.MaxDeliver = maxDeliver
 		o.DeadLetter = subject
+	}
+}
+
+// WithHeaders 设置消息头（键值对）
+// 该选项仅透传元数据，MQ 不做自动注入/提取。
+func WithHeaders(headers Headers) PublishOption {
+	return func(o *publishOptions) {
+		o.Headers = cloneHeaders(headers)
+	}
+}
+
+// WithHeader 设置单个消息头
+func WithHeader(key, value string) PublishOption {
+	return func(o *publishOptions) {
+		if o.Headers == nil {
+			o.Headers = make(Headers, 1)
+		}
+		o.Headers[key] = value
 	}
 }

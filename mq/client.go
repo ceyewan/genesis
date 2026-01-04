@@ -3,6 +3,7 @@ package mq
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
@@ -10,12 +11,15 @@ import (
 )
 
 type client struct {
-	driver Driver
+	driver driver
 	logger clog.Logger
 	meter  metrics.Meter
 }
 
-func newClient(driver Driver, logger clog.Logger, meter metrics.Meter) Client {
+func newClient(driver driver, logger clog.Logger, meter metrics.Meter) Client {
+	if meter == nil {
+		meter = metrics.Discard()
+	}
 	return &client{
 		driver: driver,
 		logger: logger,
@@ -24,22 +28,11 @@ func newClient(driver Driver, logger clog.Logger, meter metrics.Meter) Client {
 }
 
 func (c *client) Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error {
-	// 记录发布指标
-	if c.meter != nil {
-		publishCounter, err := c.meter.Counter("mq.publish.total", "Total number of messages published")
-		if err == nil {
-			publishCounter.Inc(ctx, metrics.L("subject", subject))
-		}
-	}
-
 	err := c.driver.Publish(ctx, subject, data, opts...)
-	if err != nil && c.meter != nil {
-		errorCounter, err := c.meter.Counter("mq.publish.errors", "Total number of publish errors")
+	if err == nil {
+		publishCounter, err := c.meter.Counter(MetricPublishTotal, "Total number of messages published")
 		if err == nil {
-			errorCounter.Inc(ctx,
-				metrics.L("subject", subject),
-				metrics.L("error", "publish_failed"),
-			)
+			publishCounter.Inc(ctx, metrics.L(MetricLabelSubject, subject))
 		}
 	}
 	return err
@@ -47,7 +40,7 @@ func (c *client) Publish(ctx context.Context, subject string, data []byte, opts 
 
 func (c *client) Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error) {
 	// 这里可以添加全局中间件
-	return c.driver.Subscribe(ctx, subject, handler, opts...)
+	return c.driver.Subscribe(ctx, subject, c.wrapHandler(handler), opts...)
 }
 
 func (c *client) SubscribeChan(ctx context.Context, subject string, opts ...SubscribeOption) (<-chan Message, Subscription, error) {
@@ -60,7 +53,7 @@ func (c *client) SubscribeChan(ctx context.Context, subject string, opts ...Subs
 	ch := make(chan Message, o.BufferSize)
 
 	// 定义 Handler 将消息转发到 Channel
-	handler := func(ctx context.Context, msg Message) error {
+	handler := c.wrapHandler(func(ctx context.Context, msg Message) error {
 		select {
 		case ch <- msg:
 			return nil
@@ -72,7 +65,7 @@ func (c *client) SubscribeChan(ctx context.Context, subject string, opts ...Subs
 			c.logger.Warn("SubscribeChan buffer full, message dropped", clog.String("subject", subject))
 			return xerrors.New("buffer full")
 		}
-	}
+	})
 
 	// 订阅
 	sub, err := c.driver.Subscribe(ctx, subject, handler, opts...)
@@ -90,6 +83,24 @@ func (c *client) SubscribeChan(ctx context.Context, subject string, opts ...Subs
 
 func (c *client) Close() error {
 	return c.driver.Close()
+}
+
+func (c *client) wrapHandler(handler Handler) Handler {
+	return func(ctx context.Context, msg Message) error {
+		start := time.Now()
+		consumeCounter, err := c.meter.Counter(MetricConsumeTotal, "Total number of messages consumed")
+		if err == nil {
+			consumeCounter.Inc(ctx, metrics.L(MetricLabelSubject, msg.Subject()))
+		}
+
+		err = handler(ctx, msg)
+
+		histogram, histErr := c.meter.Histogram(MetricHandleDuration, "Message handler duration in seconds", metrics.WithUnit("s"))
+		if histErr == nil {
+			histogram.Record(ctx, time.Since(start).Seconds(), metrics.L(MetricLabelSubject, msg.Subject()))
+		}
+		return err
+	}
 }
 
 // chanSubscription 封装 Subscription，增加关闭 Channel 的能力

@@ -101,20 +101,12 @@ type Config struct {
 }
 ```
 
-### 3.3 函数式选项模式
+### 3.3 函数式选项
 
 ```go
-// Option 函数式选项，用于配置 Logger 实例
-type Option func(*options)
-
-// WithNamespace 设置日志命名空间，支持多级命名空间
-func WithNamespace(parts ...string) Option
-
-// WithStandardContext 自动提取标准的上下文字段
-func WithStandardContext() Option
-
-// WithContextField 添加自定义的 Context 字段提取规则
-func WithContextField(key any, fieldName string, opts ...ContextFieldOption) Option
+func WithNamespace(parts ...string) Option              // 命名空间
+func WithStandardContext() Option                       // trace_id, user_id, request_id
+func WithContextField(key any, fieldName string) Option // 自定义 Context 字段
 ```
 
 ## 4. 工厂函数
@@ -183,23 +175,10 @@ func Any(k string, v any) Field       // → k=<任意值>
 ### 6.2 错误处理
 
 ```go
-// Error 将错误结构化为标准字段
-// 输出: err_msg, err_type, err_stack
-func Error(err error) Field
-
-// ErrorWithCode 包含错误代码和堆栈信息的错误字段
-// 额外输出: err_code
-func ErrorWithCode(err error, code string) Field
-```
-
-### 6.3 Context 字段提取
-
-```go
-// WithContextField 添加自定义 Context 字段提取
-clog.WithContextField("trace-id", "trace_id", clog.Required(true))
-
-// WithStandardContext 自动提取标准字段
-clog.WithStandardContext()  // trace_id, user_id, request_id
+func Error(err error) Field                  // 仅 err_msg
+func ErrorWithCode(err error, code string) Field      // error={msg, code}
+func ErrorWithStack(err error) Field           // error={msg, type, stack}
+func ErrorWithCodeStack(err error, code string) Field // error={msg, type, stack, code}
 ```
 
 ## 7. 使用示例
@@ -245,7 +224,7 @@ ctx = context.WithValue(ctx, "user_id", "user-456")
 // 使用 WithStandardContext 自动提取
 logger, _ := clog.New(&clog.Config{Level: "info"}, clog.WithStandardContext())
 logger.InfoContext(ctx, "Request processed")
-// 输出: {"ctx.trace_id":"abc123", "ctx.user_id":"user-456", "msg":"Request processed", ...}
+// 输出: {"trace_id":"abc123", "user_id":"user-456", "msg":"Request processed", ...}
 ```
 
 ### 7.4 使用 No-op Logger

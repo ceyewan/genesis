@@ -3,8 +3,6 @@ package auth
 import (
 	"net/http"
 
-	"github.com/ceyewan/genesis/metrics"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -13,10 +11,7 @@ func (a *jwtAuth) GinMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, err := a.ExtractToken(c.Request)
 		if err != nil {
-			// Metrics: 访问拒绝 - Token 缺失
-			if counter := a.options.GetCounter("auth_access_denied_total", "Total number of access denied"); counter != nil {
-				counter.Add(c.Request.Context(), 1, metrics.L("reason", "missing_token"))
-			}
+			// Token 缺失不计入指标（用户未提供 token，不属于验证失败）
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": err.Error(),
 			})
@@ -24,11 +19,8 @@ func (a *jwtAuth) GinMiddleware() gin.HandlerFunc {
 		}
 
 		claims, err := a.ValidateToken(c.Request.Context(), token)
+		// 指标已在 ValidateToken 内部记录
 		if err != nil {
-			// Metrics: 访问拒绝 - Token 无效
-			if counter := a.options.GetCounter("auth_access_denied_total", "Total number of access denied"); counter != nil {
-				counter.Add(c.Request.Context(), 1, metrics.L("reason", "invalid_token"))
-			}
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": err.Error(),
 			})
@@ -37,28 +29,7 @@ func (a *jwtAuth) GinMiddleware() gin.HandlerFunc {
 
 		// 将 Claims 存入 Context
 		c.Set(ClaimsKey, claims)
-		c.Next()
-	}
-}
-
-// OptionalMiddleware 可选认证中间件，不强制要求 Token
-func (a *jwtAuth) OptionalMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		token, err := a.ExtractToken(c.Request)
-		if err != nil {
-			// Token 不存在或格式错误，继续处理
-			c.Next()
-			return
-		}
-
-		claims, err := a.ValidateToken(c.Request.Context(), token)
-		if err != nil {
-			// Token 无效，继续处理（但不设置 Claims）
-			c.Next()
-			return
-		}
-
-		c.Set(ClaimsKey, claims)
+		c.Set("username", claims.Username)
 		c.Next()
 	}
 }

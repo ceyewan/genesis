@@ -355,8 +355,6 @@ func TestKafkaConnectorIntegration(t *testing.T) {
 		client := conn.GetClient()
 		require.NotNil(t, client)
 
-		assert.Equal(t, cfg, conn.Config())
-
 		err = conn.HealthCheck(ctx)
 		require.NoError(t, err)
 

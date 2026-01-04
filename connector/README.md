@@ -1,6 +1,6 @@
 # 连接器 (Connector)
 
-`connector` 是 Genesis 基础设施层的核心组件，负责管理与外部服务（MySQL、SQLite、Redis、Etcd、NATS、Kafka）的原始连接。它通过封装复杂的连接细节、提供健康检查、生命周期管理以及与 L0 组件（日志、指标、错误）的深度集成，为上层组件提供稳定、类型安全的连接能力。
+`connector` 是 Genesis 基础设施层的核心组件，负责管理与外部服务（MySQL、SQLite、Redis、Etcd、NATS、Kafka）的原始连接。它通过封装复杂的连接细节、提供健康检查、生命周期管理以及与 L0 组件（日志、错误）的深度集成，为上层组件提供稳定、类型安全的连接能力。
 
 ## 1. 设计原则
 
@@ -13,9 +13,7 @@
 
 - **类型安全**：通过泛型接口 `TypedConnector[T]` 提供原生的客户端访问（如 `*redis.Client`, `*gorm.DB`）
 - **资源管理**：严格遵循"谁创建，谁负责释放"的原则，使用 `defer` 自然管理生命周期
-- **可观测性**：
-    - **日志**：集成 `clog`，自动注入连接器命名空间和上下文
-    - **指标**：集成 `metrics`，提供连接状态、重试次数等核心指标
+- **可观测性**：集成 `clog`，自动注入连接器命名空间和上下文
 - **错误处理**：使用 `xerrors` 和 Sentinel Errors，提供一致的错误类型和检查能力
 - **健康检查**：提供主动探测（`HealthCheck`）和状态缓存（`IsHealthy`）
 - **扁平化设计**：接口、配置和实现均在 `connector` 包下，开箱即用
@@ -145,6 +143,9 @@ type RedisConfig struct {
     MinIdleConns int           `mapstructure:"min_idle_conns"` // 最小空闲连接数 (默认: 5)
     DialTimeout  time.Duration `mapstructure:"dial_timeout"`   // 连接超时 (默认: 5s)
     // ...
+
+    // 可观测性 (可选)
+    EnableTracing bool `mapstructure:"enable_tracing"` // 是否启用 Redis Trace
 }
 ```
 
@@ -199,24 +200,18 @@ redisConn, err := connector.NewRedis(&cfg.Redis,
 }
 ```
 
-### 指标集成
+### Trace (Redis)
 
-通过 `WithMeter` 注入 `metrics.Meter`，收集连接池指标：
+Redis 采用客户端级别的 Trace Hook，当配置 `EnableTracing=true` 时会启用 `redisotel`：
 
 ```go
-redisConn, err := connector.NewRedis(&cfg.Redis,
-    connector.WithLogger(logger),
-    connector.WithMeter(meter))
+conn, err := connector.NewRedis(&connector.RedisConfig{
+    Addr:           "127.0.0.1:6379",
+    EnableTracing:  true,
+}, connector.WithLogger(logger))
 ```
 
-常用指标：
-
-- `connector_redis_total_connections` - 总连接尝试次数
-- `connector_redis_successful_connections` - 成功连接次数
-- `connector_redis_failed_connections` - 失败连接次数
-- `connector_redis_active_connections` - 当前活跃连接数
-
-## 10. 与其他组件配合
+## 9. 与其他组件配合
 
 连接器为上层组件提供底层连接支持：
 
@@ -240,7 +235,7 @@ func main() {
     // 2. 创建业务组件（注入连接器）
     cache, _ := cache.New(redisConn, &cfg.Cache)
     db, _ := db.New(mysqlConn, &cfg.DB)
-    locker, _ := dlock.NewRedis(redisConn, &cfg.DLock)
+    locker, _ := dlock.New(&cfg.DLock, dlock.WithRedisConnector(redisConn))
 
     // 3. 使用组件
     userSvc := service.NewUserService(db, cache, locker)
@@ -290,10 +285,10 @@ client.Produce(ctx, &kgo.Record{
 })
 ```
 
-## 11. 最佳实践
+## 10. 最佳实践
 
 1. **分离创建与连接**：在应用启动阶段先调用 `New*` 验证配置（Fail-fast），然后在系统就绪后再调用 `Connect`
 2. **必须 Close**：始终使用 `defer conn.Close()` 释放连接资源
 3. **单例使用**：在微服务中，每个数据源应只创建一个 Connector 实例并在组件间共享
-4. **注入依赖**：务必通过 `WithLogger` 和 `WithMeter` 注入可观测性组件，以便进行线上监控和排障
+4. **注入依赖**：务必通过 `WithLogger` 注入日志组件，以便进行线上监控和排障
 5. **错误处理**：使用 `xerrors.Is()` 检查特定错误类型，进行精确的错误处理

@@ -3,93 +3,27 @@ package registry
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/testkit"
 )
-
-// getEnvOrDefault 获取环境变量，如果不存在则返回默认值
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// getEnvIntOrDefault 获取环境变量并转换为 int
-func getEnvIntOrDefault(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
-}
 
 // setupEtcdConn 设置 Etcd 连接
 func setupEtcdConn(t *testing.T) connector.EtcdConnector {
-	logger, err := clog.New(&clog.Config{
-		Level:  "info",
-		Format: "json",
-		Output: "stdout",
-	})
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
-	}
-
-	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{
-		Endpoints:   []string{getEnvOrDefault("ETCD_ENDPOINTS", "127.0.0.1:2379")},
-		DialTimeout: 5 * time.Second,
-	}, connector.WithLogger(logger))
-	if err != nil {
-		t.Skipf("Etcd not available, skipping tests: %v", err)
-		return nil
-	}
-
-	// 测试连接
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := etcdConn.Connect(ctx); err != nil {
-		t.Skipf("Failed to connect to Etcd, skipping tests: %v", err)
-		etcdConn.Close()
-		return nil
-	}
-
-	t.Cleanup(func() {
-		etcdConn.Close()
-	})
-
-	return etcdConn
+	return testkit.GetEtcdConnector(t)
 }
 
 // setupRegistry 设置 Registry 实例
 func setupRegistry(t *testing.T, namespace string) Registry {
 	etcdConn := setupEtcdConn(t)
-	if etcdConn == nil {
-		t.Skip("Etcd not available")
-		return nil
-	}
-
-	logger, err := clog.New(&clog.Config{
-		Level:  "info",
-		Format: "json",
-		Output: "stdout",
-	})
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
-	}
+	logger := testkit.NewLogger()
 
 	reg, err := New(etcdConn, &Config{
-		Namespace:       namespace,
-		Schema:          "etcd-test",
-		DefaultTTL:      10 * time.Second,
-		RetryInterval:   500 * time.Millisecond,
-		EnableCache:     true,
-		CacheExpiration: 5 * time.Second,
+		Namespace:     namespace,
+		DefaultTTL:    10 * time.Second,
+		RetryInterval: 500 * time.Millisecond,
 	}, WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create registry: %v", err)
@@ -105,19 +39,6 @@ func setupRegistry(t *testing.T, namespace string) Registry {
 // TestNew 测试 Registry 创建
 func TestNew(t *testing.T) {
 	etcdConn := setupEtcdConn(t)
-	if etcdConn == nil {
-		t.Skip("Etcd not available")
-		return
-	}
-
-	// logger, err := clog.New(&clog.Config{
-	// 	Level:  "info",
-	// 	Format: "json",
-	// 	Output: "stdout",
-	// })
-	// if err != nil {
-	// 	t.Fatalf("Failed to create logger: %v", err)
-	// }
 
 	tests := []struct {
 		name        string
@@ -142,11 +63,9 @@ func TestNew(t *testing.T) {
 			name: "valid config",
 			conn: etcdConn,
 			cfg: &Config{
-				Namespace:       "/test/services",
-				DefaultTTL:      30 * time.Second,
-				RetryInterval:   1 * time.Second,
-				EnableCache:     true,
-				CacheExpiration: 10 * time.Second,
+				Namespace:     "/test/services",
+				DefaultTTL:    30 * time.Second,
+				RetryInterval: 1 * time.Second,
 			},
 			expectError: false,
 		},
@@ -177,10 +96,6 @@ func TestNew(t *testing.T) {
 // TestRegister 测试服务注册
 func TestRegister(t *testing.T) {
 	reg := setupRegistry(t, "/test/register")
-	if reg == nil {
-		t.Skip("Etcd not available")
-		return
-	}
 
 	ctx := context.Background()
 	service := &ServiceInstance{
@@ -256,10 +171,6 @@ func TestRegister(t *testing.T) {
 // TestDeregister 测试服务注销
 func TestDeregister(t *testing.T) {
 	reg := setupRegistry(t, "/test/deregister")
-	if reg == nil {
-		t.Skip("Etcd not available")
-		return
-	}
 
 	ctx := context.Background()
 
@@ -292,10 +203,13 @@ func TestDeregister(t *testing.T) {
 			t.Fatalf("Failed to deregister service: %v", err)
 		}
 
-		// 注意：由于缓存机制，GetService 可能仍返回缓存的数据
-		// 这是一个已知的权衡：优先性能而非强一致性
-		// Watch 事件最终会更新缓存，但这需要时间
-		// 因此这里只验证 Deregister 调用成功，不验证缓存状态
+		instances, err = reg.GetService(ctx, "test-service")
+		if err != nil {
+			t.Fatalf("Failed to get service after deregister: %v", err)
+		}
+		if len(instances) != 0 {
+			t.Errorf("Expected 0 instances after deregister, got %d", len(instances))
+		}
 	})
 
 	t.Run("Deregister non-existent service", func(t *testing.T) {
@@ -316,10 +230,6 @@ func TestDeregister(t *testing.T) {
 // TestGetService 测试服务发现
 func TestGetService(t *testing.T) {
 	reg := setupRegistry(t, "/test/get-service")
-	if reg == nil {
-		t.Skip("Etcd not available")
-		return
-	}
 
 	ctx := context.Background()
 
@@ -398,10 +308,6 @@ func TestGetService(t *testing.T) {
 // TestWatch 测试服务变化监听
 func TestWatch(t *testing.T) {
 	reg := setupRegistry(t, "/test/watch")
-	if reg == nil {
-		t.Skip("Etcd not available")
-		return
-	}
 
 	ctx := context.Background()
 
@@ -495,10 +401,6 @@ func TestWatch(t *testing.T) {
 // TestKeepAlive 测试租约续约
 func TestKeepAlive(t *testing.T) {
 	reg := setupRegistry(t, "/test/keepalive")
-	if reg == nil {
-		t.Skip("Etcd not available")
-		return
-	}
 
 	ctx := context.Background()
 
@@ -568,133 +470,10 @@ func TestKeepAlive(t *testing.T) {
 	})
 }
 
-// TestCache 测试本地缓存
-func TestCache(t *testing.T) {
-	reg := setupRegistry(t, "/test/cache")
-	if reg == nil {
-		t.Skip("Etcd not available")
-		return
-	}
-
-	ctx := context.Background()
-
-	t.Run("Cache hit after first query", func(t *testing.T) {
-		service := &ServiceInstance{
-			ID:        "cache-001",
-			Name:      "cache-test",
-			Version:   "1.0.0",
-			Endpoints: []string{"grpc://127.0.0.1:11000"},
-		}
-
-		// 注册服务
-		err := reg.Register(ctx, service, 10*time.Second)
-		if err != nil {
-			t.Fatalf("Failed to register service: %v", err)
-		}
-
-		// 第一次查询（从 Etcd）
-		instances1, err := reg.GetService(ctx, "cache-test")
-		if err != nil {
-			t.Fatalf("Failed to get service: %v", err)
-		}
-
-		// 第二次查询（从缓存）
-		instances2, err := reg.GetService(ctx, "cache-test")
-		if err != nil {
-			t.Fatalf("Failed to get service: %v", err)
-		}
-
-		// 结果应该一致
-		if len(instances1) != len(instances2) {
-			t.Errorf("Cache inconsistency: first query got %d instances, second got %d",
-				len(instances1), len(instances2))
-		}
-
-		if len(instances2) > 0 && instances2[0].ID != service.ID {
-			t.Errorf("Expected ID %s, got %s", service.ID, instances2[0].ID)
-		}
-	})
-
-	t.Run("Cache invalidated on service change", func(t *testing.T) {
-		service1 := &ServiceInstance{
-			ID:        "cache-002",
-			Name:      "cache-update-test",
-			Version:   "1.0.0",
-			Endpoints: []string{"grpc://127.0.0.1:11001"},
-		}
-
-		// 注册第一个版本
-		err := reg.Register(ctx, service1, 10*time.Second)
-		if err != nil {
-			t.Fatalf("Failed to register service: %v", err)
-		}
-
-		// 查询（缓存此结果）
-		_, err = reg.GetService(ctx, "cache-update-test")
-		if err != nil {
-			t.Fatalf("Failed to get service: %v", err)
-		}
-
-		// 更新服务 - 使用相同的 ID 但不同的版本
-		service1Updated := &ServiceInstance{
-			ID:        "cache-002",
-			Name:      "cache-update-test",
-			Version:   "1.1.0",
-			Endpoints: []string{"grpc://127.0.0.1:11002"},
-			Metadata:  map[string]string{"updated": "true"},
-		}
-
-		// 直接注册更新（相同 ID 会覆盖）
-		err = reg.Register(ctx, service1Updated, 10*time.Second)
-		if err != nil && err != ErrServiceAlreadyRegistered {
-			t.Fatalf("Failed to register updated service: %v", err)
-		}
-
-		// 等待 Watch 事件处理和缓存更新
-		time.Sleep(500 * time.Millisecond)
-
-		// 再次查询 - 由于可能返回缓存数据，我们接受两种结果
-		instances2, err := reg.GetService(ctx, "cache-update-test")
-		if err != nil {
-			t.Fatalf("Failed to get service: %v", err)
-		}
-
-		if len(instances2) == 0 {
-			t.Error("Expected at least 1 instance after update")
-		}
-		// 注意：由于缓存是最终一致的，这里不严格检查版本
-		// 只验证服务仍然存在
-	})
-}
-
 // TestClose 测试资源清理
 func TestClose(t *testing.T) {
-	// 创建独立的连接用于此测试
-	logger, err := clog.New(&clog.Config{
-		Level:  "info",
-		Format: "json",
-		Output: "stdout",
-	})
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
-	}
-
-	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{
-		Endpoints:   []string{getEnvOrDefault("ETCD_ENDPOINTS", "127.0.0.1:2379")},
-		DialTimeout: 5 * time.Second,
-	}, connector.WithLogger(logger))
-	if err != nil {
-		t.Skipf("Etcd not available, skipping test: %v", err)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := etcdConn.Connect(ctx); err != nil {
-		t.Skipf("Failed to connect to Etcd, skipping test: %v", err)
-		etcdConn.Close()
-		return
-	}
+	etcdConn := setupEtcdConn(t)
+	logger := testkit.NewLogger()
 
 	reg, err := New(etcdConn, &Config{
 		Namespace: "/test/close",
@@ -703,7 +482,7 @@ func TestClose(t *testing.T) {
 		t.Fatalf("Failed to create registry: %v", err)
 	}
 
-	ctx = context.Background()
+	ctx := context.Background()
 
 	// 注册一些服务
 	for i := 0; i < 3; i++ {
@@ -730,18 +509,11 @@ func TestClose(t *testing.T) {
 	if err != nil {
 		t.Errorf("Close should be idempotent, got error: %v", err)
 	}
-
-	// 最后关闭连接
-	etcdConn.Close()
 }
 
 // TestMultipleServices 测试多个服务
 func TestMultipleServices(t *testing.T) {
 	reg := setupRegistry(t, "/test/multiple")
-	if reg == nil {
-		t.Skip("Etcd not available")
-		return
-	}
 
 	ctx := context.Background()
 
@@ -785,19 +557,7 @@ func TestMultipleServices(t *testing.T) {
 // TestDefaultTTL 测试默认 TTL
 func TestDefaultTTL(t *testing.T) {
 	etcdConn := setupEtcdConn(t)
-	if etcdConn == nil {
-		t.Skip("Etcd not available")
-		return
-	}
-
-	logger, err := clog.New(&clog.Config{
-		Level:  "info",
-		Format: "json",
-		Output: "stdout",
-	})
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
-	}
+	logger := testkit.NewLogger()
 
 	// 创建不设置 TTL 的 Registry（使用默认 TTL）
 	reg, err := New(etcdConn, &Config{
@@ -836,19 +596,7 @@ func TestDefaultTTL(t *testing.T) {
 // TestNamespaceIsolation 测试命名空间隔离
 func TestNamespaceIsolation(t *testing.T) {
 	etcdConn := setupEtcdConn(t)
-	if etcdConn == nil {
-		t.Skip("Etcd not available")
-		return
-	}
-
-	logger, err := clog.New(&clog.Config{
-		Level:  "info",
-		Format: "json",
-		Output: "stdout",
-	})
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
-	}
+	logger := testkit.NewLogger()
 
 	ctx := context.Background()
 

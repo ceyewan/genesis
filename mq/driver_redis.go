@@ -2,6 +2,7 @@ package mq
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -9,44 +10,64 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
-// RedisDriver Redis Stream 驱动实现
-type RedisDriver struct {
+// redisDriver Redis Stream 驱动实现
+type redisDriver struct {
 	client *redis.Client
 	logger clog.Logger
 }
 
-// NewRedisDriver 创建 Redis 驱动
-func NewRedisDriver(conn connector.RedisConnector, logger clog.Logger) *RedisDriver {
-	return &RedisDriver{
+const (
+	redisPayloadField = "payload"
+	redisHeadersField = "headers"
+)
+
+// newRedisDriver 创建 Redis 驱动
+func newRedisDriver(conn connector.RedisConnector, logger clog.Logger) *redisDriver {
+	return &redisDriver{
 		client: conn.GetClient(),
 		logger: logger,
 	}
 }
 
-func (d *RedisDriver) Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error {
+func (d *redisDriver) Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error {
+	o := defaultPublishOptions()
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	values := map[string]interface{}{
+		redisPayloadField: data,
+	}
+	if len(o.Headers) != 0 {
+		raw, err := json.Marshal(o.Headers)
+		if err != nil {
+			return xerrors.Wrap(err, "marshal headers failed")
+		}
+		values[redisHeadersField] = raw
+	}
+
 	// Redis Stream Publish: XADD
 	// subject 作为 key
 	// data 作为 value (字段名 "payload")
 	err := d.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: subject,
-		Values: map[string]interface{}{
-			"payload": data,
-		},
+		Values: values,
 	}).Err()
 
 	return err
 }
 
-func (d *RedisDriver) Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error) {
+func (d *redisDriver) Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error) {
 	o := defaultSubscribeOptions()
 	for _, opt := range opts {
 		opt(&o)
 	}
 
 	// 构造订阅上下文 (用于取消订阅)
-	subCtx, cancel := context.WithCancel(context.Background())
+	subCtx, cancel := context.WithCancel(normalizeContext(ctx))
 	sub := &redisSubscription{
 		cancel: cancel,
 	}
@@ -135,14 +156,19 @@ func (d *RedisDriver) Subscribe(ctx context.Context, subject string, handler Han
 	return sub, nil
 }
 
-func (d *RedisDriver) processMsg(ctx context.Context, subject, group string, rMsg redis.XMessage, handler Handler, o subscribeOptions) {
+func (d *redisDriver) processMsg(ctx context.Context, subject, group string, rMsg redis.XMessage, handler Handler, o subscribeOptions) {
 	// 提取 payload
-	dataStr, ok := rMsg.Values["payload"].(string)
+	dataStr, ok := rMsg.Values[redisPayloadField].(string)
 	if !ok {
 		// 尝试 bytes
-		if bytesData, ok := rMsg.Values["payload"].([]byte); ok {
+		if bytesData, ok := rMsg.Values[redisPayloadField].([]byte); ok {
 			dataStr = string(bytesData) // 暂时转 string 再转 byte，优化空间
 		}
+	}
+
+	headers, err := decodeRedisHeaders(rMsg.Values[redisHeadersField])
+	if err != nil {
+		d.logger.Warn("Redis headers decode failed", clog.String("subject", subject), clog.Error(err))
 	}
 
 	msg := &redisMessage{
@@ -151,9 +177,11 @@ func (d *RedisDriver) processMsg(ctx context.Context, subject, group string, rMs
 		data:    []byte(dataStr),
 		client:  d.client,
 		group:   group,
+		ctx:     normalizeContext(ctx),
+		headers: headers,
 	}
 
-	err := handler(ctx, msg)
+	err = handler(ctx, msg)
 
 	if o.AutoAck {
 		if err == nil {
@@ -167,7 +195,7 @@ func (d *RedisDriver) processMsg(ctx context.Context, subject, group string, rMs
 	}
 }
 
-func (d *RedisDriver) Close() error {
+func (d *redisDriver) Close() error {
 	return nil
 }
 
@@ -181,6 +209,8 @@ type redisMessage struct {
 	data    []byte
 	client  *redis.Client
 	group   string
+	ctx     context.Context
+	headers Headers
 }
 
 func (m *redisMessage) Subject() string {
@@ -189,6 +219,14 @@ func (m *redisMessage) Subject() string {
 
 func (m *redisMessage) Data() []byte {
 	return m.data
+}
+
+func (m *redisMessage) Headers() Headers {
+	return cloneHeaders(m.headers)
+}
+
+func (m *redisMessage) Context() context.Context {
+	return normalizeContext(m.ctx)
 }
 
 func (m *redisMessage) Ack() error {
@@ -224,4 +262,30 @@ func (s *redisSubscription) Unsubscribe() error {
 
 func (s *redisSubscription) IsValid() bool {
 	return true
+}
+
+func decodeRedisHeaders(value interface{}) (Headers, error) {
+	if value == nil {
+		return nil, nil
+	}
+	var raw []byte
+	switch val := value.(type) {
+	case string:
+		raw = []byte(val)
+	case []byte:
+		raw = val
+	default:
+		return nil, xerrors.New("unsupported headers payload type")
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var headers Headers
+	if err := json.Unmarshal(raw, &headers); err != nil {
+		return nil, err
+	}
+	if len(headers) == 0 {
+		return nil, nil
+	}
+	return headers, nil
 }

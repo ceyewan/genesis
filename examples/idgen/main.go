@@ -16,19 +16,16 @@ func main() {
 	fmt.Println("=== Genesis ID Generator Examples ===")
 	fmt.Println()
 
-	// 示例 1: Snowflake (静态模式)
-	snowflakeStaticExample()
+	// 示例 1: Snowflake (手动指定 WorkerID)
+	snowflakeManualExample()
 
-	// 示例 2: Snowflake (实例模式)
-	snowflakeInstanceExample()
+	// 示例 2: Snowflake (Allocator 自动分配 WorkerID)
+	snowflakeAllocatorExample()
 
-	// 示例 3: Snowflake (Redis 自动分配 WorkerID)
-	snowflakeRedisExample()
-
-	// 示例 4: UUID (v4 & v7)
+	// 示例 3: UUID (配置驱动)
 	uuidExample()
 
-	// 示例 5: Sequence (基于 Redis INCR)
+	// 示例 4: Sequence (基于 Redis)
 	sequenceExample()
 }
 
@@ -36,34 +33,20 @@ func main() {
 // Snowflake 示例
 // ========================================
 
-func snowflakeStaticExample() {
-	fmt.Println("--- Example 1: Snowflake (静态模式) ---")
+func snowflakeManualExample() {
+	fmt.Println("--- Example 1: Snowflake (手动指定 WorkerID) ---")
 
-	// 使用全局静态 API (最简单)
-	idgen.Setup(1) // 设置 workerID = 1
-
-	fmt.Println("生成 5 个 Snowflake ID:")
-	for i := 0; i < 5; i++ {
-		id := idgen.Next()
-		fmt.Printf("  ID %d: %d\n", i+1, id)
-		time.Sleep(time.Millisecond)
-	}
-	fmt.Println()
-}
-
-func snowflakeInstanceExample() {
-	fmt.Println("--- Example 2: Snowflake (实例模式) ---")
-
-	// 创建独立的 Snowflake 实例
-	sf, err := idgen.NewSnowflake(23,
-		idgen.WithDatacenterID(1), // 可选：设置数据中心 ID
-	)
+	// 创建 Snowflake 实例
+	sf, err := idgen.NewGenerator(&idgen.GeneratorConfig{
+		WorkerID:     23,
+		DatacenterID: 1, // 可选：设置数据中心 ID
+	})
 	if err != nil {
 		log.Printf("Failed to create Snowflake: %v\n", err)
 		return
 	}
 
-	fmt.Println("生成 5 个 Snowflake ID (实例模式):")
+	fmt.Println("生成 5 个 Snowflake ID:")
 	for i := 0; i < 5; i++ {
 		id := sf.Next()
 		fmt.Printf("  ID %d: %d\n", i+1, id)
@@ -72,8 +55,8 @@ func snowflakeInstanceExample() {
 	fmt.Println()
 }
 
-func snowflakeRedisExample() {
-	fmt.Println("--- Example 3: Snowflake (Redis 自动分配 WorkerID) ---")
+func snowflakeAllocatorExample() {
+	fmt.Println("--- Example 2: Snowflake (Allocator 自动分配 WorkerID) ---")
 	fmt.Println("Note: 此示例需要 Redis 运行在 localhost:6379")
 
 	// 1. 创建 Redis 连接器
@@ -110,29 +93,46 @@ func snowflakeRedisExample() {
 		return
 	}
 
-	// 3. 使用 Redis 自动分配唯一 WorkerID
-	workerID, stop, failCh, err := idgen.AssignInstanceID(ctx, redisConn, "myapp:idgen", 1024)
+	// 3. 创建 Allocator 并分配 WorkerID
+	allocator, err := idgen.NewAllocator(&idgen.AllocatorConfig{
+		Driver:    "redis",
+		KeyPrefix: "myapp:idgen",
+		MaxID:     1024,
+		TTL:       30,
+	}, idgen.WithRedisConnector(redisConn))
 	if err != nil {
-		log.Printf("Failed to assign worker ID: %v\n", err)
+		log.Printf("Failed to create allocator: %v\n", err)
 		return
 	}
-	defer stop()
+
+	workerID, err := allocator.Allocate(ctx)
+	if err != nil {
+		log.Printf("Failed to allocate WorkerID: %v\n", err)
+		return
+	}
+	defer allocator.Stop()
 
 	// 监听保活失败
 	go func() {
-		if err := <-failCh; err != nil {
+		if err := <-allocator.KeepAlive(ctx); err != nil {
 			log.Printf("WorkerID 租约保活失败: %v\n", err)
 		}
 	}()
 
-	fmt.Printf("自动分配的 WorkerID: %d\n", workerID)
+	// 4. 使用分配的 WorkerID 创建 Snowflake
+	sf, err := idgen.NewGenerator(&idgen.GeneratorConfig{
+		WorkerID: workerID,
+	})
+	if err != nil {
+		log.Printf("Failed to create Snowflake: %v\n", err)
+		return
+	}
 
-	// 4. 使用分配的 WorkerID 初始化
-	idgen.Setup(workerID, idgen.WithDatacenterID(1))
+	fmt.Printf("自动分配的 WorkerID: %d\n", workerID)
 
 	fmt.Println("生成 5 个 Snowflake ID:")
 	for i := 0; i < 5; i++ {
-		id := idgen.Next()
+		id := sf.Next()
 		fmt.Printf("  ID %d: %d\n", i+1, id)
 		time.Sleep(time.Millisecond)
 	}
@@ -144,28 +144,14 @@ func snowflakeRedisExample() {
 // ========================================
 
 func uuidExample() {
-	fmt.Println("--- Example 4: UUID (v4 & v7) ---")
+	fmt.Println("--- Example 3: UUID (简化 API) ---")
 
-	// 静态方法 (最常用)
-	fmt.Println("静态方法 (默认 v7):")
+	// 直接调用 UUID() 生成 v7 (时间排序)
+	fmt.Println("UUID v7 (时间排序，适合数据库主键):")
 	for i := 0; i < 3; i++ {
-		uid := idgen.NextUUID()
-		fmt.Printf("  UUID v7 #%d: %s\n", i+1, uid)
+		fmt.Printf("  UUID #%d: %s\n", i+1, idgen.UUID())
 		time.Sleep(5 * time.Millisecond)
 	}
-
-	// v4 (随机)
-	fmt.Println("\nUUID v4 (随机):")
-	v4 := idgen.NewUUIDV4()
-	fmt.Printf("  UUID v4: %s\n", v4)
-
-	// 实例模式
-	fmt.Println("\n实例模式:")
-	gen := idgen.NewUUID()
-	fmt.Printf("  UUID (默认 v7): %s\n", gen.Next())
-
-	genV4 := idgen.NewUUID(idgen.WithUUIDVersion("v4"))
-	fmt.Printf("  UUID (v4): %s\n", genV4.Next())
 
 	fmt.Println()
 }
@@ -175,7 +161,7 @@ func uuidExample() {
 // ========================================
 
 func sequenceExample() {
-	fmt.Println("--- Example 5: Sequence (基于 Redis INCR) ---")
+	fmt.Println("--- Example 4: Sequence (基于 Redis) ---")
 	fmt.Println("Note: 此示例需要 Redis 运行在 localhost:6379")
 
 	// 1. 创建 Redis 连接器
@@ -185,7 +171,7 @@ func sequenceExample() {
 		Password:     os.Getenv("GENESIS_REDIS_PASSWORD"),
 		DialTimeout:  2 * time.Second,
 		ReadTimeout:  2 * time.Second,
-		WriteTimeout: 2 * time.Second,
+		WriteTimeout:  2 * time.Second,
 	}
 
 	logger, _ := clog.New(&clog.Config{
@@ -212,22 +198,16 @@ func sequenceExample() {
 		return
 	}
 
-	// 3. 静态便捷方法 (最简单)
-	fmt.Println("静态便捷方法 (简单计数):")
-	for i := 0; i < 5; i++ {
-		seq, _ := idgen.NextSequence(ctx, redisConn, "simple:counter")
-		fmt.Printf("  计数: %d\n", seq)
-	}
-
-	// 4. 实例模式 (IM 消息序列号场景)
-	fmt.Println("\n实例模式 (IM 消息序列号):")
-	imCfg := &idgen.SequenceConfig{
+	// 3. IM 消息序列号场景
+	fmt.Println("IM 消息序列号场景:")
+	imCfg := &idgen.SequencerConfig{
+		Driver:    "redis",
 		KeyPrefix: "im:msg_seq",
 		Step:      1,
-		TTL:       int64(time.Hour),
+		TTL:       3600, // 1 hour (秒)
 	}
 
-	imGen, err := idgen.NewSequencer(imCfg, redisConn)
+	imGen, err := idgen.NewSequencer(imCfg, idgen.WithRedisConnector(redisConn))
 	if err != nil {
 		log.Printf("Failed to create IM sequence generator: %v\n", err)
 		return
@@ -246,7 +226,7 @@ func sequenceExample() {
 		}
 	}
 
-	// 5. 批量生成
+	// 4. 批量生成
 	fmt.Println("\n批量生成序列号:")
 	batchSeqs, err := imGen.NextBatch(ctx, "alice", 5)
 	if err != nil {
@@ -255,16 +235,17 @@ func sequenceExample() {
 		fmt.Printf("为 Alice 批量生成 5 条消息序列号: %v\n", batchSeqs)
 	}
 
-	// 6. 业务流水号场景 (步长 1000)
+	// 5. 业务流水号场景 (步长 1000)
 	fmt.Println("\n业务流水号场景 (步长 1000):")
-	businessCfg := &idgen.SequenceConfig{
+	businessCfg := &idgen.SequencerConfig{
+		Driver:    "redis",
 		KeyPrefix: "business:seq",
 		Step:      1000,
 		MaxValue:  9999,
-		TTL:       int64(24 * time.Hour),
+		TTL:       86400, // 24 hours (秒)
 	}
 
-	businessGen, err := idgen.NewSequencer(businessCfg, redisConn)
+	businessGen, err := idgen.NewSequencer(businessCfg, idgen.WithRedisConnector(redisConn))
 	if err != nil {
 		log.Printf("Failed to create business sequence generator: %v\n", err)
 		return

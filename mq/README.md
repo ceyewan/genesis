@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/mq.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/mq)
 
-`mq` 是 Genesis 业务层的核心组件，提供统一的消息队列抽象。它通过 Driver 模式支持多种底层实现（NATS, Redis, Kafka），并提供统一的发布订阅 API。
+`mq` 是 Genesis 业务层的核心组件，提供统一的消息队列抽象。它通过 Driver 模式支持多种底层实现（NATS, Redis），并提供统一的发布订阅 API。
 
 ## 特性
 
@@ -10,12 +10,12 @@
 - **多驱动支持**：
     - **NATS**: 支持 Core (高性能) 和 JetStream (持久化)
     - **Redis**: 支持 Redis Stream (持久化队列)
-    - **Kafka**: 支持高性能 Kafka 消费 (基于 franz-go)
 - **统一抽象**：屏蔽底层差异，提供一致的 `Publish/Subscribe` 接口
 - **增强功能**：
     - **Channel 模式**：支持 Go Channel 风格的消息消费 (`SubscribeChan`)
     - **重试机制**：内置指数退避重试中间件 (`WithRetry`)
     - **Options 模式**：灵活配置队列组、缓冲区、自动确认等
+- **Header 透传**：支持消息头元数据透传（不做自动注入/提取）
 - **可观测性**：集成 clog 和 metrics
 
 ## 目录结构
@@ -24,13 +24,12 @@
 mq/
 ├── mq.go                  # Client 接口定义
 ├── client.go              # Client 通用实现
-├── driver.go              # Driver 接口定义
+├── driver.go              # 驱动内部接口定义
 ├── driver_nats.go         # NATS 驱动
 ├── driver_redis.go        # Redis 驱动
-├── driver_kafka.go        # Kafka 驱动
 ├── options.go             # 订阅选项
 ├── retry.go               # 重试中间件
-├── config.go              # 配置定义
+├── types.go               # 类型与配置定义
 └── README.md              # 本文档
 ```
 
@@ -43,11 +42,13 @@ mq/
 natsConn, _ := connector.NewNATS(&cfg.NATS, connector.WithLogger(logger))
 natsConn.Connect(ctx)
 
-// 创建 Driver
-driver, _ := mq.NewNatsJetStreamDriver(natsConn, &mq.JetStreamConfig{AutoCreateStream: true}, logger)
-
 // 创建 Client
-client, _ := mq.New(driver, mq.WithLogger(logger))
+client, _ := mq.New(&mq.Config{
+    Driver: mq.DriverNatsJetStream,
+    JetStream: &mq.JetStreamConfig{
+        AutoCreateStream: true,
+    },
+}, mq.WithNATSConnector(natsConn), mq.WithLogger(logger))
 
 // 订阅 (Queue Group 负载均衡)
 client.Subscribe(ctx, "orders.created", handler, mq.WithQueueGroup("order_workers"))
@@ -60,26 +61,10 @@ client.Subscribe(ctx, "orders.created", handler, mq.WithQueueGroup("order_worker
 redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
 redisConn.Connect(ctx)
 
-// 创建 Driver
-driver := mq.NewRedisDriver(redisConn, logger)
-client, _ := mq.New(driver, mq.WithLogger(logger))
-
-// 订阅
-client.Subscribe(ctx, "orders.created", handler, mq.WithQueueGroup("order_workers"))
-```
-
-### 3. Kafka
-
-```go
-// 创建 Connector
-kafkaConn, _ := connector.NewKafka(&connector.KafkaConfig{
-    Seed: []string{"localhost:9092"},
-}, connector.WithLogger(logger))
-kafkaConn.Connect(ctx)
-
-// 创建 Driver
-driver := mq.NewKafkaDriver(kafkaConn, logger)
-client, _ := mq.New(driver, mq.WithLogger(logger))
+// 创建 Client
+client, _ := mq.New(&mq.Config{
+    Driver: mq.DriverRedis,
+}, mq.WithRedisConnector(redisConn), mq.WithLogger(logger))
 
 // 订阅
 client.Subscribe(ctx, "orders.created", handler, mq.WithQueueGroup("order_workers"))
@@ -96,6 +81,7 @@ ch, sub, err := client.SubscribeChan(ctx, "events", mq.WithBufferSize(100))
 defer sub.Unsubscribe()
 
 for msg := range ch {
+    // 如需上下文，可使用 msg.Context()
     process(msg)
     msg.Ack() // 手动确认
 }
@@ -115,6 +101,23 @@ handler := func(ctx context.Context, msg mq.Message) error {
 client.Subscribe(ctx, "topic", mq.WithRetry(mq.DefaultRetryConfig, logger)(handler))
 ```
 
+### 消息头透传（Trace/Metadata）
+
+`mq` 不自动注入/提取 tracing 信息，仅透传消息头，业务自行对接：
+
+```go
+headers := mq.Headers{
+    "traceparent": "00-00000000000000000000000000000000-0000000000000000-01",
+}
+client.Publish(ctx, "topic", []byte("hello"), mq.WithHeaders(headers))
+
+client.Subscribe(ctx, "topic", func(ctx context.Context, msg mq.Message) error {
+    // 业务自行解析 msg.Headers() 并注入到 ctx
+    _ = msg.Headers()
+    return nil
+})
+```
+
 ### 订阅选项
 
 ```go
@@ -122,33 +125,31 @@ client.Subscribe(ctx, "topic", handler,
     mq.WithQueueGroup("group1"), // 负载均衡组
     mq.WithManualAck(),          // 关闭自动 Ack
     mq.WithDurable("durable1"),  // 持久化订阅名 (JetStream/Redis)
-    mq.WithBatchSize(50),        // 批量拉取大小 (Kafka/Redis)
+    mq.WithBatchSize(50),        // 批量拉取大小 (Redis)
     mq.WithMaxInflight(100),     // 最大在途消息数 (JetStream)
     mq.WithAsyncAck(),           // 开启异步确认 (提升吞吐)
     mq.WithDeadLetter(3, "dlq"), // 设置死信队列 (3次失败后转发到 dlq)
 )
 ```
 
-### 发布选项
+## 指标说明
 
-```go
-client.Publish(ctx, "topic", data,
-    mq.WithKey("user_123"),      // 消息 Key (用于 Kafka 分区路由)
-)
-```
+`mq` 默认使用 `metrics.Discard()` 兜底，不需要判空。
+
+已暴露的指标名（可直接使用常量）：
+
+- `mq.MetricPublishTotal`：发布成功的消息数（label: `subject`）
+- `mq.MetricConsumeTotal`：消费处理的消息数（label: `subject`）
+- `mq.MetricHandleDuration`：处理耗时（单位秒，label: `subject`）
 
 ## 接口设计
 
-### Driver 接口
-
-核心抽象层，所有 MQ 实现均遵循此接口：
+### 工厂入口
 
 ```go
-type Driver interface {
-    Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error
-    Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error)
-    Close() error
-}
+client, _ := mq.New(&mq.Config{
+    Driver: mq.DriverNatsCore,
+}, mq.WithNATSConnector(natsConn))
 ```
 
 ### Client 接口

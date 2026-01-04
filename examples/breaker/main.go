@@ -17,7 +17,6 @@ import (
 	"github.com/ceyewan/genesis/breaker"
 	"github.com/ceyewan/genesis/clog"
 	pb "github.com/ceyewan/genesis/examples/breaker/proto"
-	"github.com/ceyewan/genesis/metrics"
 )
 
 func main() {
@@ -33,18 +32,6 @@ func main() {
 		log.Fatalf("failed to create logger: %v", err)
 	}
 
-	// 2. 创建 Metrics
-	meter, err := metrics.New(&metrics.Config{
-		ServiceName: "breaker-example",
-		Version:     "1.0.0",
-		Port:        9090,
-		Path:        "/metrics",
-	})
-	if err != nil {
-		log.Fatalf("failed to create meter: %v", err)
-	}
-	defer meter.Shutdown(ctx)
-
 	fmt.Println("\n=== Genesis Breaker 组件示例 ===")
 	fmt.Println("本示例演示熔断器组件的核心功能:")
 	fmt.Println("  1. 故障隔离 - 自动熔断频繁失败的服务")
@@ -52,7 +39,6 @@ func main() {
 	fmt.Println("  3. 服务级粒度 - 不同服务独立熔断")
 	fmt.Println("  4. 降级策略 - 支持自定义降级逻辑")
 	fmt.Println()
-	fmt.Printf("📊 Prometheus 指标地址: http://localhost:9090/metrics\n\n")
 
 	// 3. 启动测试服务器
 	fmt.Println("=== 启动测试服务器 ===")
@@ -62,15 +48,15 @@ func main() {
 
 	// 示例 1: 基本熔断功能
 	fmt.Println("=== 示例 1: 基本熔断功能 ===")
-	basicExample(ctx, logger, meter, addr)
+	basicExample(ctx, logger, addr)
 
 	// 示例 2: 自定义降级逻辑
 	fmt.Println("\n=== 示例 2: 自定义降级逻辑 ===")
-	fallbackExample(ctx, logger, meter, addr)
+	fallbackExample(ctx, logger, addr)
 
 	// 示例 3: 服务级粒度熔断
 	fmt.Println("\n=== 示例 3: 服务级粒度熔断 ===")
-	multiServiceExample(ctx, logger, meter)
+	multiServiceExample(ctx, logger)
 
 	fmt.Println("\n=== 示例完成 ===")
 	fmt.Println("✅ 熔断器成功实现了故障隔离和自动恢复！")
@@ -79,11 +65,10 @@ func main() {
 	fmt.Println("  • 自动恢复：通过半开状态探测服务是否恢复")
 	fmt.Println("  • 服务级粒度：不同服务独立管理，互不影响")
 	fmt.Println("  • 灵活降级：支持快速失败和自定义降级逻辑")
-	fmt.Println("  • 完整可观测性：日志和指标全面记录")
 }
 
 // basicExample 基本熔断功能示例
-func basicExample(ctx context.Context, logger clog.Logger, meter metrics.Meter, addr string) {
+func basicExample(ctx context.Context, logger clog.Logger, addr string) {
 	// 创建熔断器（较低的阈值，便于观察效果）
 	brk, err := breaker.New(&breaker.Config{
 		MaxRequests:     3,                // 半开状态允许 3 个探测请求
@@ -91,14 +76,14 @@ func basicExample(ctx context.Context, logger clog.Logger, meter metrics.Meter, 
 		Timeout:         5 * time.Second,  // 熔断 5 秒后进入半开状态
 		FailureRatio:    0.5,              // 失败率 50% 触发熔断
 		MinimumRequests: 5,                // 至少 5 个请求才触发熔断
-	}, breaker.WithLogger(logger), breaker.WithMeter(meter))
+	}, breaker.WithLogger(logger))
 	if err != nil {
 		logger.Error("failed to create breaker", clog.Error(err))
 		return
 	}
 
 	// 创建 gRPC 连接（使用熔断器拦截器）
-	conn, err := grpc.Dial(
+	conn, err := grpc.NewClient(
 		addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
@@ -180,7 +165,7 @@ func basicExample(ctx context.Context, logger clog.Logger, meter metrics.Meter, 
 }
 
 // fallbackExample 自定义降级逻辑示例
-func fallbackExample(ctx context.Context, logger clog.Logger, meter metrics.Meter, addr string) {
+func fallbackExample(ctx context.Context, logger clog.Logger, addr string) {
 	// 创建带降级逻辑的熔断器
 	brk, err := breaker.New(&breaker.Config{
 		MaxRequests:     3,
@@ -190,7 +175,6 @@ func fallbackExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 		MinimumRequests: 5,
 	},
 		breaker.WithLogger(logger),
-		breaker.WithMeter(meter),
 		breaker.WithFallback(func(ctx context.Context, serviceName string, err error) error {
 			logger.Warn("circuit breaker open, using fallback",
 				clog.String("service", serviceName),
@@ -204,7 +188,7 @@ func fallbackExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 		return
 	}
 
-	conn, err := grpc.Dial(
+	conn, err := grpc.NewClient(
 		addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
@@ -237,7 +221,7 @@ func fallbackExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 }
 
 // multiServiceExample 服务级粒度熔断示例
-func multiServiceExample(ctx context.Context, logger clog.Logger, meter metrics.Meter) {
+func multiServiceExample(ctx context.Context, logger clog.Logger) {
 	// 启动两个测试服务器
 	server1, addr1 := startTestServer("service-1")
 	defer server1.Stop()
@@ -255,19 +239,19 @@ func multiServiceExample(ctx context.Context, logger clog.Logger, meter metrics.
 		Timeout:         5 * time.Second,
 		FailureRatio:    0.5,
 		MinimumRequests: 5,
-	}, breaker.WithLogger(logger), breaker.WithMeter(meter))
+	}, breaker.WithLogger(logger))
 	if err != nil {
 		logger.Error("failed to create breaker", clog.Error(err))
 		return
 	}
 
 	// 创建两个客户端
-	conn1, _ := grpc.Dial(addr1,
+	conn1, _ := grpc.NewClient(addr1,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()))
 	defer conn1.Close()
 
-	conn2, _ := grpc.Dial(addr2,
+	conn2, _ := grpc.NewClient(addr2,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()))
 	defer conn2.Close()

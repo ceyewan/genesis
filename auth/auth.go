@@ -46,8 +46,10 @@ type Authenticator interface {
 
 // jwtAuth JWT 认证实现
 type jwtAuth struct {
-	config  *Config
-	options *options
+	config         *Config
+	options        *options
+	validatedCount metrics.Counter // Token 验证计数
+	refreshedCount metrics.Counter // Token 刷新计数
 }
 
 // New 创建 Authenticator
@@ -72,6 +74,16 @@ func New(cfg *Config, opts ...Option) (Authenticator, error) {
 		return nil, err
 	}
 
+	// 初始化指标（Discard() 返回的 noopMeter 永远返回有效的 Counter，不需要判空）
+	auth.validatedCount, _ = o.meter.Counter(
+		MetricTokensValidated,
+		"Total number of tokens validated",
+	)
+	auth.refreshedCount, _ = o.meter.Counter(
+		MetricTokensRefreshed,
+		"Total number of tokens refreshed",
+	)
+
 	return auth, nil
 }
 
@@ -90,8 +102,6 @@ func (a *jwtAuth) validate() error {
 
 // GenerateToken 生成 Token
 func (a *jwtAuth) GenerateToken(ctx context.Context, claims *Claims) (string, error) {
-	start := time.Now()
-
 	if claims == nil {
 		return "", ErrInvalidClaims
 	}
@@ -122,23 +132,11 @@ func (a *jwtAuth) GenerateToken(ctx context.Context, claims *Claims) (string, er
 
 	a.options.logger.Info("token generated", clog.String("user_id", claims.Subject))
 
-	// Metrics: Token 生成成功
-	if counter := a.options.GetCounter("auth_tokens_generated_total", "Total number of tokens generated"); counter != nil {
-		counter.Add(ctx, 1)
-	}
-
-	// Metrics: Token 生成耗时
-	if histogram := a.options.GetHistogram("auth_token_generation_duration_seconds", "Token generation duration in seconds"); histogram != nil {
-		histogram.Record(ctx, time.Since(start).Seconds())
-	}
-
 	return tokenString, nil
 }
 
 // ValidateToken 验证 Token
 func (a *jwtAuth) ValidateToken(ctx context.Context, tokenString string) (*Claims, error) {
-	start := time.Now()
-
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		// 验证签名算法
@@ -169,27 +167,19 @@ func (a *jwtAuth) ValidateToken(ctx context.Context, tokenString string) (*Claim
 		}
 
 		// Metrics: 验证失败
-		if counter := a.options.GetCounter("auth_tokens_validated_total", "Total number of tokens validated"); counter != nil {
-			counter.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", errType))
-		}
+		a.validatedCount.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", errType))
 		return nil, err
 	}
 
 	if !token.Valid {
+		a.validatedCount.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", "invalid_token"))
 		return nil, ErrInvalidToken
 	}
 
 	a.options.logger.Info("token validated", clog.String("user_id", claims.Subject))
 
 	// Metrics: 验证成功
-	if counter := a.options.GetCounter("auth_tokens_validated_total", "Total number of tokens validated"); counter != nil {
-		counter.Add(ctx, 1, metrics.L("status", "success"))
-	}
-
-	// Metrics: 验证耗时
-	if histogram := a.options.GetHistogram("auth_token_validation_duration_seconds", "Token validation duration in seconds"); histogram != nil {
-		histogram.Record(ctx, time.Since(start).Seconds())
-	}
+	a.validatedCount.Add(ctx, 1, metrics.L("status", "success"))
 
 	return claims, nil
 }
@@ -198,10 +188,8 @@ func (a *jwtAuth) ValidateToken(ctx context.Context, tokenString string) (*Claim
 func (a *jwtAuth) RefreshToken(ctx context.Context, token string) (string, error) {
 	claims, err := a.ValidateToken(ctx, token)
 	if err != nil {
-		// Metrics: 刷新失败 - 验证失败
-		if counter := a.options.GetCounter("auth_tokens_refreshed_total", "Total number of tokens refreshed"); counter != nil {
-			counter.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", "validation_failed"))
-		}
+		// Metrics: 刷新失败（验证失败已经在 ValidateToken 中计数，这里只记录刷新失败）
+		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
 		return "", err
 	}
 
@@ -212,60 +200,89 @@ func (a *jwtAuth) RefreshToken(ctx context.Context, token string) (string, error
 	// 使用相同的 claims，重新生成 token
 	newToken, err := a.GenerateToken(ctx, claims)
 	if err != nil {
-		// Metrics: 刷新失败 - 生成失败
-		if counter := a.options.GetCounter("auth_tokens_refreshed_total", "Total number of tokens refreshed"); counter != nil {
-			counter.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", "generation_failed"))
-		}
+		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
 		return "", err
 	}
 
 	a.options.logger.Info("token refreshed", clog.String("user_id", claims.Subject))
 
 	// Metrics: 刷新成功
-	if counter := a.options.GetCounter("auth_tokens_refreshed_total", "Total number of tokens refreshed"); counter != nil {
-		counter.Add(ctx, 1, metrics.L("status", "success"))
-	}
+	a.refreshedCount.Add(ctx, 1, metrics.L("status", "success"))
 
 	return newToken, nil
 }
 
 // ExtractToken 从请求中提取 token（导出用于中间件）
+//
+// 查找顺序（如果 TokenLookup 未配置）:
+// 1. header:Authorization (Bearer token)
+// 2. query:token
+// 3. cookie:jwt
+//
+// 如果配置了 TokenLookup，则只按指定方式提取。
 func (a *jwtAuth) ExtractToken(r *http.Request) (string, error) {
-	parts := strings.Split(a.config.TokenLookup, ":")
-	if len(parts) != 2 {
-		return "", ErrMissingToken
+	// 如果用户配置了特定的 lookup 方式，只使用该方式
+	if a.config.TokenLookup != "" {
+		parts := strings.Split(a.config.TokenLookup, ":")
+		if len(parts) != 2 {
+			return "", ErrMissingToken
+		}
+		source, key := parts[0], parts[1]
+		token, ok := a.extractFromSource(r, source, key)
+		if !ok {
+			return "", ErrMissingToken
+		}
+		return token, nil
 	}
 
-	source, key := parts[0], parts[1]
+	// 默认多源查找：header -> query -> cookie
+	// 1. 尝试从 header 提取
+	if token, ok := a.extractFromSource(r, "header", "Authorization"); ok {
+		return token, nil
+	}
+	// 2. 尝试从 query 提取
+	if token, ok := a.extractFromSource(r, "query", "token"); ok {
+		return token, nil
+	}
+	// 3. 尝试从 cookie 提取
+	if token, ok := a.extractFromSource(r, "cookie", "jwt"); ok {
+		return token, nil
+	}
 
+	return "", ErrMissingToken
+}
+
+// extractFromSource 从指定来源提取 token
+// 返回 token 和是否成功找到（注意：找到但格式错误时也返回 ok=false）
+func (a *jwtAuth) extractFromSource(r *http.Request, source, key string) (string, bool) {
 	switch source {
 	case "header":
 		authHeader := r.Header.Get(key)
 		if authHeader == "" {
-			return "", ErrMissingToken
+			return "", false
 		}
 		tokenParts := strings.SplitN(authHeader, " ", 2)
 		if len(tokenParts) != 2 || tokenParts[0] != a.config.TokenHeadName {
-			return "", ErrInvalidToken
+			return "", false
 		}
-		return tokenParts[1], nil
+		return tokenParts[1], true
 
 	case "query":
 		token := r.URL.Query().Get(key)
 		if token == "" {
-			return "", ErrMissingToken
+			return "", false
 		}
-		return token, nil
+		return token, true
 
 	case "cookie":
 		cookie, err := r.Cookie(key)
 		if err != nil {
-			return "", ErrMissingToken
+			return "", false
 		}
-		return cookie.Value, nil
+		return cookie.Value, true
 
 	default:
-		return "", ErrMissingToken
+		return "", false
 	}
 }
 

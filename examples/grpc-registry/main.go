@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
 	"net"
 	"time"
 
@@ -12,6 +12,7 @@ import (
 	pb "github.com/ceyewan/genesis/examples/grpc-registry/proto"
 	"github.com/ceyewan/genesis/registry"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
@@ -25,9 +26,12 @@ func main() {
 
 	// 1. 创建 Logger
 	logger, _ := clog.New(&clog.Config{
-		Level:  "info",
-		Format: "console",
-		Output: "stdout",
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		EnableColor: true,
+		AddSource:   true,
+		SourceRoot:  "genesis",
 	})
 
 	// 2. 创建 Etcd 连接器
@@ -35,33 +39,41 @@ func main() {
 		Endpoints: []string{"localhost:2379"},
 	}, connector.WithLogger(logger))
 	if err != nil {
-		log.Fatalf("Failed to create etcd connector: %v", err)
+		logger.Error("failed to create etcd connector", clog.Error(err))
+		return
 	}
 	defer etcdConn.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := etcdConn.Connect(ctx); err != nil {
+		logger.Error("failed to connect etcd", clog.Error(err))
+		return
+	}
+
 	// 3. 创建 Registry 实例
 	reg, err := registry.New(etcdConn, &registry.Config{
-		Namespace:       "/genesis/services",
-		Schema:          "etcd",
-		DefaultTTL:      30 * time.Second,
-		RetryInterval:   1 * time.Second,
-		EnableCache:     true,
-		CacheExpiration: 10 * time.Second,
+		Namespace:     "/genesis/services",
+		DefaultTTL:    30 * time.Second,
+		RetryInterval: 1 * time.Second,
 	}, registry.WithLogger(logger))
 	if err != nil {
-		log.Fatalf("Failed to create registry: %v", err)
+		logger.Error("failed to create registry", clog.Error(err))
+		return
 	}
 
 	// 4. 延迟关闭 Registry
 	defer reg.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
 
 	serviceName := "demo-service"
 
 	// 5. 启动第一个服务实例
 	fmt.Println("1. 启动第一个服务实例...")
-	server1, addr1 := startTestServer("server-1")
+	server1, addr1, err := startTestServer("server-1", logger)
+	if err != nil {
+		logger.Error("failed to start server 1", clog.Error(err))
+		return
+	}
 	defer server1.Stop()
 
 	service1 := &registry.ServiceInstance{
@@ -77,7 +89,8 @@ func main() {
 
 	err = reg.Register(ctx, service1, 30*time.Second)
 	if err != nil {
-		log.Fatalf("Failed to register service 1: %v", err)
+		logger.Error("failed to register service 1", clog.Error(err))
+		return
 	}
 	defer reg.Deregister(ctx, service1.ID)
 
@@ -88,9 +101,12 @@ func main() {
 
 	// 6. 使用 gRPC resolver 创建连接
 	fmt.Println("\n2. 使用 gRPC resolver 创建连接...")
-	conn, err := reg.GetConnection(ctx, serviceName)
+	conn, err := reg.GetConnection(ctx, serviceName,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
-		log.Fatalf("Failed to create gRPC connection: %v", err)
+		logger.Error("failed to create gRPC connection", clog.Error(err))
+		return
 	}
 	defer conn.Close()
 
@@ -103,7 +119,7 @@ func main() {
 	for i := 0; i < 3; i++ {
 		resp, err := healthClient.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
 		if err != nil {
-			log.Printf("Health check failed: %v", err)
+			logger.Error("health check failed", clog.Error(err))
 		} else {
 			state := conn.GetState()
 			fmt.Printf("✓ 健康检查 %d: %v (连接状态: %v)\n", i+1, resp.Status, state)
@@ -128,7 +144,11 @@ func main() {
 
 	// 8. 动态添加第二个服务实例
 	fmt.Println("\n4. 动态添加第二个服务实例...")
-	server2, addr2 := startTestServer("server-2")
+	server2, addr2, err := startTestServer("server-2", logger)
+	if err != nil {
+		logger.Error("failed to start server 2", clog.Error(err))
+		return
+	}
 	defer server2.Stop()
 
 	service2 := &registry.ServiceInstance{
@@ -144,7 +164,8 @@ func main() {
 
 	err = reg.Register(ctx, service2, 30*time.Second)
 	if err != nil {
-		log.Fatalf("Failed to register service 2: %v", err)
+		logger.Error("failed to register service 2", clog.Error(err))
+		return
 	}
 	defer reg.Deregister(ctx, service2.ID)
 
@@ -181,7 +202,7 @@ func main() {
 	fmt.Println("\n6. 移除第一个服务实例...")
 	err = reg.Deregister(ctx, service1.ID)
 	if err != nil {
-		log.Printf("Failed to unregister service 1: %v", err)
+		logger.Error("failed to unregister service 1", clog.Error(err))
 	} else {
 		fmt.Println("✓ 服务实例 1 已移除")
 	}
@@ -209,7 +230,7 @@ func main() {
 	fmt.Println("\n8. 验证服务发现...")
 	services, err = reg.GetService(ctx, serviceName)
 	if err != nil {
-		log.Printf("Failed to discover services: %v", err)
+		logger.Error("failed to discover services", clog.Error(err))
 	} else {
 		fmt.Printf("✓ 发现 %d 个服务实例:\n", len(services))
 		for _, svc := range services {
@@ -228,11 +249,11 @@ func main() {
 }
 
 // startTestServer 启动一个测试用的 gRPC 服务器
-func startTestServer(serverID string) (*grpc.Server, *net.TCPAddr) {
+func startTestServer(serverID string, logger clog.Logger) (*grpc.Server, *net.TCPAddr, error) {
 	// 监听随机端口
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		return nil, nil, err
 	}
 
 	server := grpc.NewServer()
@@ -242,6 +263,7 @@ func startTestServer(serverID string) (*grpc.Server, *net.TCPAddr) {
 	pb.RegisterEchoServiceServer(server, &echoServer{
 		serverID:   serverID,
 		serverAddr: addr.String(),
+		logger:     logger,
 	})
 
 	// 注册健康检查服务
@@ -252,16 +274,22 @@ func startTestServer(serverID string) (*grpc.Server, *net.TCPAddr) {
 	// 启动服务器
 	go func() {
 		if err := server.Serve(lis); err != nil {
-			log.Printf("Server %s exited with error: %v", serverID, err)
+			if !errors.Is(err, grpc.ErrServerStopped) {
+				logger.Error("server exited with error",
+					clog.String("server_id", serverID),
+					clog.Error(err))
+			}
 		}
 	}()
 
 	// 等待服务器启动
 	time.Sleep(100 * time.Millisecond)
 
-	log.Printf("Test server %s started on %s (Server ID: %s)", serverID, addr, serverID)
+	logger.Info("test server started",
+		clog.String("server_id", serverID),
+		clog.String("addr", addr.String()))
 
-	return server, addr
+	return server, addr, nil
 }
 
 // echoServer 实现 Echo 服务
@@ -269,10 +297,13 @@ type echoServer struct {
 	pb.UnimplementedEchoServiceServer
 	serverID   string
 	serverAddr string
+	logger     clog.Logger
 }
 
 func (s *echoServer) Echo(ctx context.Context, req *pb.EchoRequest) (*pb.EchoResponse, error) {
-	log.Printf("📢 [%s] Echo 请求收到: %s", s.serverID, req.Message)
+	s.logger.Info("echo request received",
+		clog.String("server_id", s.serverID),
+		clog.String("message", req.Message))
 
 	resp := &pb.EchoResponse{
 		Message:    req.Message,
@@ -281,8 +312,10 @@ func (s *echoServer) Echo(ctx context.Context, req *pb.EchoRequest) (*pb.EchoRes
 		Timestamp:  time.Now().Unix(),
 	}
 
-	log.Printf("📢 [%s] Echo 响应: 消息='%s', 服务器='%s', 地址='%s'",
-		s.serverID, resp.Message, resp.ServerId, resp.ServerAddr)
+	s.logger.Info("echo response sent",
+		clog.String("server_id", s.serverID),
+		clog.String("message", resp.Message),
+		clog.String("addr", resp.ServerAddr))
 
 	return resp, nil
 }

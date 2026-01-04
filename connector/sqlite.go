@@ -3,11 +3,9 @@ package connector
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 
 	"gorm.io/driver/sqlite"
@@ -15,12 +13,10 @@ import (
 )
 
 type sqliteConnector struct {
-	path   string
-	db     *gorm.DB
-	logger clog.Logger
-	meter  metrics.Meter
+	path    string
+	db      *gorm.DB
+	logger  clog.Logger
 	healthy atomic.Bool
-	mu      sync.RWMutex
 }
 
 // SQLiteConfig SQLite 配置
@@ -39,15 +35,11 @@ func NewSQLite(cfg *SQLiteConfig, opts ...Option) (SQLiteConnector, error) {
 	for _, o := range opts {
 		o(opt)
 	}
-
-	if opt.logger == nil {
-		opt.logger = clog.Discard()
-	}
+	opt.applyDefaults()
 
 	c := &sqliteConnector{
 		path:   cfg.Path,
 		logger: opt.logger.With(clog.String("connector", "sqlite"), clog.String("path", cfg.Path)),
-		meter:  opt.meter,
 	}
 
 	db, err := gorm.Open(sqlite.Open(cfg.Path), &gorm.Config{})
@@ -61,9 +53,6 @@ func NewSQLite(cfg *SQLiteConfig, opts ...Option) (SQLiteConnector, error) {
 
 // Connect 建立连接
 func (c *sqliteConnector) Connect(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	c.logger.Info("connecting to sqlite", clog.String("path", c.path))
 
 	sqlDB, err := c.db.DB()
@@ -85,9 +74,6 @@ func (c *sqliteConnector) Connect(ctx context.Context) error {
 
 // Close 关闭连接
 func (c *sqliteConnector) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	c.logger.Info("closing sqlite connection")
 	c.healthy.Store(false)
 

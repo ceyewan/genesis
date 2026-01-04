@@ -238,9 +238,8 @@ func TestLoggerWithContext(t *testing.T) {
 		Output: "buffer",
 	},
 		withBuffer(&buf),
-		WithContextField(contextKey("trace_id"), "trace_id", Required(true)),
-		WithContextField(contextKey("user_id"), "user_id", Required(false)),
-		WithContextPrefix(""), // 不使用前缀
+		WithContextField(contextKey("trace_id"), "trace_id"),
+		WithContextField(contextKey("user_id"), "user_id"),
 	)
 
 	ctx := context.Background()

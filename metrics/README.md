@@ -22,7 +22,6 @@ metrics/                 # 公开 API + 实现（完全扁平化）
 ├── metrics.go          # 工厂函数 New/Discard + Meter/Counter/Gauge/Histogram 实现
 ├── types.go            # Counter/Gauge/Histogram/Meter 接口定义
 ├── config.go           # Config 结构体 + 默认配置工厂
-├── options.go          # Option 模式 (WithLogger)
 └── label.go            # Label 定义和便捷函数 L()
 ```
 
@@ -127,28 +126,22 @@ type Config struct {
     Version     string `mapstructure:"version"`      // 服务版本
     Port        int    `mapstructure:"port"`         // Prometheus 暴露端口
     Path        string `mapstructure:"path"`         // Prometheus 指标路径
+    EnableRuntime bool `mapstructure:"enable_runtime"` // 是否启用 Runtime 指标采集
 }
 ```
+
+如需开启 Go Runtime 指标采集，将 `EnableRuntime` 设置为 `true`。
 
 ### 默认配置工厂
 
 ```go
 // 开发环境
 cfg := metrics.NewDevDefaultConfig("my-service")
-// 等价于：&metrics.Config{ServiceName: "my-service", Version: "dev", Port: 9090, Path: "/metrics"}
+// 等价于：&metrics.Config{ServiceName: "my-service", Version: "dev", Port: 9090, Path: "/metrics", EnableRuntime: false}
 
 // 生产环境
 cfg := metrics.NewProdDefaultConfig("my-service", "v1.2.3")
-// 等价于：&metrics.Config{ServiceName: "my-service", Version: "v1.2.3", Port: 9090, Path: "/metrics"}
-```
-
-### WithLogger 选项
-
-```go
-import "github.com/ceyewan/genesis/clog"
-
-logger, _ := clog.New(&clog.Config{Level: "debug"})
-meter, err := metrics.New(cfg, metrics.WithLogger(logger))
+// 等价于：&metrics.Config{ServiceName: "my-service", Version: "v1.2.3", Port: 9090, Path: "/metrics", EnableRuntime: false}
 ```
 
 ## 禁用指标

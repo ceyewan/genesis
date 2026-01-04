@@ -11,35 +11,54 @@ import (
 	"github.com/ceyewan/genesis/xerrors"
 )
 
-// NatsCoreDriver NATS Core 驱动实现
-type NatsCoreDriver struct {
+// natsCoreDriver NATS Core 驱动实现
+type natsCoreDriver struct {
 	conn   *nats.Conn
 	logger clog.Logger
 }
 
-// NewNatsCoreDriver 创建 NATS Core 驱动
-func NewNatsCoreDriver(conn connector.NATSConnector, logger clog.Logger) *NatsCoreDriver {
-	return &NatsCoreDriver{
+// newNatsCoreDriver 创建 NATS Core 驱动
+func newNatsCoreDriver(conn connector.NATSConnector, logger clog.Logger) *natsCoreDriver {
+	return &natsCoreDriver{
 		conn:   conn.GetClient(),
 		logger: logger,
 	}
 }
 
-func (d *NatsCoreDriver) Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error {
-	// NATS Core 不支持 PublishOption (如延迟等)
-	return d.conn.Publish(subject, data)
+func (d *natsCoreDriver) Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error {
+	o := defaultPublishOptions()
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	if len(o.Headers) == 0 {
+		return d.conn.Publish(subject, data)
+	}
+
+	msg := &nats.Msg{
+		Subject: subject,
+		Data:    data,
+		Header:  toNATSHeader(o.Headers),
+	}
+	return d.conn.PublishMsg(msg)
 }
 
-func (d *NatsCoreDriver) Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error) {
+func (d *natsCoreDriver) Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error) {
 	o := defaultSubscribeOptions()
 	for _, opt := range opts {
 		opt(&o)
 	}
 
+	msgCtx := normalizeContext(ctx)
+
 	// 内部回调函数
 	cb := func(msg *nats.Msg) {
-		m := &coreMessage{msg: msg}
-		if err := handler(context.Background(), m); err != nil {
+		m := &coreMessage{
+			ctx:     msgCtx,
+			msg:     msg,
+			headers: headersFromNATS(msg.Header),
+		}
+		if err := handler(msgCtx, m); err != nil {
 			d.logger.Error("消息处理失败", clog.String("subject", subject), clog.Error(err))
 		}
 	}
@@ -59,13 +78,13 @@ func (d *NatsCoreDriver) Subscribe(ctx context.Context, subject string, handler 
 	return &coreSubscription{sub: sub}, nil
 }
 
-func (d *NatsCoreDriver) Close() error {
+func (d *natsCoreDriver) Close() error {
 	// 连接由 Connector 管理，不需要关闭
 	return nil
 }
 
-// NatsJetStreamDriver NATS JetStream 驱动实现
-type NatsJetStreamDriver struct {
+// natsJetStreamDriver NATS JetStream 驱动实现
+type natsJetStreamDriver struct {
 	js     jetstream.JetStream
 	cfg    *JetStreamConfig
 	logger clog.Logger
@@ -77,27 +96,41 @@ type JetStreamConfig struct {
 	AutoCreateStream bool `json:"auto_create_stream" yaml:"auto_create_stream"`
 }
 
-// NewNatsJetStreamDriver 创建 NATS JetStream 驱动
-func NewNatsJetStreamDriver(conn connector.NATSConnector, cfg *JetStreamConfig, logger clog.Logger) (*NatsJetStreamDriver, error) {
+// newNatsJetStreamDriver 创建 NATS JetStream 驱动
+func newNatsJetStreamDriver(conn connector.NATSConnector, cfg *JetStreamConfig, logger clog.Logger) (*natsJetStreamDriver, error) {
 	js, err := jetstream.New(conn.GetClient())
 	if err != nil {
 		return nil, xerrors.Wrap(err, "failed to create jetstream context")
 	}
 
-	return &NatsJetStreamDriver{
+	return &natsJetStreamDriver{
 		js:     js,
 		cfg:    cfg,
 		logger: logger,
 	}, nil
 }
 
-func (d *NatsJetStreamDriver) Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error {
-	// 默认使用同步发送
-	_, err := d.js.Publish(ctx, subject, data)
+func (d *natsJetStreamDriver) Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error {
+	o := defaultPublishOptions()
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	if len(o.Headers) == 0 {
+		_, err := d.js.Publish(ctx, subject, data)
+		return err
+	}
+
+	msg := &nats.Msg{
+		Subject: subject,
+		Data:    data,
+		Header:  toNATSHeader(o.Headers),
+	}
+	_, err := d.js.PublishMsg(ctx, msg)
 	return err
 }
 
-func (d *NatsJetStreamDriver) Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error) {
+func (d *natsJetStreamDriver) Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error) {
 	o := defaultSubscribeOptions()
 	for _, opt := range opts {
 		opt(&o)
@@ -136,11 +169,17 @@ func (d *NatsJetStreamDriver) Subscribe(ctx context.Context, subject string, han
 		return nil, xerrors.Wrap(err, "failed to create consumer")
 	}
 
+	msgCtx := normalizeContext(ctx)
+
 	cons, err := consumer.Consume(func(msg jetstream.Msg) {
-		m := &jetStreamMessage{msg: msg}
+		m := &jetStreamMessage{
+			ctx:     msgCtx,
+			msg:     msg,
+			headers: headersFromNATS(msg.Headers()),
+		}
 
 		// 执行用户逻辑
-		err := handler(context.Background(), m)
+		err := handler(msgCtx, m)
 
 		// 自动 Ack/Nak 处理
 		if o.AutoAck {
@@ -173,17 +212,17 @@ func (d *NatsJetStreamDriver) Subscribe(ctx context.Context, subject string, han
 	return &jetStreamSubscription{cons: cons}, nil
 }
 
-func (d *NatsJetStreamDriver) Close() error {
+func (d *natsJetStreamDriver) Close() error {
 	return nil
 }
 
-func (d *NatsJetStreamDriver) getStreamName(subject string) string {
+func (d *natsJetStreamDriver) getStreamName(subject string) string {
 	// 简单实现：将 subject 中的非法字符替换，或直接作为 Stream 名 (NATS Stream 名有限制)
 	// 示例中我们直接使用 subject 作为 Stream 名（假设它符合规范）
 	return "S-" + subject
 }
 
-func (d *NatsJetStreamDriver) ensureStream(ctx context.Context, subject string) error {
+func (d *natsJetStreamDriver) ensureStream(ctx context.Context, subject string) error {
 	streamName := d.getStreamName(subject)
 	_, err := d.js.Stream(ctx, streamName)
 	if err == nil {
@@ -205,7 +244,9 @@ func (d *NatsJetStreamDriver) ensureStream(ctx context.Context, subject string) 
 
 // coreMessage NATS Core 消息封装
 type coreMessage struct {
-	msg *nats.Msg
+	ctx     context.Context
+	msg     *nats.Msg
+	headers Headers
 }
 
 func (m *coreMessage) Subject() string {
@@ -214,6 +255,14 @@ func (m *coreMessage) Subject() string {
 
 func (m *coreMessage) Data() []byte {
 	return m.msg.Data
+}
+
+func (m *coreMessage) Headers() Headers {
+	return cloneHeaders(m.headers)
+}
+
+func (m *coreMessage) Context() context.Context {
+	return normalizeContext(m.ctx)
 }
 
 func (m *coreMessage) Ack() error {
@@ -239,7 +288,9 @@ func (s *coreSubscription) IsValid() bool {
 
 // jetStreamMessage JetStream 消息封装
 type jetStreamMessage struct {
-	msg jetstream.Msg
+	ctx     context.Context
+	msg     jetstream.Msg
+	headers Headers
 }
 
 func (m *jetStreamMessage) Subject() string {
@@ -248,6 +299,14 @@ func (m *jetStreamMessage) Subject() string {
 
 func (m *jetStreamMessage) Data() []byte {
 	return m.msg.Data()
+}
+
+func (m *jetStreamMessage) Headers() Headers {
+	return cloneHeaders(m.headers)
+}
+
+func (m *jetStreamMessage) Context() context.Context {
+	return normalizeContext(m.ctx)
 }
 
 func (m *jetStreamMessage) Ack() error {
@@ -270,4 +329,29 @@ func (s *jetStreamSubscription) Unsubscribe() error {
 
 func (s *jetStreamSubscription) IsValid() bool {
 	return true
+}
+
+func headersFromNATS(header nats.Header) Headers {
+	if len(header) == 0 {
+		return nil
+	}
+	headers := make(Headers, len(header))
+	for key, values := range header {
+		if len(values) == 0 {
+			continue
+		}
+		headers[key] = values[0]
+	}
+	return headers
+}
+
+func toNATSHeader(headers Headers) nats.Header {
+	if len(headers) == 0 {
+		return nil
+	}
+	natsHeader := make(nats.Header, len(headers))
+	for key, value := range headers {
+		natsHeader.Set(key, value)
+	}
+	return natsHeader
 }

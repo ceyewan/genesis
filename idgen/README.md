@@ -2,21 +2,18 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/idgen.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/idgen)
 
-`idgen` 是 Genesis 业务层的核心组件，提供高性能的分布式 ID 生成能力。经过 v0.2 重构，它现在更加轻量、解耦且易用。
+`idgen` 是 Genesis 业务层的核心组件，提供高性能的分布式 ID 生成能力。
 
 ## 特性
 
-- **核心解耦**：Snowflake 算法与基础设施（Redis）完全分离，可独立使用。
-- **多策略支持**：
-    - **Snowflake**：基于雪花算法的分布式有序 ID 生成。
-    - **UUID**：支持 v4（随机）和 v7（时间排序）标准。
-    - **Sequencer**：基于 Redis 原子操作的分布式序列号生成器。
-    - **InstanceID**：基于 Redis 租约的唯一节点 ID 分配器。
-- **极简 API**：提供 `Next()`、`NextUUID()` 等静态便捷入口，零配置上手。
+- **统一 API 设计**：所有组件遵循 `New(cfg, opts...)` 模式
+- **接口优先**：返回接口类型，便于测试和替换实现
+- **后端可插拔**：通过 `cfg.Driver` 选择后端实现（Redis/Etcd）
 - **安全健壮**：
-    - Sequencer 使用 Lua 脚本保证原子性，彻底解决并发竞争问题。
-    - 严格的 WorkerID 位宽校验，防止 ID 冲突。
-    - 时钟回拨保护。
+    - Redis 实现使用 Lua 脚本保证原子性
+    - Etcd 实现使用 Txn + Lease 机制，原生支持租约保活
+    - 严格的 WorkerID 位宽校验，防止 ID 冲突
+    - 时钟回拨保护
 
 ## 快速开始
 
@@ -24,135 +21,199 @@
 import "github.com/ceyewan/genesis/idgen"
 ```
 
-### 1. Snowflake (全局静态模式)
-
-最简单的使用方式，适用于大多数场景。
+### 1. UUID (最简单)
 
 ```go
-// 1. 初始化 (通常在 main.go 启动时)
-// 传入当前节点的 WorkerID [0-1023]
-if err := idgen.Setup(1); err != nil {
-    panic(err)
-}
-
-// 2. 生成 ID
-id := idgen.Next()       // int64: 1782348234234234
-str := idgen.NextString() // string: "1782348234234234"
+// 生成 UUID v7 (时间排序，适合数据库主键)
+id := idgen.UUID()
 ```
 
-### 2. UUID (开箱即用)
+### 2. Snowflake (手动指定 WorkerID)
 
 ```go
-// 默认生成 v7 版本 (时间有序，适合数据库主键)
-uid := idgen.NextUUID() 
-
-// 显式生成
-v4 := idgen.NewUUIDV4()
-v7 := idgen.NewUUIDV7()
-```
-
-### 3. Sequencer (业务序列号)
-
-基于 Redis 的原子递增序列号，支持 TTL 和最大值循环。
-
-```go
-// 初始化 Sequencer 实例
-seqGen, _ := idgen.NewSequencer(&idgen.SequenceConfig{
-    KeyPrefix: "order:seq",
-    Step:      1,
-    TTL:       int64(24 * time.Hour), // 每日重置
-}, redisConn)
-
-// 获取序列号 (支持动态 Key)
-id, _ := seqGen.Next(ctx, "20231224") // Redis Key: order:seq:20231224
-```
-
-### 4. 自动分配 WorkerID (InstanceID)
-
-如果不想手动管理 Snowflake 的 WorkerID，可以使用 `AssignInstanceID` 基于 Redis 自动抢占。
-
-```go
-// 1. 抢占一个唯一的 WorkerID [0, 1024)
-workerID, stop, failCh, err := idgen.AssignInstanceID(ctx, redisConn, "myapp", 1024)
+// 创建 Snowflake 生成器
+gen, err := idgen.NewGenerator(&idgen.GeneratorConfig{
+    WorkerID:     1,  // [0, 1023]
+    DatacenterID: 0,  // 可选，[0, 31]（启用后 WorkerID 范围变为 [0, 31]）
+})
 if err != nil {
     panic(err)
 }
-// 停止保活 (优雅退出时调用)
-defer stop()
 
-// 监听保活失败 (可选但推荐)
+id := gen.Next()       // int64
+idStr := gen.NextString() // string
+```
+
+### 3. Snowflake (Allocator 自动分配 WorkerID)
+
+```go
+// 创建 Allocator
+allocator, err := idgen.NewAllocator(&idgen.AllocatorConfig{
+    Driver:    "redis",
+    KeyPrefix: "myapp:worker",
+    MaxID:     512,  // [0, 512)
+    TTL:       30,   // 租约 TTL 30 秒
+}, idgen.WithRedisConnector(redisConn))
+if err != nil {
+    panic(err)
+}
+
+// 分配 WorkerID
+workerID, err := allocator.Allocate(ctx)
+if err != nil {
+    panic(err)
+}
+
+// 启动保活 (在 goroutine 中运行)
 go func() {
-    if err := <-failCh; err != nil {
+    if err := <-allocator.KeepAlive(ctx); err != nil {
         log.Fatal("WorkerID 租约丢失，停止服务")
     }
 }()
 
-// 2. 使用分配的 ID 初始化 Snowflake
-idgen.Setup(workerID)
+// 优雅退出时释放
+defer allocator.Stop()
+
+// 使用分配的 WorkerID 创建 Snowflake
+gen, err := idgen.NewGenerator(&idgen.GeneratorConfig{WorkerID: workerID})
+```
+
+### 4. Allocator (Etcd)
+
+Etcd 使用原生的 Txn + Lease 机制，性能优于 Redis Lua 方案：
+
+```go
+// 创建 Etcd Allocator
+allocator, err := idgen.NewAllocator(&idgen.AllocatorConfig{
+    Driver:    "etcd",
+    KeyPrefix: "myapp:worker",
+    MaxID:     512,
+    TTL:       30,
+}, idgen.WithEtcdConnector(etcdConn))
+
+workerID, err := allocator.Allocate(ctx)
+// ... 用法与 Redis 相同
+```
+
+**对比**:
+| 特性 | Redis (Lua) | Etcd (Txn + Lease) |
+|------|-------------|-------------------|
+| 原子性 | Lua 脚本 | MVCC 事务 |
+| 保活 | 后台 goroutine + EXPIRE | 原生 KeepAlive |
+| 释放 | DEL | Lease revoke |
+| 性能 | 需脚本加载 | 原生操作 |
+
+### 5. Sequencer (分布式序列号)
+
+基于 Redis/Etcd 的原子递增序列号，支持步长、TTL 和最大值循环。
+
+```go
+// 创建 Sequencer (Redis)
+seq, err := idgen.NewSequencer(&idgen.SequencerConfig{
+    Driver:    "redis",
+    KeyPrefix: "order:seq",
+    Step:      1,
+    TTL:       86400, // 24 小时过期（秒）
+}, idgen.WithRedisConnector(redisConn))
+if err != nil {
+    panic(err)
+}
+
+// 获取序列号 (支持动态 Key)
+id, err := seq.Next(ctx, "20231224") // Redis Key: order:seq:20231224
+
+// 批量获取
+ids, err := seq.NextBatch(ctx, "batch:1", 10)
+
+// 设置初始值（IM 系统迁移历史消息时很有用）
+ok, err := seq.SetIfNotExists(ctx, "conversation:1", 1000)
 ```
 
 ## API 参考
 
-### Snowflake
+### UUID
+
+| 函数 | 说明 |
+| :--- | :--- |
+| `idgen.UUID()` | 生成 UUID v7 字符串（时间排序） |
+
+### Generator (Snowflake)
 
 | 方法 | 说明 |
 | :--- | :--- |
-| `idgen.Setup(workerID)` | 初始化全局单例 |
-| `idgen.Next()` | 获取全局单例的下一个 ID (int64) |
-| `idgen.NewSnowflake(workerID)` | 创建独立的 Snowflake 实例 |
+| `idgen.NewGenerator(cfg, opts...)` | 创建 Snowflake 生成器（返回 Generator 接口） |
+| `gen.Next()` | 获取下一个 ID (int64) |
+| `gen.NextString()` | 获取下一个 ID (string) |
 
-**配置项**:
-- `WithDatacenterID(id)`: 设置数据中心 ID (0-31)。注意：启用此项时，WorkerID 范围缩减为 0-31。
-- `WithSnowflakeLogger(logger)`: 自定义日志记录器。
+**GeneratorConfig**:
+- `WorkerID`: 工作节点 ID [0, 1023]（使用 DatacenterID 时范围缩减为 [0, 31]）
+- `DatacenterID`: 数据中心 ID [0, 31]，可选
 
-### Sequencer
+### Allocator (WorkerID 分配器)
 
 | 方法 | 说明 |
 | :--- | :--- |
-| `idgen.NewSequencer(cfg, redis)` | 创建序列号生成器实例 |
-| `idgen.NextSequence(ctx, redis, key)` | 便捷函数，使用默认配置生成序列号 |
+| `idgen.NewAllocator(cfg, opts...)` | 创建分配器（支持 Redis/Etcd） |
+| `allocator.Allocate(ctx)` | 分配 WorkerID |
+| `allocator.KeepAlive(ctx)` | 保持租约（返回 <-chan error） |
+| `allocator.Stop()` | 释放资源 |
+
+**AllocatorConfig**:
+- `Driver`: 后端类型，"redis" 或 "etcd"
+- `KeyPrefix`: 键前缀，默认 "genesis:idgen:worker"
+- `MaxID`: 最大 ID 范围 [0, maxID)，默认 1024
+- `TTL`: 租约 TTL（秒），默认 30
+
+### Sequencer (序列号生成器)
+
+| 方法 | 说明 |
+| :--- | :--- |
+| `idgen.NewSequencer(cfg, opts...)` | 创建序列号生成器（支持 Redis/Etcd） |
 | `seq.Next(ctx, key)` | 获取下一个序列号 |
 | `seq.NextBatch(ctx, key, count)` | 批量获取序列号 |
+| `seq.Set(ctx, key, value)` | 设置序列号值 |
+| `seq.SetIfNotExists(ctx, key, value)` | 仅当不存在时设置 |
 
-**配置项 (SequenceConfig)**:
-- `KeyPrefix`: Redis 键前缀
-- `Step`: 步长 (默认 1)
-- `MaxValue`: 最大值 (超过自动重置)
-- `TTL`: 过期时间 (纳秒)
+**SequencerConfig**:
+- `Driver`: 后端类型，"redis" 或 "etcd"，默认 "redis"
+- `KeyPrefix`: 键前缀
+- `Step`: 步长，默认 1
+- `MaxValue`: 最大值（0 表示不限制）
+- `TTL`: 过期时间（秒），0 表示永不过期
+
+### 选项函数
+
+所有组件支持统一的选项注入：
+
+| 选项 | 说明 |
+| :--- | :--- |
+| `idgen.WithLogger(logger)` | 设置 Logger |
+| `idgen.WithRedisConnector(conn)` | 注入 Redis 连接器 |
+| `idgen.WithEtcdConnector(conn)` | 注入 Etcd 连接器 |
 
 ## 最佳实践
 
-1.  **Snowflake 初始化**: 尽量在应用启动的最早阶段调用 `idgen.Setup()`。
-2.  **WorkerID 管理**:
-    - 对于 K8s StatefulSet，可以直接使用 Pod 序号作为 WorkerID。
-    - 对于无状态 Deployment，推荐使用 `AssignInstanceID` 自动分配。
-3.  **序列号原子性**: 
-    - `Sequencer` 内部使用 Lua 脚本保证 `INCR` + `Check` + `Reset` 的原子性，在高并发下是安全的。
-4.  **错误处理**: 
-    - 使用 `AssignInstanceID` 时，务必监控 `failCh`。如果 Redis 连接断开导致租约失效，继续生成 ID 可能会导致与其他节点冲突。
+1. **WorkerID 管理**:
+   - K8s StatefulSet: 直接使用 Pod 序号作为 WorkerID
+   - 无状态 Deployment: 使用 Allocator 自动分配
 
-## 迁移指南 (v0.1 -> v0.2)
+2. **Allocator 保活监控**:
+   ```go
+   go func() {
+       if err := <-allocator.KeepAlive(ctx); err != nil {
+           // 租约丢失，停止服务以避免 ID 冲突
+           log.Fatal("WorkerID lease lost")
+       }
+   }()
+   ```
 
-v0.2 移除了对 Etcd 的支持，并简化了 Snowflake 的初始化流程。
+3. **IM 系统序列号初始化**:
+   ```go
+   // 迁移历史消息后，初始化 seq_id
+   ok, _ := seq.SetIfNotExists(ctx, "conversation:1", maxHistorySeqID)
+   ```
 
-**旧代码**:
-```go
-// 强依赖 Redis，且配置复杂
-gen, _ := idgen.NewSnowflake(&idgen.SnowflakeConfig{
-    Method: "redis", 
-    KeyPrefix: "..."
-}, redisConn, nil)
-```
-
-**新代码**:
-```go
-// 1. 分配 (可选)
-wid, stop, _, _ := idgen.AssignInstanceID(ctx, redisConn, "...", 1024)
-defer stop()
-
-// 2. 初始化
-idgen.Setup(wid)
-
-// 3. 使用
-id := idgen.Next()
-```
+4. **优雅退出**:
+   ```go
+   defer allocator.Stop()  // 释放 WorkerID
+   ```
