@@ -143,6 +143,9 @@ type RedisConfig struct {
     MinIdleConns int           `mapstructure:"min_idle_conns"` // 最小空闲连接数 (默认: 5)
     DialTimeout  time.Duration `mapstructure:"dial_timeout"`   // 连接超时 (默认: 5s)
     // ...
+
+    // 可观测性 (可选)
+    EnableTracing bool `mapstructure:"enable_tracing"` // 是否启用 Redis Trace
 }
 ```
 
@@ -195,6 +198,17 @@ redisConn, err := connector.NewRedis(&cfg.Redis,
     "msg": "connected to redis",
     "addr": "127.0.0.1:6379"
 }
+```
+
+### Trace (Redis)
+
+Redis 采用客户端级别的 Trace Hook，当配置 `EnableTracing=true` 时会启用 `redisotel`：
+
+```go
+conn, err := connector.NewRedis(&connector.RedisConfig{
+    Addr:           "127.0.0.1:6379",
+    EnableTracing:  true,
+}, connector.WithLogger(logger))
 ```
 
 ## 9. 与其他组件配合

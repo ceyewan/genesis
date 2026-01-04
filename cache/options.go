@@ -26,7 +26,7 @@ func WithLogger(l clog.Logger) Option {
 	}
 }
 
-// WithMeter 注入指标 Meter
+// WithMeter 注入指标 Meter（默认使用 metrics.Discard）
 func WithMeter(m metrics.Meter) Option {
 	return func(o *options) {
 		o.Meter = m
@@ -36,6 +36,8 @@ func WithMeter(m metrics.Meter) Option {
 // WithRedisConnector 注入 Redis 连接器 (仅用于分布式模式)
 func WithRedisConnector(conn connector.RedisConnector) Option {
 	return func(o *options) {
-		o.RedisConn = conn
+		if conn != nil {
+			o.RedisConn = conn
+		}
 	}
 }

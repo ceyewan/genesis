@@ -144,13 +144,13 @@ type Cache interface {
 }
 
 type Config struct {
-    Driver string           // redis|memory|standalone
-    Redis  *RedisConfig
-    Memory *MemoryConfig    // 单机内存缓存
+    Driver DriverType       // redis|memory
+    Prefix string
+    Serializer string
+    Standalone *StandaloneConfig
 }
 
-func New(redisConn RedisConnector, cfg *Config, opts ...Option) (Cache, error)
-func NewStandalone(cfg *MemoryConfig, opts ...Option) (Cache, error)
+func New(cfg *Config, opts ...Option) (Cache, error)
 ```
 
 ## dlock

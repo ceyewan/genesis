@@ -183,9 +183,9 @@ func main() {
     defer mysqlConn.Close()
 
     // 5. 创建组件（注入 Connector + Logger）
-    database, _ := db.New(mysqlConn, &cfg.DB, db.WithLogger(logger))
+    database, _ := db.New(&cfg.DB, db.WithMySQLConnector(mysqlConn), db.WithLogger(logger))
     locker, _ := dlock.New(&cfg.DLock, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
-    cacheClient, _ := cache.New(redisConn, &cfg.Cache, cache.WithLogger(logger))
+    cacheClient, _ := cache.New(&cfg.Cache, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
 
     // 6. 创建业务服务（注入组件接口）
     userSvc := service.NewUserService(database, locker)

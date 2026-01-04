@@ -7,6 +7,7 @@ import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
 
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/maintnotifications"
 )
@@ -50,6 +51,12 @@ func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
 			Mode: maintnotifications.ModeDisabled,
 		},
 	})
+
+	if cfg.EnableTracing {
+		if err := redisotel.InstrumentTracing(c.client); err != nil {
+			return nil, xerrors.Wrapf(err, "redis connector[%s]: enable tracing failed", cfg.Name)
+		}
+	}
 
 	return c, nil
 }

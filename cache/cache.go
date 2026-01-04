@@ -6,10 +6,11 @@
 // 基本使用：
 //
 //	redisConn, _ := connector.NewRedis(redisConfig)
-//	cacheClient, _ := cache.New(redisConn, &cache.Config{
+//	cacheClient, _ := cache.New(&cache.Config{
+//	    Driver:     cache.DriverRedis,
 //	    Prefix:     "myapp:",
 //	    Serializer: "json",
-//	}, cache.WithLogger(logger))
+//	}, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
 //
 //	// 缓存对象
 //	err := cacheClient.Set(ctx, "user:1001", user, time.Hour)
@@ -28,7 +29,7 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -68,103 +69,43 @@ type Cache interface {
 	Close() error
 }
 
-// New 根据配置创建缓存实例
+// New 根据配置创建缓存实例（配置驱动）
 //
-// 支持单机模式 (standalone) 和分布式模式 (distributed)。
-// 如果 Mode 为 "standalone"，则创建本地内存缓存；
-// 如果 Mode 为 "distributed" 或为空，则创建 Redis 缓存。
-//
-// 注意：分布式模式需要通过 WithRedisConnector 注入 Redis 连接器，
-// 或者使用兼容旧版的 NewWithRedis 函数。
+// 通过 cfg.Driver 选择后端，连接器通过 Option 注入：
+//   - DriverRedis: WithRedisConnector
+//   - DriverMemory: 无需连接器
 func New(cfg *Config, opts ...Option) (Cache, error) {
 	if cfg == nil {
 		return nil, xerrors.New("config is nil")
 	}
 
-	// 应用选项
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
 	opt := options{}
 	for _, o := range opts {
 		o(&opt)
 	}
 
-	// 注入默认日志器
 	if opt.Logger == nil {
-		var err error
-		opt.Logger, err = clog.New(&clog.Config{Level: "info"})
-		if err != nil {
-			return nil, xerrors.New("failed to create default logger: " + err.Error())
-		}
+		opt.Logger = clog.Discard()
 	}
 
-	switch cfg.Mode {
-	case "standalone":
-		return NewStandalone(cfg.Standalone, opts...)
-	case "distributed", "":
+	if opt.Meter == nil {
+		opt.Meter = metrics.Discard()
+	}
+
+	switch cfg.Driver {
+	case DriverMemory:
+		return newStandalone(cfg.Standalone, opt.Logger, opt.Meter)
+	case DriverRedis:
 		if opt.RedisConn == nil {
-			return nil, xerrors.New("redis connector is required for distributed mode, use WithRedisConnector")
+			return nil, xerrors.New("redis connector is required, use WithRedisConnector")
 		}
-		return NewWithRedis(opt.RedisConn, cfg, opts...)
+		return newRedis(opt.RedisConn, cfg, opt.Logger, opt.Meter)
 	default:
-		return NewWithRedis(opt.RedisConn, cfg, opts...)
+		return nil, xerrors.New("unsupported driver: " + string(cfg.Driver))
 	}
-}
-
-// NewStandalone 创建单机内存缓存实例
-//
-// 参数:
-//   - cfg: 单机缓存配置
-//   - opts: 可选参数 (Logger, Meter)
-//
-// 使用示例:
-//
-//	cacheClient, _ := cache.NewStandalone(&cache.StandaloneConfig{
-//	    Capacity: 10000,
-//	}, cache.WithLogger(logger))
-func NewStandalone(cfg *StandaloneConfig, opts ...Option) (Cache, error) {
-	if cfg == nil {
-		cfg = &StandaloneConfig{
-			Capacity: 10000,
-		}
-	}
-
-	// 应用选项
-	opt := options{}
-	for _, o := range opts {
-		o(&opt)
-	}
-
-	if opt.Logger == nil {
-		var err error
-		opt.Logger, err = clog.New(&clog.Config{Level: "info"})
-		if err != nil {
-			return nil, xerrors.New("failed to create default logger: " + err.Error())
-		}
-	}
-
-	return newStandalone(cfg, opt.Logger, opt.Meter)
-}
-
-// NewWithRedis 创建 Redis 缓存实例 (兼容旧版)
-//
-// 参数:
-//   - conn: Redis 连接器
-//   - cfg: 缓存配置
-//   - opts: 可选参数 (Logger, Meter)
-func NewWithRedis(conn connector.RedisConnector, cfg *Config, opts ...Option) (Cache, error) {
-	// 应用选项
-	opt := options{}
-	for _, o := range opts {
-		o(&opt)
-	}
-
-	// 如果没有提供 Logger，创建默认实例
-	if opt.Logger == nil {
-		var err error
-		opt.Logger, err = clog.New(&clog.Config{Level: "info"})
-		if err != nil {
-			return nil, xerrors.New("failed to create default logger: " + err.Error())
-		}
-	}
-
-	return newRedis(conn, cfg, opt.Logger, opt.Meter)
 }

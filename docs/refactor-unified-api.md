@@ -2,7 +2,7 @@
 
 ## 1. 背景与目标
 
-当前 Genesis 组件库的初始化方式依赖于显式的构造函数注入（如 `cache.New(redisConn, ...)`），这种方式符合显式依赖原则，但在需要通过配置切换底层实现（如从 Redis 切换到 Memory，或从 MySQL 切换到 SQLite）时，需要修改业务代码。
+当前 Genesis 组件库的初始化方式依赖于显式的构造函数注入（如 `cache.New(&cache.Config{Driver: cache.DriverRedis}, cache.WithRedisConnector(redisConn), ...)`），这种方式符合显式依赖原则，但在需要通过配置切换底层实现（如从 Redis 切换到 Memory，或从 MySQL 切换到 SQLite）时，需要修改业务代码。
 
 本次重构的目标是：
 1.  **统一 API**：所有核心组件提供统一的 `New(cfg, opts...)` 入口。
@@ -48,8 +48,7 @@ func WithEtcdConnector(conn connector.EtcdConnector) Option
 
 ### 3.1 Cache 组件
 -   **API**:
-    -   `New(conn, cfg)` -> 重命名为 `NewRedis(conn, cfg)`
-    -   新增 `New(cfg, opts...)`
+    -   仅保留 `New(cfg, opts...)` 作为统一入口
 -   **Config**: 新增 `Driver` ("redis", "memory")
 -   **Options**: 新增 `WithRedisConnector`
 

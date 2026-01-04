@@ -153,7 +153,7 @@ func TestNew(t *testing.T) {
 		{
 			name: "standalone mode",
 			cfg: &Config{
-				Mode: "standalone",
+				Driver: DriverMemory,
 			},
 			expectError: false,
 		},
@@ -791,7 +791,7 @@ func TestCache_Standalone(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "info", Output: "stdout"})
 
 	cache, err := New(&Config{
-		Mode:       "standalone",
+		Driver:     DriverMemory,
 		Standalone: &StandaloneConfig{Capacity: 100},
 	}, WithLogger(logger))
 

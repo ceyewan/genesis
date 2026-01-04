@@ -106,6 +106,9 @@ type RedisConfig struct {
 	DialTimeout  time.Duration `mapstructure:"dial_timeout"`   // 连接超时 (默认: 5s)
 	ReadTimeout  time.Duration `mapstructure:"read_timeout"`   // 读取超时 (默认: 3s)
 	WriteTimeout time.Duration `mapstructure:"write_timeout"`  // 写入超时 (默认: 3s)
+
+	// 可观测性
+	EnableTracing bool `mapstructure:"enable_tracing"` // 是否启用 Redis Trace
 }
 
 // setDefaults 设置默认值
