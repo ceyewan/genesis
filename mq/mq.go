@@ -1,14 +1,20 @@
 // Package mq 提供消息队列组件，支持 NATS Core, JetStream, Redis Stream 等多种模式。
 //
-// MQ 组件是 Genesis 微服务组件库的消息中间件抽象层，提供了统一的发布-订阅语义。
+// MQ 组件是 Genesis 微服务组件库的消息中间件抽象层，提供了统一的发布-订阅语义，
+// 并支持消息头元数据透传（不做自动注入/提取）。
 package mq
 
 import (
 	"context"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
+
+// Headers 消息元数据（键值对）。
+// 不支持多值 Header；底层若存在多值，仅保留首个值。
+type Headers map[string]string
 
 // Message 消息接口
 // 封装了底层消息的细节，提供统一的数据访问和确认机制
@@ -18,6 +24,14 @@ type Message interface {
 
 	// Data 获取消息内容
 	Data() []byte
+
+	// Headers 获取消息头 (键值对)，返回副本
+	// MQ 不做自动注入/提取，业务可自行对接 trace 等上下文。
+	Headers() Headers
+
+	// Context 获取与消息处理关联的上下文
+	// Subscribe 回调参数与 msg.Context() 保持一致，SubscribeChan 场景可直接使用 msg.Context()。
+	Context() context.Context
 
 	// Ack 确认消息处理成功
 	// - NATS Core: 空操作
@@ -62,6 +76,7 @@ type Client interface {
 	// 注意：当 Channel 缓冲区满时会丢弃消息并返回错误给内部 handler。
 	// 若需要手动 Ack/Nak（尤其是 SubscribeChan 模式），请显式设置 WithManualAck，
 	// 并在消费端处理成功后调用 msg.Ack()，以获得“至少一次投递”的语义。
+	// SubscribeChan 场景下可使用 msg.Context() 获取订阅上下文（如取消/超时）。
 	SubscribeChan(ctx context.Context, subject string, opts ...SubscribeOption) (<-chan Message, Subscription, error)
 
 	// Close 关闭客户端
@@ -142,6 +157,10 @@ func applyOptions(opts ...Option) (options, error) {
 			return opt, xerrors.Wrapf(err, "failed to create default logger")
 		}
 		opt.Logger = logger
+	}
+
+	if opt.Meter == nil {
+		opt.Meter = metrics.Discard()
 	}
 
 	return opt, nil

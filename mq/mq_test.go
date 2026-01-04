@@ -60,6 +60,25 @@ func TestOptions(t *testing.T) {
 		assert.False(t, o.AutoAck)
 		assert.Equal(t, 200, o.BufferSize)
 	})
+
+	t.Run("WithHeaders", func(t *testing.T) {
+		o := defaultPublishOptions()
+		headers := Headers{
+			"traceparent": "00-00000000000000000000000000000000-0000000000000000-01",
+		}
+
+		WithHeaders(headers)(&o)
+
+		assert.Equal(t, headers["traceparent"], o.Headers["traceparent"])
+	})
+
+	t.Run("WithHeader", func(t *testing.T) {
+		o := defaultPublishOptions()
+
+		WithHeader("x-request-id", "req-1")(&o)
+
+		assert.Equal(t, "req-1", o.Headers["x-request-id"])
+	})
 }
 
 // TestDefaultSubscribeOptions 测试默认订阅选项
@@ -124,12 +143,20 @@ func TestNew(t *testing.T) {
 // TestMessageInterface 测试消息接口
 func TestMessageInterface(t *testing.T) {
 	t.Run("coreMessage 实现 Message 接口", func(t *testing.T) {
-		msg := &coreMessage{msg: &nats.Msg{}}
+		msg := &coreMessage{
+			ctx: context.Background(),
+			msg: &nats.Msg{},
+			headers: Headers{
+				"traceparent": "trace",
+			},
+		}
 		// 编译时检查接口实现
 		var _ Message = msg
 
 		assert.Empty(t, msg.Subject())
 		assert.Nil(t, msg.Data())
+		assert.Equal(t, "trace", msg.Headers()["traceparent"])
+		assert.NotNil(t, msg.Context())
 		assert.NoError(t, msg.Ack())
 		assert.NoError(t, msg.Nak())
 	})

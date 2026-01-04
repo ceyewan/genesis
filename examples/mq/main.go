@@ -150,9 +150,16 @@ func runDemo(ctx context.Context, mqClient mq.Client, logger clog.Logger) {
 	var wg1 sync.WaitGroup
 	wg1.Add(20) // 2个消费者，各收到10条
 
+	traceID := "trace-" + testkit.NewID()
 	handler := func(name string) mq.Handler {
 		return func(ctx context.Context, msg mq.Message) error {
-			logger.Info("收到消息", clog.String("consumer", name), clog.String("data", string(msg.Data())))
+			headers := msg.Headers()
+			logger.Info("收到消息",
+				clog.String("consumer", name),
+				clog.String("data", string(msg.Data())),
+				clog.String("traceid", headers["traceid"]),
+				clog.String("span-id", headers["span-id"]),
+			)
 			wg1.Done()
 			return nil
 		}
@@ -167,7 +174,8 @@ func runDemo(ctx context.Context, mqClient mq.Client, logger clog.Logger) {
 	logger.Info("发送广播消息", clog.Int("count", 10))
 	for i := 1; i <= 10; i++ {
 		data := []byte(fmt.Sprintf("MSG-%d", i))
-		_ = mqClient.Publish(ctx, topic1, data)
+		spanID := "span-" + testkit.NewID()
+		_ = mqClient.Publish(ctx, topic1, data, mq.WithHeaders(newTraceHeaders(traceID, spanID)))
 	}
 
 	wg1.Wait()
@@ -178,9 +186,16 @@ func runDemo(ctx context.Context, mqClient mq.Client, logger clog.Logger) {
 	var wg2 sync.WaitGroup
 	wg2.Add(10) // 组内平摊10条
 
+	queueTraceID := "trace-" + testkit.NewID()
 	workerHandler := func(name string) mq.Handler {
 		return func(ctx context.Context, msg mq.Message) error {
-			logger.Info("处理任务", clog.String("worker", name), clog.String("data", string(msg.Data())))
+			headers := msg.Headers()
+			logger.Info("处理任务",
+				clog.String("worker", name),
+				clog.String("data", string(msg.Data())),
+				clog.String("traceid", headers["traceid"]),
+				clog.String("span-id", headers["span-id"]),
+			)
 			wg2.Done()
 			_ = msg.Ack()
 			return nil
@@ -196,7 +211,8 @@ func runDemo(ctx context.Context, mqClient mq.Client, logger clog.Logger) {
 	logger.Info("发送队列任务", clog.Int("count", 10))
 	for i := 1; i <= 10; i++ {
 		data := []byte(fmt.Sprintf("TASK-%d", i))
-		_ = mqClient.Publish(ctx, topic2, data)
+		spanID := "span-" + testkit.NewID()
+		_ = mqClient.Publish(ctx, topic2, data, mq.WithHeaders(newTraceHeaders(queueTraceID, spanID)))
 		time.Sleep(50 * time.Millisecond)
 	}
 
@@ -219,4 +235,11 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func newTraceHeaders(traceID, spanID string) mq.Headers {
+	return mq.Headers{
+		"traceid": traceID,
+		"span-id": spanID,
+	}
 }

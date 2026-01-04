@@ -15,6 +15,7 @@
     - **Channel 模式**：支持 Go Channel 风格的消息消费 (`SubscribeChan`)
     - **重试机制**：内置指数退避重试中间件 (`WithRetry`)
     - **Options 模式**：灵活配置队列组、缓冲区、自动确认等
+- **Header 透传**：支持消息头元数据透传（不做自动注入/提取）
 - **可观测性**：集成 clog 和 metrics
 
 ## 目录结构
@@ -80,6 +81,7 @@ ch, sub, err := client.SubscribeChan(ctx, "events", mq.WithBufferSize(100))
 defer sub.Unsubscribe()
 
 for msg := range ch {
+    // 如需上下文，可使用 msg.Context()
     process(msg)
     msg.Ack() // 手动确认
 }
@@ -99,6 +101,23 @@ handler := func(ctx context.Context, msg mq.Message) error {
 client.Subscribe(ctx, "topic", mq.WithRetry(mq.DefaultRetryConfig, logger)(handler))
 ```
 
+### 消息头透传（Trace/Metadata）
+
+`mq` 不自动注入/提取 tracing 信息，仅透传消息头，业务自行对接：
+
+```go
+headers := mq.Headers{
+    "traceparent": "00-00000000000000000000000000000000-0000000000000000-01",
+}
+client.Publish(ctx, "topic", []byte("hello"), mq.WithHeaders(headers))
+
+client.Subscribe(ctx, "topic", func(ctx context.Context, msg mq.Message) error {
+    // 业务自行解析 msg.Headers() 并注入到 ctx
+    _ = msg.Headers()
+    return nil
+})
+```
+
 ### 订阅选项
 
 ```go
@@ -112,6 +131,16 @@ client.Subscribe(ctx, "topic", handler,
     mq.WithDeadLetter(3, "dlq"), // 设置死信队列 (3次失败后转发到 dlq)
 )
 ```
+
+## 指标说明
+
+`mq` 默认使用 `metrics.Discard()` 兜底，不需要判空。
+
+已暴露的指标名（可直接使用常量）：
+
+- `mq.MetricPublishTotal`：发布成功的消息数（label: `subject`）
+- `mq.MetricConsumeTotal`：消费处理的消息数（label: `subject`）
+- `mq.MetricHandleDuration`：处理耗时（单位秒，label: `subject`）
 
 ## 接口设计
 

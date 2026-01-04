@@ -21,11 +21,17 @@ type driver interface {
 	Close() error
 }
 
-// PublishOption 发布选项（预留扩展，当前无对外可用参数）
+// PublishOption 发布选项
 type PublishOption func(*publishOptions)
 
 type publishOptions struct {
-	Key string // 可选消息 Key，用于部分驱动的路由
+	Key     string  // 可选消息 Key，用于部分驱动的路由
+	Headers Headers // 消息头 (用于 trace 等元数据透传)
+}
+
+// defaultPublishOptions 返回默认发布选项
+func defaultPublishOptions() publishOptions {
+	return publishOptions{}
 }
 
 // SubscribeOption 订阅选项
@@ -116,5 +122,23 @@ func WithDeadLetter(maxDeliver int, subject string) SubscribeOption {
 	return func(o *subscribeOptions) {
 		o.MaxDeliver = maxDeliver
 		o.DeadLetter = subject
+	}
+}
+
+// WithHeaders 设置消息头（键值对）
+// 该选项仅透传元数据，MQ 不做自动注入/提取。
+func WithHeaders(headers Headers) PublishOption {
+	return func(o *publishOptions) {
+		o.Headers = cloneHeaders(headers)
+	}
+}
+
+// WithHeader 设置单个消息头
+func WithHeader(key, value string) PublishOption {
+	return func(o *publishOptions) {
+		if o.Headers == nil {
+			o.Headers = make(Headers, 1)
+		}
+		o.Headers[key] = value
 	}
 }
