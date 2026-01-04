@@ -3,29 +3,59 @@ package dlock
 import (
 	"context"
 	"time"
+
+	"github.com/ceyewan/genesis/xerrors"
 )
 
-// BackendType 定义支持的后端类型
-type BackendType string
+// DriverType 定义支持的后端类型
+type DriverType string
 
 const (
-	BackendRedis BackendType = "redis"
-	BackendEtcd  BackendType = "etcd"
+	DriverRedis DriverType = "redis"
+	DriverEtcd  DriverType = "etcd"
 )
 
 // Config 组件静态配置
 type Config struct {
-	// Backend 选择使用的后端 (redis | etcd)
-	Backend BackendType `json:"backend" yaml:"backend"`
+	// Driver 选择使用的后端 (redis | etcd)
+	Driver DriverType `json:"driver" yaml:"driver"`
 
 	// Prefix 锁 Key 的全局前缀，例如 "dlock:"
 	Prefix string `json:"prefix" yaml:"prefix"`
 
 	// DefaultTTL 默认锁超时时间
+	// Redis 会启动 Watchdog 自动续期；Etcd 使用 Session KeepAlive 自动续期。
 	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
 
 	// RetryInterval 加锁重试间隔 (仅 Lock 模式有效)
 	RetryInterval time.Duration `json:"retry_interval" yaml:"retry_interval"`
+}
+
+func (c *Config) setDefaults() {
+	if c == nil {
+		return
+	}
+	if c.DefaultTTL <= 0 {
+		c.DefaultTTL = 10 * time.Second
+	}
+	if c.RetryInterval <= 0 {
+		c.RetryInterval = 100 * time.Millisecond
+	}
+}
+
+func (c *Config) validate() error {
+	if c == nil {
+		return ErrConfigNil
+	}
+	if c.Driver == "" {
+		return xerrors.New("dlock: driver is required")
+	}
+	switch c.Driver {
+	case DriverRedis, DriverEtcd:
+		return nil
+	default:
+		return xerrors.New("dlock: unsupported driver: " + string(c.Driver))
+	}
 }
 
 // Locker 定义了分布式锁的核心行为

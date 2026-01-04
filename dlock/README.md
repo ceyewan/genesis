@@ -6,9 +6,9 @@
 
 - **后端无关**：支持 Redis、Etcd 等多种后端，通过配置灵活切换
 - **接口抽象**：业务代码仅依赖 `Locker` 接口，不感知底层实现细节
-- **自动续期**：默认支持锁的自动续期（Watchdog/KeepAlive），确保长时间任务不被中断
+- **自动续期**：Redis 使用 Watchdog 自动续期；Etcd 使用 Session KeepAlive 自动续期
 - **防误删**：通过令牌机制确保只有锁的持有者才能释放
-- **可观测性**：支持注入 Logger、Meter，实现统一的日志和指标收集
+- **可观测性**：支持注入 Logger；Meter 目前仅保留扩展点
 - **显式依赖注入**：不自行管理连接，而是依赖 `connector` 层提供的连接实例
 
 ## 目录结构
@@ -18,9 +18,9 @@ dlock 采用完全扁平化设计，所有文件直接位于包目录下：
 ```
 dlock/
 ├── README.md         # 本文件：组件文档
-├── dlock.go          # 公开 API: NewRedis(), NewEtcd()
-├── types.go          # 类型定义: Locker, Config, BackendType
-├── options.go        # 组件选项: Option, WithLogger(), WithMeter()
+├── dlock.go          # 公开 API: New()
+├── types.go          # 类型定义: Locker, Config, DriverType
+├── options.go        # 组件选项: Option, WithLogger(), WithMeter(), WithRedisConnector(), WithEtcdConnector()
 ├── lock_options.go   # Lock 操作: LockOption, WithTTL()
 ├── errors.go         # 错误定义: ErrConfigNil, ErrLockNotHeld 等
 ├── metrics.go        # 指标常量定义
@@ -55,11 +55,12 @@ func main() {
     defer redisConn.Close()
 
     // 3. 创建分布式锁组件
-    locker, _ := dlock.NewRedis(redisConn, &dlock.Config{
+    locker, _ := dlock.New(&dlock.Config{
+        Driver:        dlock.DriverRedis,
         Prefix:        "myapp:lock:",
         DefaultTTL:    10 * time.Second,
         RetryInterval: 100 * time.Millisecond,
-    }, dlock.WithLogger(logger))
+    }, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
 
     // 4. 使用锁
     ctx := context.Background()
@@ -84,10 +85,11 @@ etcdConn, _ := connector.NewEtcd(&cfg.Etcd, connector.WithLogger(logger))
 defer etcdConn.Close()
 
 // 创建 Etcd 分布式锁
-locker, _ := dlock.NewEtcd(etcdConn, &dlock.Config{
+locker, _ := dlock.New(&dlock.Config{
+    Driver:     dlock.DriverEtcd,
     Prefix:     "myapp:lock:",
     DefaultTTL: 30 * time.Second,
-}, dlock.WithLogger(logger))
+}, dlock.WithEtcdConnector(etcdConn), dlock.WithLogger(logger))
 ```
 
 ## 核心接口
@@ -114,13 +116,14 @@ type Locker interface {
 
 ```go
 type Config struct {
-    // Backend 选择使用的后端 (redis | etcd)
-    Backend BackendType `json:"backend" yaml:"backend"`
+    // Driver 选择使用的后端 (redis | etcd)
+    Driver DriverType `json:"driver" yaml:"driver"`
 
     // Prefix 锁 Key 的全局前缀，例如 "myapp:lock:"
     Prefix string `json:"prefix" yaml:"prefix"`
 
     // DefaultTTL 默认锁超时时间
+    // Redis 使用 Watchdog 自动续期；Etcd 使用 Session KeepAlive 自动续期
     DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
 
     // RetryInterval 加锁重试间隔 (仅 Lock 模式有效)
@@ -181,7 +184,8 @@ runMigration()
 ### 日志示例
 
 ```go
-locker, _ := dlock.NewRedis(redisConn, cfg,
+locker, _ := dlock.New(cfg,
+    dlock.WithRedisConnector(redisConn),
     dlock.WithLogger(logger))
 
 // 自动添加的日志字段
@@ -193,14 +197,15 @@ locker, _ := dlock.NewRedis(redisConn, cfg,
 // }
 ```
 
-### 指标示例
+### 指标示例（预留）
 
 ```go
-locker, _ := dlock.NewRedis(redisConn, cfg,
+locker, _ := dlock.New(cfg,
+    dlock.WithRedisConnector(redisConn),
     dlock.WithLogger(logger),
     dlock.WithMeter(meter))
 
-// 自动收集的指标
+// 指标名称已预留，后续将接入采集：
 // - dlock_lock_acquired_total: 锁获取成功计数
 // - dlock_lock_failed_total: 锁获取失败计数
 // - dlock_lock_released_total: 锁释放计数
@@ -209,51 +214,28 @@ locker, _ := dlock.NewRedis(redisConn, cfg,
 
 ## 工厂函数
 
-### NewRedis
+### New
 
 ```go
-func NewRedis(conn connector.RedisConnector, cfg *Config, opts ...Option) (Locker, error)
+func New(cfg *Config, opts ...Option) (Locker, error)
 ```
 
-创建 Redis 后端的分布式锁实例。
+根据 `cfg.Driver` 创建分布式锁实例。
 
 **参数**：
 
-- `conn`: Redis 连接器（由 `connector.NewRedis()` 创建）
 - `cfg`: 组件配置
-- `opts`: 可选参数（`WithLogger`、`WithMeter`）
+- `opts`: 可选参数（`WithRedisConnector`、`WithEtcdConnector`、`WithLogger`、`WithMeter`）
 
 **示例**：
 
 ```go
-locker, err := dlock.NewRedis(redisConn, &dlock.Config{
+locker, err := dlock.New(&dlock.Config{
+    Driver:        dlock.DriverRedis,
     Prefix:        "app:lock:",
     DefaultTTL:    15 * time.Second,
     RetryInterval: 100 * time.Millisecond,
-}, dlock.WithLogger(logger))
-```
-
-### NewEtcd
-
-```go
-func NewEtcd(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Locker, error)
-```
-
-创建 Etcd 后端的分布式锁实例。
-
-**参数**：
-
-- `conn`: Etcd 连接器（由 `connector.NewEtcd()` 创建）
-- `cfg`: 组件配置
-- `opts`: 可选参数（`WithLogger`、`WithMeter`）
-
-**示例**：
-
-```go
-locker, err := dlock.NewEtcd(etcdConn, &dlock.Config{
-    Prefix:     "app:lock:",
-    DefaultTTL: 30 * time.Second,
-}, dlock.WithLogger(logger))
+}, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
 ```
 
 ## 标准错误
@@ -282,9 +264,9 @@ if err := locker.Unlock(ctx, key); err != nil {
 }
 ```
 
-## 指标定义
+## 指标定义（预留）
 
-dlock 自动收集以下指标（需要注入 `Meter`）：
+当前仅定义指标名称，采集尚未启用（即使注入 `Meter` 也不会上报）：
 
 | 指标名                             | 类型      | 说明           | 标签             |
 | ---------------------------------- | --------- | -------------- | ---------------- |
@@ -295,7 +277,7 @@ dlock 自动收集以下指标（需要注入 `Meter`）：
 
 ## 完整示例
 
-参考 [examples/dlock-redis/main.go](../examples/dlock-redis/main.go) 和 [examples/dlock-etcd/main.go](../examples/dlock-etcd/main.go) 了解更多使用示例。
+参考 [examples/dlock/main.go](../examples/dlock/main.go) 了解更多使用示例。
 
 ## 设计原则
 
@@ -303,7 +285,7 @@ dlock 自动收集以下指标（需要注入 `Meter`）：
 - **后端无关**：支持多种后端存储，通过配置灵活切换
 - **安全性**：通过令牌机制和自动续期确保锁的安全性
 - **依赖注入**：使用显式的函数式选项模式，不维护全局状态
-- **可观测性**：通过可选注入的 Logger 和 Meter 实现统一的日志和指标收集
+- **可观测性**：通过可选注入 Logger 实现统一日志，Meter 为预留扩展点
 
 ## 相关文档
 

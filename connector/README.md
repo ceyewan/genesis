@@ -221,7 +221,7 @@ func main() {
     // 2. 创建业务组件（注入连接器）
     cache, _ := cache.New(redisConn, &cfg.Cache)
     db, _ := db.New(mysqlConn, &cfg.DB)
-    locker, _ := dlock.NewRedis(redisConn, &cfg.DLock)
+    locker, _ := dlock.New(&cfg.DLock, dlock.WithRedisConnector(redisConn))
 
     // 3. 使用组件
     userSvc := service.NewUserService(db, cache, locker)

@@ -64,7 +64,7 @@ func main() {
 
     // 4. 初始化组件 (显式注入依赖)
     database, _ := db.New(mysqlConn, &cfg.DB, db.WithLogger(logger))
-    locker, _ := dlock.New(redisConn, &cfg.DLock, dlock.WithLogger(logger))
+    locker, _ := dlock.New(&cfg.DLock, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
 
     // 5. 使用组件
     logger.InfoContext(ctx, "service started")

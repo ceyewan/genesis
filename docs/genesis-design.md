@@ -184,7 +184,7 @@ func main() {
 
     // 5. 创建组件（注入 Connector + Logger）
     database, _ := db.New(mysqlConn, &cfg.DB, db.WithLogger(logger))
-    locker, _ := dlock.NewRedis(redisConn, &cfg.DLock, dlock.WithLogger(logger))
+    locker, _ := dlock.New(&cfg.DLock, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
     cacheClient, _ := cache.New(redisConn, &cfg.Cache, cache.WithLogger(logger))
 
     // 6. 创建业务服务（注入组件接口）

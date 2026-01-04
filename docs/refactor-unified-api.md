@@ -63,8 +63,7 @@ func WithEtcdConnector(conn connector.EtcdConnector) Option
 
 ### 3.3 DLock 组件
 -   **API**:
-    -   保留 `NewRedis`, `NewEtcd`
-    -   新增 `New(cfg, opts...)`
+    -   仅保留 `New(cfg, opts...)` 作为统一入口
 -   **Config**: 新增 `Driver` ("redis", "etcd")
 -   **Options**: 新增 `WithRedisConnector`, `WithEtcdConnector`
 
