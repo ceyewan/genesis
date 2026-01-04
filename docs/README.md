@@ -14,7 +14,7 @@ Genesis 采用四层扁平化架构：
 | 层次                        | 核心组件                                       | 职责                         |
 | :-------------------------- | :--------------------------------------------- | :--------------------------- |
 | **Level 3: Governance**     | `auth`, `ratelimit`, `breaker`, `registry`     | 流量治理，身份认证，切面能力 |
-| **Level 2: Business**       | `cache`, `idgen`, `dlock`, `idempotency`, `mq` | 业务能力封装                 |
+| **Level 2: Business**       | `cache`, `idgen`, `dlock`, `idem`, `mq` | 业务能力封装                 |
 | **Level 1: Infrastructure** | `connector`, `db`                              | 连接管理，底层 I/O           |
 | **Level 0: Base**           | `clog`, `config`, `metrics`, `xerrors`         | 框架基石                     |
 

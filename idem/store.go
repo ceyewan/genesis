@@ -1,4 +1,4 @@
-package idempotency
+package idem
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 //  2. 已完成（completed）: SetResult() 后的状态
 //  3. 不存在（absent）: 初始状态或 TTL 过期后
 //
-// 默认提供 Redis 实现，用户可以实现此接口以支持其他存储后端。
+// 默认提供 Redis 实现。
 type Store interface {
 	// Lock 尝试获取锁（标记处理中）
 	// 返回 true 表示成功获取锁，false 表示已被其他请求锁定
@@ -33,11 +33,6 @@ type Store interface {
 	// GetResult 获取已完成的结果
 	// 如果结果不存在，返回 ErrResultNotFound
 	GetResult(ctx context.Context, key string) ([]byte, error)
-
-	// WaitForResult 等待结果完成（用于并发请求）
-	// 如果在 timeout 内结果完成，返回结果
-	// 如果超时，返回 ErrWaitTimeout
-	WaitForResult(ctx context.Context, key string, timeout time.Duration) ([]byte, error)
 }
 
 // ========================================

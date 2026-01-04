@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.0
 // - protoc             v6.33.2
-// source: examples/idempotency/proto/idempotency.proto
+// source: examples/idem/proto/idempotency.proto
 
 package pb
 
@@ -19,7 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OrderService_CreateOrder_FullMethodName = "/idempotency.OrderService/CreateOrder"
+	OrderService_CreateOrder_FullMethodName = "/idem.OrderService/CreateOrder"
 )
 
 // OrderServiceClient is the client API for OrderService service.
@@ -114,7 +114,7 @@ func _OrderService_CreateOrder_Handler(srv interface{}, ctx context.Context, dec
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var OrderService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "idempotency.OrderService",
+	ServiceName: "idem.OrderService",
 	HandlerType: (*OrderServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -123,5 +123,5 @@ var OrderService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "examples/idempotency/proto/idempotency.proto",
+	Metadata: "examples/idem/proto/idempotency.proto",
 }

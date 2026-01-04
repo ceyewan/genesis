@@ -21,7 +21,7 @@
 - **[cache](./cache/)** - 缓存组件使用示例
 - **[dlock](./dlock/)** - 分布式锁示例（支持 Redis/Etcd）
 - **[idgen](./idgen/)** - ID 生成器示例
-- **[idempotency](./idempotency/)** - 幂等性组件示例
+- **[idem](./idem/)** - 幂等性组件示例
 - **[mq](./mq/)** - 消息队列使用示例
 
 ### Level 3 - 流量治理示例

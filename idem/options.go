@@ -1,8 +1,8 @@
-package idempotency
+package idem
 
 import (
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
+	"github.com/ceyewan/genesis/connector"
 )
 
 // Option 组件初始化选项函数
@@ -16,8 +16,8 @@ type InterceptorOption func(*interceptorOptions)
 
 // options 组件初始化选项配置（内部使用，小写）
 type options struct {
-	logger clog.Logger
-	meter  metrics.Meter
+	logger    clog.Logger
+	redisConn connector.RedisConnector
 }
 
 // middlewareOptions Gin 中间件选项配置（内部使用，小写）
@@ -27,7 +27,7 @@ type middlewareOptions struct {
 
 // interceptorOptions gRPC 拦截器选项配置（内部使用，小写）
 type interceptorOptions struct {
-	metadataKey string // 幂等键的 gRPC metadata 键名，默认 "x-idempotency-key"
+	metadataKey string // 幂等键的 gRPC metadata 键名，默认 "x-idem-key"
 }
 
 // WithLogger 设置 Logger
@@ -37,10 +37,12 @@ func WithLogger(logger clog.Logger) Option {
 	}
 }
 
-// WithMeter 设置 Meter
-func WithMeter(meter metrics.Meter) Option {
+// WithRedisConnector 注入 Redis 连接器
+func WithRedisConnector(conn connector.RedisConnector) Option {
 	return func(o *options) {
-		o.meter = meter
+		if conn != nil {
+			o.redisConn = conn
+		}
 	}
 }
 
@@ -55,7 +57,7 @@ func WithHeaderKey(headerKey string) MiddlewareOption {
 }
 
 // WithMetadataKey 设置 gRPC 拦截器的幂等键 metadata 键名
-// 默认为 "x-idempotency-key"
+// 默认为 "x-idem-key"
 func WithMetadataKey(metadataKey string) InterceptorOption {
 	return func(o *interceptorOptions) {
 		if metadataKey != "" {

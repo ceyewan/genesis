@@ -1,19 +1,20 @@
-// Package idempotency 提供了幂等性组件，用于确保在分布式环境中操作的"一次且仅一次"执行。
+// Package idem 提供了幂等性组件，用于确保在分布式环境中操作的"一次且仅一次"执行。
 //
-// idempotency 是 Genesis 业务层的核心组件，它提供了：
+// idem 是 Genesis 业务层的核心组件，它提供了：
 // - 统一的 Idempotency 接口，支持手动调用、Gin 中间件、gRPC 拦截器
 // - 结果缓存：自动缓存执行结果，重复请求直接返回缓存数据
 // - 并发控制：内置分布式锁机制，防止同一幂等键的并发穿透
-// - 后端无关：默认提供 Redis 实现，支持自定义存储后端
-// - 与 L0 基础组件（日志、指标）的深度集成
+// - 后端可配置：默认提供 Redis 实现
+// - 与 L0 基础组件（日志）的深度集成
 //
 // ## 基本使用
 //
 //	// 创建幂等组件
-//	idem, _ := idempotency.New(redisConn, &idempotency.Config{
+//	idem, _ := idem.New(&idem.Config{
+//	    Driver:     idem.DriverRedis,
 //	    Prefix:     "myapp:idem:",
 //	    DefaultTTL: 24 * time.Hour,
-//	}, idempotency.WithLogger(logger))
+//	}, idem.WithRedisConnector(redisConn), idem.WithLogger(logger))
 //
 //	// 执行幂等操作
 //	result, err := idem.Execute(ctx, "order:create:12345", func(ctx context.Context) (interface{}, error) {
@@ -33,14 +34,13 @@
 //	s := grpc.NewServer(
 //	    grpc.UnaryInterceptor(idem.UnaryServerInterceptor()),
 //	)
-package idempotency
+package idem
 
 import (
 	"context"
-	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/xerrors"
 
 	"google.golang.org/grpc"
 )
@@ -60,7 +60,7 @@ type Idempotency interface {
 	//
 	// 工作流程：
 	//   1. 如果 key 已存在且完成 → 直接返回缓存结果
-	//   2. 如果 key 正在处理中 → 根据配置等待或返回错误
+	//   2. 如果 key 正在处理中 → 返回 ErrConcurrentRequest
 	//   3. 如果 key 不存在 → 执行 fn 并缓存结果
 	//
 	// 参数：
@@ -106,7 +106,7 @@ type Idempotency interface {
 	//   )
 	//
 	// 工作原理：
-	//   1. 从 gRPC metadata 提取 x-idempotency-key
+	//   1. 从 gRPC metadata 提取 x-idem-key
 	//   2. 使用分布式锁防止并发执行
 	//   3. 如果缓存命中，返回缓存的 protobuf 响应
 	//   4. 如果未命中，执行 RPC handler 并缓存结果
@@ -123,64 +123,37 @@ type Idempotency interface {
 }
 
 // ========================================
-// 配置定义 (Configuration)
-// ========================================
-
-// Config 幂等性组件配置
-type Config struct {
-	// Prefix Redis Key 前缀，默认 "idempotency:"
-	// 例如："myapp:idem:" 将使用 "myapp:idem:{key}" 作为存储键
-	Prefix string `json:"prefix" yaml:"prefix"`
-
-	// DefaultTTL 幂等记录有效期，默认 24h
-	// 超过此时间后，缓存的结果将被清理，后续相同请求将重新执行
-	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
-
-	// LockTTL 处理过程中的锁超时时间，默认 30s
-	// 防止业务逻辑崩溃导致死锁，超时后锁自动释放
-	LockTTL time.Duration `json:"lock_ttl" yaml:"lock_ttl"`
-
-	// WaitTimeout 当遇到并发请求时，等待前一个请求完成的超时时间
-	WaitTimeout time.Duration `json:"wait_timeout" yaml:"wait_timeout"`
-}
-
-// ========================================
 // 工厂函数 (Factory Functions)
 // ========================================
 
 // New 创建幂等性组件实例
 //
-// 这是标准的工厂函数，支持在不依赖其他容器的情况下独立实例化。
+// 这是标准的工厂函数，支持配置驱动和显式依赖注入。
 //
 // 参数：
-//   - redisConn: Redis 连接器，用于存储幂等记录和分布式锁
-//   - cfg: 幂等性配置，如为 nil 则使用默认配置
-//   - opts: 可选配置，如 WithLogger(), WithMeter()
+//   - cfg: 幂等性配置，不可为 nil
+//   - opts: 可选配置，如 WithLogger(), WithRedisConnector()
 //
 // 返回：
 //   - Idempotency 组件实例
-//   - 错误：如果 redisConn 为 nil，返回 ErrConnectorNil
+//   - 错误：缺少必要连接器或配置非法
 //
 // 使用示例：
 //
-//	idem, err := idempotency.New(redisConn, &idempotency.Config{
-//	    Prefix:      "myapp:idem:",
-//	    DefaultTTL:  24 * time.Hour,
-//	    LockTTL:     30 * time.Second,
-//	    WaitTimeout: 5 * time.Second,
-//	}, idempotency.WithLogger(logger), idempotency.WithMeter(meter))
-func New(redisConn connector.RedisConnector, cfg *Config, opts ...Option) (Idempotency, error) {
-	if redisConn == nil {
-		return nil, ErrConnectorNil
+//	idem, err := idem.New(&idem.Config{
+//	    Driver:     idem.DriverRedis,
+//	    Prefix:     "myapp:idem:",
+//	    DefaultTTL: 24 * time.Hour,
+//	    LockTTL:    30 * time.Second,
+//	}, idem.WithRedisConnector(redisConn), idem.WithLogger(logger))
+func New(cfg *Config, opts ...Option) (Idempotency, error) {
+	if cfg == nil {
+		return nil, ErrConfigNil
 	}
 
-	if cfg == nil {
-		cfg = &Config{
-			Prefix:      "idempotency:",
-			DefaultTTL:  24 * time.Hour,
-			LockTTL:     30 * time.Second,
-			WaitTimeout: 0,
-		}
+	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	// 应用选项
@@ -192,16 +165,23 @@ func New(redisConn connector.RedisConnector, cfg *Config, opts ...Option) (Idemp
 	// 派生 Logger（添加 component 字段）
 	logger := opt.logger
 	if logger != nil {
-		logger = logger.With(clog.String("component", "idempotency"))
+		logger = logger.With(clog.String("component", "idem"))
 	}
 
-	if logger != nil {
-		logger.Info("creating idempotency component",
-			clog.String("prefix", cfg.Prefix),
-			clog.Duration("default_ttl", cfg.DefaultTTL),
-			clog.Duration("lock_ttl", cfg.LockTTL),
-			clog.Duration("wait_timeout", cfg.WaitTimeout))
+	switch cfg.Driver {
+	case DriverRedis:
+		if opt.redisConn == nil {
+			return nil, xerrors.New("idem: redis connector is required, use WithRedisConnector")
+		}
+		if logger != nil {
+			logger.Info("creating idem component",
+				clog.String("driver", string(cfg.Driver)),
+				clog.String("prefix", cfg.Prefix),
+				clog.Duration("default_ttl", cfg.DefaultTTL),
+				clog.Duration("lock_ttl", cfg.LockTTL))
+		}
+		return newIdempotency(cfg, newRedisStore(opt.redisConn, cfg.Prefix), logger), nil
+	default:
+		return nil, xerrors.New("idem: unsupported driver: " + string(cfg.Driver))
 	}
-
-	return newIdempotency(cfg, redisConn, logger, opt.meter)
 }

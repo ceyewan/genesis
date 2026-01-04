@@ -54,8 +54,7 @@ func WithEtcdConnector(conn connector.EtcdConnector) Option
 
 ### 3.2 Idempotency 组件
 -   **API**:
-    -   `New(conn, cfg)` -> 重命名为 `NewRedis(conn, cfg)`
-    -   新增 `New(cfg, opts...)`
+    -   仅保留 `New(cfg, opts...)` 作为统一入口
 -   **Config**: 新增 `Driver` ("redis")
 -   **Options**: 新增 `WithRedisConnector`
     -   **建议**: 目前仅 Redis 后端，`Driver` 默认值需明确设置为 "redis"，并在未来扩展时保持兼容。

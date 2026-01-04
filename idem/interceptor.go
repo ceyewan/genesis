@@ -1,4 +1,4 @@
-package idempotency
+package idem
 
 import (
 	"context"
@@ -20,10 +20,10 @@ import (
 //	s := grpc.NewServer(
 //	    grpc.UnaryInterceptor(idem.UnaryServerInterceptor()),
 //	)
-func (i *idempotency) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServerInterceptor {
+func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServerInterceptor {
 	// 应用选项
 	opt := interceptorOptions{
-		metadataKey: "x-idempotency-key",
+		metadataKey: "x-idem-key",
 	}
 	for _, o := range opts {
 		o(&opt)
@@ -50,7 +50,7 @@ func (i *idempotency) UnaryServerInterceptor(opts ...InterceptorOption) grpc.Una
 		}
 
 		if i.logger != nil {
-			i.logger.Debug("gRPC call with idempotency key",
+			i.logger.Debug("gRPC call with idem key",
 				clog.String("key", key),
 				clog.String("method", info.FullMethod))
 		}
@@ -58,9 +58,9 @@ func (i *idempotency) UnaryServerInterceptor(opts ...InterceptorOption) grpc.Una
 		// 使用分布式锁确保同一时刻只有一个请求在执行
 		locked, err := i.store.Lock(ctx, key, i.cfg.LockTTL)
 		if err != nil || !locked {
-			// 获取锁失败，可能其他请求正在执行，等待并重试获取缓存
+			// 获取锁失败，可能其他请求正在执行，直接放行
 			if i.logger != nil {
-				i.logger.Debug("failed to acquire lock, waiting for result",
+				i.logger.Debug("failed to acquire lock, proceeding without cache",
 					clog.String("key", key),
 					clog.Error(err))
 			}
@@ -70,7 +70,7 @@ func (i *idempotency) UnaryServerInterceptor(opts ...InterceptorOption) grpc.Una
 		defer func() {
 			if err := i.store.Unlock(ctx, key); err != nil {
 				if i.logger != nil {
-					i.logger.Error("failed to unlock idempotency key", clog.Error(err), clog.String("key", key))
+					i.logger.Error("failed to unlock idem key", clog.Error(err), clog.String("key", key))
 				}
 			}
 		}()
@@ -80,7 +80,7 @@ func (i *idempotency) UnaryServerInterceptor(opts ...InterceptorOption) grpc.Una
 		if err == nil {
 			// 缓存命中，返回缓存的响应
 			if i.logger != nil {
-				i.logger.Debug("idempotency cache hit for gRPC call", clog.String("key", key))
+				i.logger.Debug("idem cache hit for gRPC call", clog.String("key", key))
 			}
 
 			// 执行一次 handler 获取响应类型模板

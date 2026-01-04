@@ -1,4 +1,4 @@
-package idempotency
+package idem
 
 import (
 	"bufio"
@@ -23,7 +23,7 @@ import (
 //	r.POST("/orders", idem.GinMiddleware(), func(c *gin.Context) {
 //	    c.JSON(200, gin.H{"order_id": "123"})
 //	})
-func (i *idempotency) GinMiddleware(opts ...MiddlewareOption) any {
+func (i *idem) GinMiddleware(opts ...MiddlewareOption) any {
 	// 应用选项
 	opt := middlewareOptions{
 		headerKey: "X-Idempotency-Key",
@@ -46,7 +46,7 @@ func (i *idempotency) GinMiddleware(opts ...MiddlewareOption) any {
 		if err == nil {
 			// 缓存命中，返回缓存的响应
 			if i.logger != nil {
-				i.logger.Debug("idempotency cache hit for HTTP request", clog.String("key", key))
+				i.logger.Debug("idem cache hit for HTTP request", clog.String("key", key))
 			}
 
 			// 解析缓存的响应

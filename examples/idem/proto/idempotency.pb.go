@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v6.33.2
-// source: examples/idempotency/proto/idempotency.proto
+// source: examples/idem/proto/idempotency.proto
 
 package pb
 
@@ -35,7 +35,7 @@ type CreateOrderRequest struct {
 
 func (x *CreateOrderRequest) Reset() {
 	*x = CreateOrderRequest{}
-	mi := &file_examples_idempotency_proto_idempotency_proto_msgTypes[0]
+	mi := &file_examples_idem_proto_idempotency_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -47,7 +47,7 @@ func (x *CreateOrderRequest) String() string {
 func (*CreateOrderRequest) ProtoMessage() {}
 
 func (x *CreateOrderRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_examples_idempotency_proto_idempotency_proto_msgTypes[0]
+	mi := &file_examples_idem_proto_idempotency_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -60,7 +60,7 @@ func (x *CreateOrderRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateOrderRequest.ProtoReflect.Descriptor instead.
 func (*CreateOrderRequest) Descriptor() ([]byte, []int) {
-	return file_examples_idempotency_proto_idempotency_proto_rawDescGZIP(), []int{0}
+	return file_examples_idem_proto_idempotency_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *CreateOrderRequest) GetIdempotencyKey() string {
@@ -111,7 +111,7 @@ type CreateOrderResponse struct {
 
 func (x *CreateOrderResponse) Reset() {
 	*x = CreateOrderResponse{}
-	mi := &file_examples_idempotency_proto_idempotency_proto_msgTypes[1]
+	mi := &file_examples_idem_proto_idempotency_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -123,7 +123,7 @@ func (x *CreateOrderResponse) String() string {
 func (*CreateOrderResponse) ProtoMessage() {}
 
 func (x *CreateOrderResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_examples_idempotency_proto_idempotency_proto_msgTypes[1]
+	mi := &file_examples_idem_proto_idempotency_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -136,7 +136,7 @@ func (x *CreateOrderResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateOrderResponse.ProtoReflect.Descriptor instead.
 func (*CreateOrderResponse) Descriptor() ([]byte, []int) {
-	return file_examples_idempotency_proto_idempotency_proto_rawDescGZIP(), []int{1}
+	return file_examples_idem_proto_idempotency_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *CreateOrderResponse) GetOrderId() string {
@@ -167,11 +167,11 @@ func (x *CreateOrderResponse) GetTimestamp() int64 {
 	return 0
 }
 
-var File_examples_idempotency_proto_idempotency_proto protoreflect.FileDescriptor
+var File_examples_idem_proto_idempotency_proto protoreflect.FileDescriptor
 
-const file_examples_idempotency_proto_idempotency_proto_rawDesc = "" +
+const file_examples_idem_proto_idempotency_proto_rawDesc = "" +
 	"\n" +
-	",examples/idempotency/proto/idempotency.proto\x12\vidempotency\"\xb3\x01\n" +
+	"%examples/idem/proto/idempotency.proto\x12\x04idem\"\xb3\x01\n" +
 	"\x12CreateOrderRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x19\n" +
 	"\border_id\x18\x02 \x01(\tR\aorderId\x12\x1f\n" +
@@ -183,30 +183,30 @@ const file_examples_idempotency_proto_idempotency_proto_rawDesc = "" +
 	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x16\n" +
 	"\x06amount\x18\x03 \x01(\x01R\x06amount\x12\x1c\n" +
-	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp2`\n" +
-	"\fOrderService\x12P\n" +
-	"\vCreateOrder\x12\x1f.idempotency.CreateOrderRequest\x1a .idempotency.CreateOrderResponseB:Z8github.com/ceyewan/genesis/examples/idempotency/proto;pbb\x06proto3"
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp2R\n" +
+	"\fOrderService\x12B\n" +
+	"\vCreateOrder\x12\x18.idem.CreateOrderRequest\x1a\x19.idem.CreateOrderResponseB3Z1github.com/ceyewan/genesis/examples/idem/proto;pbb\x06proto3"
 
 var (
-	file_examples_idempotency_proto_idempotency_proto_rawDescOnce sync.Once
-	file_examples_idempotency_proto_idempotency_proto_rawDescData []byte
+	file_examples_idem_proto_idempotency_proto_rawDescOnce sync.Once
+	file_examples_idem_proto_idempotency_proto_rawDescData []byte
 )
 
-func file_examples_idempotency_proto_idempotency_proto_rawDescGZIP() []byte {
-	file_examples_idempotency_proto_idempotency_proto_rawDescOnce.Do(func() {
-		file_examples_idempotency_proto_idempotency_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_examples_idempotency_proto_idempotency_proto_rawDesc), len(file_examples_idempotency_proto_idempotency_proto_rawDesc)))
+func file_examples_idem_proto_idempotency_proto_rawDescGZIP() []byte {
+	file_examples_idem_proto_idempotency_proto_rawDescOnce.Do(func() {
+		file_examples_idem_proto_idempotency_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_examples_idem_proto_idempotency_proto_rawDesc), len(file_examples_idem_proto_idempotency_proto_rawDesc)))
 	})
-	return file_examples_idempotency_proto_idempotency_proto_rawDescData
+	return file_examples_idem_proto_idempotency_proto_rawDescData
 }
 
-var file_examples_idempotency_proto_idempotency_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_examples_idempotency_proto_idempotency_proto_goTypes = []any{
-	(*CreateOrderRequest)(nil),  // 0: idempotency.CreateOrderRequest
-	(*CreateOrderResponse)(nil), // 1: idempotency.CreateOrderResponse
+var file_examples_idem_proto_idempotency_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_examples_idem_proto_idempotency_proto_goTypes = []any{
+	(*CreateOrderRequest)(nil),  // 0: idem.CreateOrderRequest
+	(*CreateOrderResponse)(nil), // 1: idem.CreateOrderResponse
 }
-var file_examples_idempotency_proto_idempotency_proto_depIdxs = []int32{
-	0, // 0: idempotency.OrderService.CreateOrder:input_type -> idempotency.CreateOrderRequest
-	1, // 1: idempotency.OrderService.CreateOrder:output_type -> idempotency.CreateOrderResponse
+var file_examples_idem_proto_idempotency_proto_depIdxs = []int32{
+	0, // 0: idem.OrderService.CreateOrder:input_type -> idem.CreateOrderRequest
+	1, // 1: idem.OrderService.CreateOrder:output_type -> idem.CreateOrderResponse
 	1, // [1:2] is the sub-list for method output_type
 	0, // [0:1] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
@@ -214,26 +214,26 @@ var file_examples_idempotency_proto_idempotency_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_examples_idempotency_proto_idempotency_proto_init() }
-func file_examples_idempotency_proto_idempotency_proto_init() {
-	if File_examples_idempotency_proto_idempotency_proto != nil {
+func init() { file_examples_idem_proto_idempotency_proto_init() }
+func file_examples_idem_proto_idempotency_proto_init() {
+	if File_examples_idem_proto_idempotency_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_examples_idempotency_proto_idempotency_proto_rawDesc), len(file_examples_idempotency_proto_idempotency_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_examples_idem_proto_idempotency_proto_rawDesc), len(file_examples_idem_proto_idempotency_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_examples_idempotency_proto_idempotency_proto_goTypes,
-		DependencyIndexes: file_examples_idempotency_proto_idempotency_proto_depIdxs,
-		MessageInfos:      file_examples_idempotency_proto_idempotency_proto_msgTypes,
+		GoTypes:           file_examples_idem_proto_idempotency_proto_goTypes,
+		DependencyIndexes: file_examples_idem_proto_idempotency_proto_depIdxs,
+		MessageInfos:      file_examples_idem_proto_idempotency_proto_msgTypes,
 	}.Build()
-	File_examples_idempotency_proto_idempotency_proto = out.File
-	file_examples_idempotency_proto_idempotency_proto_goTypes = nil
-	file_examples_idempotency_proto_idempotency_proto_depIdxs = nil
+	File_examples_idem_proto_idempotency_proto = out.File
+	file_examples_idem_proto_idempotency_proto_goTypes = nil
+	file_examples_idem_proto_idempotency_proto_depIdxs = nil
 }

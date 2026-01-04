@@ -1,31 +1,30 @@
 # Idempotency - 幂等性组件
 
-`idempotency` 是 Genesis 框架中的幂等性组件，用于确保在分布式环境中操作的"一次且仅一次"执行。适用于 MQ 消费、HTTP 请求（Gin）、RPC 调用（gRPC）等多种场景。
+`idem` 是 Genesis 框架中的幂等性组件，用于确保在分布式环境中操作的"一次且仅一次"执行。适用于 MQ 消费、HTTP 请求（Gin）、RPC 调用（gRPC）等多种场景。
 
 ## 特性
 
 - **多场景支持**：支持手动调用、Gin 中间件、gRPC 拦截器等多种使用方式
 - **结果缓存**：自动缓存执行结果，重复请求直接返回缓存数据
 - **并发控制**：内置分布式锁机制，防止同一幂等键的并发穿透
-- **后端无关**：默认提供 Redis 实现，支持自定义存储后端
-- **可观测性**：支持注入 Logger、Meter，实现统一的日志和指标收集
-- **显式依赖注入**：依赖 `connector` 层提供的连接实例
+- **Redis 后端**：基于 Redis 存储结果与锁
+- **显式依赖注入**：通过 `connector` 注入 Redis 连接
 
 ## 目录结构
 
-idempotency 采用完全扁平化设计，所有文件直接位于包目录下：
+idem 采用完全扁平化设计，所有文件直接位于包目录下：
 
 ```
-idempotency/
+idem/
 ├── README.md           # 本文件：组件文档
-├── idempotency.go      # 核心接口: Idempotency, New()
+├── idem.go      # 核心接口: Idempotency, New()
+├── config.go          # 配置定义
 ├── store.go            # 存储接口: Store
 ├── redis.go            # Redis 存储实现
-├── options.go          # 组件选项: Option, WithLogger()
+├── options.go          # 组件选项: Option, WithLogger(), WithRedisConnector()
 ├── middleware.go       # Gin 中间件
 ├── interceptor.go      # gRPC 拦截器
-├── errors.go           # 错误定义
-└── metrics.go          # 指标常量定义
+└── errors.go           # 错误定义
 ```
 
 ## 快速开始
@@ -44,7 +43,7 @@ import (
     "github.com/ceyewan/genesis/clog"
     "github.com/ceyewan/genesis/config"
     "github.com/ceyewan/genesis/connector"
-    "github.com/ceyewan/genesis/idempotency"
+    "github.com/ceyewan/genesis/idem"
 )
 
 func main() {
@@ -55,10 +54,11 @@ func main() {
     defer redisConn.Close()
 
     // 2. 创建幂等组件
-    idem, _ := idempotency.New(redisConn, &idempotency.Config{
+    idem, _ := idem.New(&idem.Config{
+        Driver:     idem.DriverRedis,
         Prefix:     "myapp:idem:",
         DefaultTTL: 24 * time.Hour, // 幂等记录保留 24 小时
-    }, idempotency.WithLogger(logger))
+    }, idem.WithRedisConnector(redisConn), idem.WithLogger(logger))
 
     // 3. 执行幂等操作
     ctx := context.Background()
@@ -87,7 +87,7 @@ func main() {
 ```go
 import (
     "github.com/gin-gonic/gin"
-    "github.com/ceyewan/genesis/idempotency"
+    "github.com/ceyewan/genesis/idem"
 )
 
 func main() {
@@ -114,7 +114,7 @@ func main() {
 ```go
 import (
     "google.golang.org/grpc"
-    "github.com/ceyewan/genesis/idempotency"
+    "github.com/ceyewan/genesis/idem"
 )
 
 func main() {
@@ -138,12 +138,12 @@ func main() {
 type Idempotency interface {
     // Execute 执行幂等操作
     // 如果 key 已存在且完成，直接返回缓存结果
-    // 如果 key 正在处理中，根据配置等待或返回错误
+    // 如果 key 正在处理中，返回 ErrConcurrentRequest
     // 如果 key 不存在，执行 fn 并缓存结果
     Execute(ctx context.Context, key string, fn func(ctx context.Context) (interface{}, error)) (interface{}, error)
 
     // GinMiddleware 返回 Gin 中间件
-    GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc
+    GinMiddleware(opts ...MiddlewareOption) interface{}
 
     // UnaryServerInterceptor 返回 gRPC Unary 拦截器
     UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServerInterceptor
@@ -172,7 +172,10 @@ type Store interface {
 
 ```go
 type Config struct {
-    // Prefix Redis Key 前缀，默认 "idempotency:"
+    // Driver 后端类型: "redis" (默认 "redis")
+    Driver DriverType
+
+    // Prefix Redis Key 前缀，默认 "idem:"
     Prefix string
 
     // DefaultTTL 幂等记录有效期，默认 24h
@@ -181,10 +184,6 @@ type Config struct {
     // LockTTL 处理过程中的锁超时时间，默认 30s
     // 防止业务逻辑崩溃导致死锁
     LockTTL time.Duration
-
-    // WaitTimeout 当遇到并发请求时，等待前一个请求完成的超时时间
-    // 如果为 0，则立即返回 ErrConcurrentRequest
-    WaitTimeout time.Duration
 }
 ```
 
@@ -192,9 +191,8 @@ type Config struct {
 
 组件使用 `xerrors` 定义错误：
 
-- `ErrConcurrentRequest`: 并发请求（当 WaitTimeout=0 或等待超时）
+- `ErrConcurrentRequest`: 并发请求（锁被占用）
 - `ErrResultNotFound`: 结果未找到（内部使用）
-- `ErrStoreFailed`: 存储后端故障
 
 ## 最佳实践
 

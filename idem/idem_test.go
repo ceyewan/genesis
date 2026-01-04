@@ -1,4 +1,4 @@
-package idempotency
+package idem
 
 import (
 	"context"
@@ -6,38 +6,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/testkit"
 )
 
 // TestExecuteSuccess 测试成功执行
 func TestExecuteSuccess(t *testing.T) {
-	// 创建 logger
-	logger, _ := clog.New(&clog.Config{Level: "info"})
-
-	// 创建 Redis 连接
-	redisConn, err := connector.NewRedis(&connector.RedisConfig{
-		Addr: "localhost:6379",
-		DB:   0,
-	}, connector.WithLogger(logger))
-	if err != nil {
-		t.Fatalf("failed to create redis connector: %v", err)
-	}
-	defer redisConn.Close()
+	redisConn := testkit.GetRedisConnector(t)
 
 	// 创建幂等性组件
-	idem, err := New(redisConn, &Config{
-		Prefix:      "test:idem:",
-		DefaultTTL:  1 * time.Hour,
-		LockTTL:     30 * time.Second,
-		WaitTimeout: 5 * time.Second,
-	})
+	prefix := "test:idem:" + testkit.NewID() + ":"
+	idem, err := New(&Config{
+		Driver:     DriverRedis,
+		Prefix:     prefix,
+		DefaultTTL: 1 * time.Hour,
+		LockTTL:    30 * time.Second,
+	}, WithRedisConnector(redisConn))
 	if err != nil {
-		t.Fatalf("failed to create idempotency: %v", err)
+		t.Fatalf("failed to create idem: %v", err)
 	}
 
 	ctx := context.Background()
-	key := "test:execute:success"
+	key := "execute:success"
 
 	// 执行操作
 	result, err := idem.Execute(ctx, key, func(ctx context.Context) (interface{}, error) {
@@ -56,25 +45,17 @@ func TestExecuteSuccess(t *testing.T) {
 
 // TestCacheHit 测试缓存命中
 func TestCacheHit(t *testing.T) {
-	logger, _ := clog.New(&clog.Config{Level: "debug"})
+	redisConn := testkit.GetRedisConnector(t)
 
-	redisConn, err := connector.NewRedis(&connector.RedisConfig{
-		Addr: "localhost:6379",
-		DB:   0,
-	}, connector.WithLogger(logger))
+	prefix := "test:idem:" + testkit.NewID() + ":"
+	idem, err := New(&Config{
+		Driver:     DriverRedis,
+		Prefix:     prefix,
+		DefaultTTL: 1 * time.Hour,
+		LockTTL:    30 * time.Second,
+	}, WithRedisConnector(redisConn))
 	if err != nil {
-		t.Fatalf("failed to create redis connector: %v", err)
-	}
-	defer redisConn.Close()
-
-	idem, err := New(redisConn, &Config{
-		Prefix:      "test:idem:",
-		DefaultTTL:  1 * time.Hour,
-		LockTTL:     30 * time.Second,
-		WaitTimeout: 5 * time.Second,
-	}, WithLogger(logger))
-	if err != nil {
-		t.Fatalf("failed to create idempotency: %v", err)
+		t.Fatalf("failed to create idem: %v", err)
 	}
 
 	ctx := context.Background()
@@ -115,25 +96,17 @@ func TestCacheHit(t *testing.T) {
 
 // TestEmptyKey 测试空键
 func TestEmptyKey(t *testing.T) {
-	logger, _ := clog.New(&clog.Config{Level: "info"})
+	redisConn := testkit.GetRedisConnector(t)
 
-	redisConn, err := connector.NewRedis(&connector.RedisConfig{
-		Addr: "localhost:6379",
-		DB:   0,
-	}, connector.WithLogger(logger))
+	prefix := "test:idem:" + testkit.NewID() + ":"
+	idem, err := New(&Config{
+		Driver:     DriverRedis,
+		Prefix:     prefix,
+		DefaultTTL: 1 * time.Hour,
+		LockTTL:    30 * time.Second,
+	}, WithRedisConnector(redisConn))
 	if err != nil {
-		t.Fatalf("failed to create redis connector: %v", err)
-	}
-	defer redisConn.Close()
-
-	idem, err := New(redisConn, &Config{
-		Prefix:      "test:idem:",
-		DefaultTTL:  1 * time.Hour,
-		LockTTL:     30 * time.Second,
-		WaitTimeout: 5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("failed to create idempotency: %v", err)
+		t.Fatalf("failed to create idem: %v", err)
 	}
 
 	ctx := context.Background()

@@ -1,4 +1,4 @@
-package idempotency
+package idem
 
 import (
 	"context"
@@ -80,33 +80,4 @@ func (rs *redisStore) GetResult(ctx context.Context, key string) ([]byte, error)
 	}
 
 	return result, nil
-}
-
-// WaitForResult 等待结果完成（用于并发请求）
-func (rs *redisStore) WaitForResult(ctx context.Context, key string, timeout time.Duration) ([]byte, error) {
-	resultKey := rs.prefix + key + resultSuffix
-	deadline := time.Now().Add(timeout)
-
-	for {
-		// 尝试获取结果
-		result, err := rs.client.GetClient().Get(ctx, resultKey).Bytes()
-		if err == nil {
-			return result, nil
-		}
-		if err != redis.Nil {
-			return nil, xerrors.Wrap(err, "failed to get result")
-		}
-
-		// 检查是否超时
-		if time.Now().After(deadline) {
-			return nil, ErrWaitTimeout
-		}
-
-		// 短暂等待后重试
-		select {
-		case <-time.After(100 * time.Millisecond):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
 }

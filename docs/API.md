@@ -207,20 +207,27 @@ func NewPublisher(conn NATSConnector, opts ...Option) (Publisher, error)
 func NewSubscriber(conn NATSConnector, opts ...Option) (Subscriber, error)
 ```
 
-## idempotency
+## idem
 
 ```go
-package idempotency // import "github.com/ceyewan/genesis/idempotency"
+package idem // import "github.com/ceyewan/genesis/idem"
 
 幂等组件，基于 Redis。
 
-type Cache interface {
-    Check(ctx, key string) (bool, error)
-    Set(ctx, key string, ttl time.Duration) error
-    Delete(ctx, key string) error
+type Idempotency interface {
+    Execute(ctx, key string, fn func(ctx context.Context) (interface{}, error)) (interface{}, error)
+    GinMiddleware(opts ...MiddlewareOption) interface{}
+    UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServerInterceptor
 }
 
-func New(redisConn RedisConnector, opts ...Option) (Cache, error)
+type Config struct {
+    Driver     DriverType
+    Prefix     string
+    DefaultTTL time.Duration
+    LockTTL    time.Duration
+}
+
+func New(cfg *Config, opts ...Option) (Idempotency, error)
 ```
 
 ## auth

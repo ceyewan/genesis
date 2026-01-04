@@ -15,8 +15,8 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	pb "github.com/ceyewan/genesis/examples/idempotency/proto"
-	"github.com/ceyewan/genesis/idempotency"
+	pb "github.com/ceyewan/genesis/examples/idem/proto"
+	"github.com/ceyewan/genesis/idem"
 )
 
 func main() {
@@ -53,12 +53,12 @@ func main() {
 	defer redisConn.Close()
 
 	// 3. 创建幂等性组件
-	idem, err := idempotency.New(redisConn, &idempotency.Config{
-		Prefix:      "example:idem:",
-		DefaultTTL:  24 * time.Hour,
-		LockTTL:     30 * time.Second,
-		WaitTimeout: 5 * time.Second,
-	}, idempotency.WithLogger(appLogger))
+	idem, err := idem.New(&idem.Config{
+		Driver:     idem.DriverRedis,
+		Prefix:     "example:idem:",
+		DefaultTTL: 24 * time.Hour,
+		LockTTL:    30 * time.Second,
+	}, idem.WithRedisConnector(redisConn), idem.WithLogger(appLogger))
 	if err != nil {
 		fmt.Printf("创建幂等性组件失败: %v\n", err)
 		return
@@ -96,7 +96,7 @@ func main() {
 }
 
 // startGRPCServer 启动 gRPC 服务器
-func startGRPCServer(logger clog.Logger, idem idempotency.Idempotency) (*grpc.Server, string) {
+func startGRPCServer(logger clog.Logger, idem idem.Idempotency) (*grpc.Server, string) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
@@ -120,7 +120,7 @@ func startGRPCServer(logger clog.Logger, idem idempotency.Idempotency) (*grpc.Se
 }
 
 // startHTTPServer 启动 HTTP 服务器
-func startHTTPServer(logger clog.Logger, idem idempotency.Idempotency) *http.Server {
+func startHTTPServer(logger clog.Logger, idem idem.Idempotency) *http.Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 
@@ -202,7 +202,7 @@ func demonstrateGRPCUnary(addr string) {
 
 	// 第一次调用
 	fmt.Println("第一次调用（创建订单）...")
-	ctx1 := metadata.AppendToOutgoingContext(ctx, "x-idempotency-key", "grpc-order-001")
+	ctx1 := metadata.AppendToOutgoingContext(ctx, "x-idem-key", "grpc-order-001")
 	resp1, err := client.CreateOrder(ctx1, &pb.CreateOrderRequest{
 		IdempotencyKey: "grpc-order-001",
 		OrderId:        "order-001",
@@ -218,7 +218,7 @@ func demonstrateGRPCUnary(addr string) {
 
 	// 第二次调用（相同的幂等性键）
 	fmt.Println("\n第二次调用（相同的幂等性键，应该返回缓存）...")
-	ctx2 := metadata.AppendToOutgoingContext(ctx, "x-idempotency-key", "grpc-order-001")
+	ctx2 := metadata.AppendToOutgoingContext(ctx, "x-idem-key", "grpc-order-001")
 	resp2, err := client.CreateOrder(ctx2, &pb.CreateOrderRequest{
 		IdempotencyKey: "grpc-order-001",
 		OrderId:        "order-002",
