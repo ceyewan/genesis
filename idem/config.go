@@ -12,11 +12,13 @@ type DriverType string
 const (
 	// DriverRedis 使用 Redis 作为后端
 	DriverRedis DriverType = "redis"
+	// DriverMemory 使用内存作为后端（仅单机）
+	DriverMemory DriverType = "memory"
 )
 
 // Config 幂等性组件配置
 type Config struct {
-	// Driver 后端类型: "redis" (默认 "redis")
+	// Driver 后端类型: "redis" | "memory" (默认 "redis")
 	Driver DriverType `json:"driver" yaml:"driver"`
 
 	// Prefix Redis Key 前缀，默认 "idem:"
@@ -55,7 +57,7 @@ func (c *Config) validate() error {
 		return ErrConfigNil
 	}
 	switch c.Driver {
-	case DriverRedis:
+	case DriverRedis, DriverMemory:
 		return nil
 	default:
 		return xerrors.New("idem: unsupported driver: " + string(c.Driver))

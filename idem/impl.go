@@ -3,6 +3,7 @@ package idem
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
@@ -14,6 +15,8 @@ type idem struct {
 	store  Store
 	logger clog.Logger
 }
+
+const processedMarker = "1"
 
 // newIdempotency 创建幂等性组件实例（内部函数）
 func newIdempotency(cfg *Config, store Store, logger clog.Logger) Idempotency {
@@ -117,4 +120,74 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 	}
 
 	return result, nil
+}
+
+// Consume 用于消息消费的幂等处理
+func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn func(ctx context.Context) error) (bool, error) {
+	if key == "" {
+		return false, ErrKeyEmpty
+	}
+
+	if ttl <= 0 {
+		ttl = i.cfg.DefaultTTL
+	}
+
+	_, err := i.store.GetResult(ctx, key)
+	if err == nil {
+		if i.logger != nil {
+			i.logger.Debug("idem consume hit", clog.String("key", key))
+		}
+		return false, nil
+	}
+	if err != ErrResultNotFound {
+		if i.logger != nil {
+			i.logger.Error("failed to get consume marker", clog.Error(err), clog.String("key", key))
+		}
+		return false, err
+	}
+
+	locked, err := i.store.Lock(ctx, key, i.cfg.LockTTL)
+	if err != nil {
+		if i.logger != nil {
+			i.logger.Error("failed to acquire consume lock", clog.Error(err), clog.String("key", key))
+		}
+		return false, err
+	}
+	if !locked {
+		if i.logger != nil {
+			i.logger.Debug("concurrent consume detected", clog.String("key", key))
+		}
+		return false, ErrConcurrentRequest
+	}
+
+	lockReleased := false
+	defer func() {
+		if lockReleased {
+			return
+		}
+		if err := i.store.Unlock(ctx, key); err != nil && i.logger != nil {
+			i.logger.Error("failed to unlock after consume failure", clog.Error(err), clog.String("key", key))
+		}
+	}()
+
+	if err := fn(ctx); err != nil {
+		if i.logger != nil {
+			i.logger.Error("consume execution failed", clog.Error(err), clog.String("key", key))
+		}
+		return false, err
+	}
+
+	if err := i.store.SetResult(ctx, key, []byte(processedMarker), ttl); err != nil {
+		if i.logger != nil {
+			i.logger.Error("failed to set consume marker", clog.Error(err), clog.String("key", key))
+		}
+		return false, err
+	}
+	lockReleased = true
+
+	if i.logger != nil {
+		i.logger.Debug("consume completed", clog.String("key", key))
+	}
+
+	return true, nil
 }

@@ -17,7 +17,7 @@ import (
 //  2. 已完成（completed）: SetResult() 后的状态
 //  3. 不存在（absent）: 初始状态或 TTL 过期后
 //
-// 默认提供 Redis 实现。
+// 默认提供 Redis / Memory 实现。
 type Store interface {
 	// Lock 尝试获取锁（标记处理中）
 	// 返回 true 表示成功获取锁，false 表示已被其他请求锁定

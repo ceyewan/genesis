@@ -212,10 +212,11 @@ func NewSubscriber(conn NATSConnector, opts ...Option) (Subscriber, error)
 ```go
 package idem // import "github.com/ceyewan/genesis/idem"
 
-幂等组件，基于 Redis。
+幂等组件，支持 Redis / Memory。
 
 type Idempotency interface {
     Execute(ctx, key string, fn func(ctx context.Context) (interface{}, error)) (interface{}, error)
+    Consume(ctx, key string, ttl time.Duration, fn func(ctx context.Context) error) (executed bool, err error)
     GinMiddleware(opts ...MiddlewareOption) interface{}
     UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServerInterceptor
 }

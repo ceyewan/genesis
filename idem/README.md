@@ -7,7 +7,7 @@
 - **多场景支持**：支持手动调用、Gin 中间件、gRPC 拦截器等多种使用方式
 - **结果缓存**：自动缓存执行结果，重复请求直接返回缓存数据
 - **并发控制**：内置分布式锁机制，防止同一幂等键的并发穿透
-- **Redis 后端**：基于 Redis 存储结果与锁
+- **后端可选**：支持 Redis / Memory（内存仅适用于单机）
 - **显式依赖注入**：通过 `connector` 注入 Redis 连接
 
 ## 目录结构
@@ -21,6 +21,7 @@ idem/
 ├── config.go          # 配置定义
 ├── store.go            # 存储接口: Store
 ├── redis.go            # Redis 存储实现
+├── memory.go           # Memory 存储实现
 ├── options.go          # 组件选项: Option, WithLogger(), WithRedisConnector()
 ├── middleware.go       # Gin 中间件
 ├── interceptor.go      # gRPC 拦截器
@@ -107,6 +108,24 @@ func main() {
 }
 ```
 
+### 消息消费（去重）
+
+适用于 MQ 消费端，只需判断是否消费过。
+
+```go
+ok, err := idem.Consume(ctx, key, 30*time.Minute, func(ctx context.Context) error {
+    // 业务逻辑：处理消息
+    return handleMessage(ctx, msg)
+})
+if err != nil {
+    return err
+}
+if !ok {
+    // 已消费过或正在被其他实例处理
+    return nil
+}
+```
+
 ### gRPC 拦截器
 
 适用于 gRPC 服务端，防止重复 RPC 调用。
@@ -142,6 +161,11 @@ type Idempotency interface {
     // 如果 key 不存在，执行 fn 并缓存结果
     Execute(ctx context.Context, key string, fn func(ctx context.Context) (interface{}, error)) (interface{}, error)
 
+    // Consume 执行消息消费的幂等处理
+    // 如果 key 已存在，直接返回 false
+    // 如果 key 正在处理中，返回 ErrConcurrentRequest
+    Consume(ctx context.Context, key string, ttl time.Duration, fn func(ctx context.Context) error) (executed bool, err error)
+
     // GinMiddleware 返回 Gin 中间件
     GinMiddleware(opts ...MiddlewareOption) interface{}
 
@@ -172,7 +196,7 @@ type Store interface {
 
 ```go
 type Config struct {
-    // Driver 后端类型: "redis" (默认 "redis")
+    // Driver 后端类型: "redis" | "memory" (默认 "redis")
     Driver DriverType
 
     // Prefix Redis Key 前缀，默认 "idem:"
@@ -200,3 +224,4 @@ type Config struct {
 2. **TTL 设置**：根据业务对"重复"的定义设置 TTL。例如订单支付可能只需要 1 小时的幂等窗口，而某些财务操作可能需要更久。
 3. **错误处理**：`Execute` 中的 `fn` 如果返回 error，幂等组件通常**不会**缓存结果（除非配置了缓存错误），以便允许重试。
 4. **Gin/gRPC 响应**：中间件模式下，组件会缓存 HTTP/gRPC 的响应体。请注意响应体的大小，避免 Redis 存储压力过大。
+5. **Consume 语义**：`Consume` 仅记录已消费标记，请避免与 `Execute` 共用同一批 key。

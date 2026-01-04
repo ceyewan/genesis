@@ -4,7 +4,7 @@
 // - 统一的 Idempotency 接口，支持手动调用、Gin 中间件、gRPC 拦截器
 // - 结果缓存：自动缓存执行结果，重复请求直接返回缓存数据
 // - 并发控制：内置分布式锁机制，防止同一幂等键的并发穿透
-// - 后端可配置：默认提供 Redis 实现
+// - 后端可配置：支持 Redis / Memory
 // - 与 L0 基础组件（日志）的深度集成
 //
 // ## 基本使用
@@ -38,6 +38,7 @@ package idem
 
 import (
 	"context"
+	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
@@ -72,6 +73,18 @@ type Idempotency interface {
 	//   - 执行结果或缓存的结果
 	//   - 错误：ErrKeyEmpty, ErrConcurrentRequest 等
 	Execute(ctx context.Context, key string, fn func(ctx context.Context) (interface{}, error)) (interface{}, error)
+
+	// Consume 用于消息消费的幂等处理
+	//
+	// 工作流程：
+	//   1. 如果 key 已存在且完成 → 直接返回 false
+	//   2. 如果 key 正在处理中 → 返回 ErrConcurrentRequest
+	//   3. 如果 key 不存在 → 执行 fn 并标记已处理
+	//
+	// 返回：
+	//   - executed: 是否执行了 fn
+	//   - 错误：ErrKeyEmpty, ErrConcurrentRequest 等
+	Consume(ctx context.Context, key string, ttl time.Duration, fn func(ctx context.Context) error) (executed bool, err error)
 
 	// GinMiddleware 创建 Gin 框架中间件
 	//
@@ -181,6 +194,15 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 				clog.Duration("lock_ttl", cfg.LockTTL))
 		}
 		return newIdempotency(cfg, newRedisStore(opt.redisConn, cfg.Prefix), logger), nil
+	case DriverMemory:
+		if logger != nil {
+			logger.Info("creating idem component",
+				clog.String("driver", string(cfg.Driver)),
+				clog.String("prefix", cfg.Prefix),
+				clog.Duration("default_ttl", cfg.DefaultTTL),
+				clog.Duration("lock_ttl", cfg.LockTTL))
+		}
+		return newIdempotency(cfg, newMemoryStore(cfg.Prefix), logger), nil
 	default:
 		return nil, xerrors.New("idem: unsupported driver: " + string(cfg.Driver))
 	}
