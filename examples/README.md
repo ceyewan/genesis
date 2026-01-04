@@ -31,6 +31,7 @@
 - **[breaker](./breaker/)** - 熔断器示例（包含 gRPC 测试）
 - **[registry](./registry/)** - 服务注册发现示例
 - **[grpc-registry](./grpc-registry/)** - gRPC 服务注册发现示例
+- **[registry-stream](./registry-stream/)** - 流式服务发现与 StreamManager 示例
 
 ## 🚀 运行示例
 

@@ -358,6 +358,36 @@ func main() {
 }
 ```
 
+### 6. StreamManager（每实例一条流）
+
+当需要为每个实例维护一条双向流时，使用 StreamManager 自动管理连接、流和实例上下线：
+
+```go
+manager, err := registry.NewStreamManager(reg, registry.StreamManagerConfig{
+    ServiceName: "stream-service",
+    DialOptions: []grpc.DialOption{
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+    },
+    Factory: func(ctx context.Context, conn *grpc.ClientConn, instance *registry.ServiceInstance) (grpc.ClientStream, error) {
+        client := pb.NewTestServiceClient(conn)
+        return client.StreamCall(ctx)
+    },
+})
+if err != nil {
+    logger.Error("failed to create stream manager", clog.Error(err))
+    return
+}
+defer manager.Stop(ctx)
+
+if err := manager.Start(ctx); err != nil {
+    logger.Error("failed to start stream manager", clog.Error(err))
+    return
+}
+
+// 获取当前流快照（instanceID -> stream）
+streams := manager.Streams()
+```
+
 ## 最佳实践
 
 1. **服务命名**：使用有意义的服务名，如 `user-service`、`order-service`
