@@ -251,12 +251,14 @@ package ratelimit // import "github.com/ceyewan/genesis/ratelimit"
 
 type Limiter interface {
     Allow(ctx, key string, limit Limit) (bool, error)
+    AllowN(ctx, key string, limit Limit, n int) (bool, error)
+    Wait(ctx, key string, limit Limit) error
+    Close() error
 }
 
 type Limit struct { Rate float64; Burst int }
 
-func NewStandalone(cfg *StandaloneConfig, opts ...Option) (Limiter, error)
-func NewDistributed(redisConn RedisConnector, cfg *DistributedConfig, opts ...Option) (Limiter, error)
+func New(cfg *Config, opts ...Option) (Limiter, error)
 func Discard() Limiter  // No-op
 ```
 

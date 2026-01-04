@@ -2,16 +2,11 @@ package ratelimit
 
 import (
 	"context"
-	"strings"
 
-	"github.com/ceyewan/genesis/clog"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
-
-// KeyFunc 限流键生成函数类型
-// 从 gRPC 调用上下文中提取限流 Key
-type KeyFunc func(ctx context.Context, fullMethod string) string
 
 // ========================================
 // 服务端拦截器 (Server Interceptor)
@@ -21,7 +16,7 @@ type KeyFunc func(ctx context.Context, fullMethod string) string
 //
 // 参数:
 //   - limiter: 限流器实例
-//   - keyFunc: 从请求中提取限流键的函数，如果为 nil，默认使用方法级别 Key
+//   - keyFunc: 从请求中提取限流键的函数，如果为 nil，默认使用 fullMethod
 //   - limitFunc: 获取限流规则的函数
 //
 // 使用示例:
@@ -29,7 +24,7 @@ type KeyFunc func(ctx context.Context, fullMethod string) string
 //	server := grpc.NewServer(
 //	    grpc.ChainUnaryInterceptor(
 //	        ratelimit.UnaryServerInterceptor(limiter,
-//	            ratelimit.MethodLevelKey(),
+//	            nil,
 //	            func(ctx context.Context, fullMethod string) ratelimit.Limit {
 //	                return ratelimit.Limit{Rate: 100, Burst: 200}
 //	            }),
@@ -37,11 +32,19 @@ type KeyFunc func(ctx context.Context, fullMethod string) string
 //	)
 func UnaryServerInterceptor(
 	limiter Limiter,
-	keyFunc KeyFunc,
+	keyFunc func(ctx context.Context, fullMethod string) string,
 	limitFunc func(ctx context.Context, fullMethod string) Limit,
 ) grpc.UnaryServerInterceptor {
+	if limiter == nil {
+		limiter = Discard()
+	}
 	if keyFunc == nil {
-		keyFunc = MethodLevelKey()
+		keyFunc = defaultGRPCKeyFunc
+	}
+	if limitFunc == nil {
+		limitFunc = func(ctx context.Context, fullMethod string) Limit {
+			return Limit{}
+		}
 	}
 
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
@@ -65,7 +68,7 @@ func UnaryServerInterceptor(
 
 		if !allowed {
 			// 被限流，返回错误
-			return nil, ErrRateLimitExceeded
+			return nil, status.Error(codes.ResourceExhausted, ErrRateLimitExceeded.Error())
 		}
 
 		return handler(ctx, req)
@@ -80,7 +83,7 @@ func UnaryServerInterceptor(
 //
 // 参数:
 //   - limiter: 限流器实例
-//   - keyFunc: 从请求中提取限流键的函数，如果为 nil，默认使用方法级别 Key
+//   - keyFunc: 从请求中提取限流键的函数，如果为 nil，默认使用 fullMethod
 //   - limitFunc: 获取限流规则的函数
 //
 // 使用示例:
@@ -89,7 +92,7 @@ func UnaryServerInterceptor(
 //	    "localhost:9001",
 //	    grpc.WithUnaryInterceptor(
 //	        ratelimit.UnaryClientInterceptor(limiter,
-//	            ratelimit.MethodLevelKey(),
+//	            nil,
 //	            func(ctx context.Context, fullMethod string) ratelimit.Limit {
 //	                return ratelimit.Limit{Rate: 100, Burst: 200}
 //	            }),
@@ -97,11 +100,19 @@ func UnaryServerInterceptor(
 //	)
 func UnaryClientInterceptor(
 	limiter Limiter,
-	keyFunc KeyFunc,
+	keyFunc func(ctx context.Context, fullMethod string) string,
 	limitFunc func(ctx context.Context, fullMethod string) Limit,
 ) grpc.UnaryClientInterceptor {
+	if limiter == nil {
+		limiter = Discard()
+	}
 	if keyFunc == nil {
-		keyFunc = MethodLevelKey()
+		keyFunc = defaultGRPCKeyFunc
+	}
+	if limitFunc == nil {
+		limitFunc = func(ctx context.Context, fullMethod string) Limit {
+			return Limit{}
+		}
 	}
 
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
@@ -125,7 +136,7 @@ func UnaryClientInterceptor(
 
 		if !allowed {
 			// 被限流，返回错误
-			return ErrRateLimitExceeded
+			return status.Error(codes.ResourceExhausted, ErrRateLimitExceeded.Error())
 		}
 
 		return invoker(ctx, method, req, reply, cc, opts...)
@@ -133,77 +144,124 @@ func UnaryClientInterceptor(
 }
 
 // ========================================
-// 内置 KeyFunc 实现
+// 流式拦截器 (Stream Interceptor)
 // ========================================
 
-// ServiceLevelKey 服务级别限流键
-// 从 fullMethod 中提取服务名部分
-// gRPC 方法名格式: "/pkg.Service/Method"
-// 返回: "pkg.Service"
-func ServiceLevelKey() KeyFunc {
-	return func(ctx context.Context, fullMethod string) string {
-		// fullMethod 格式: "/pkg.Service/Method"
-		// 去掉开头的 "/" 后按 "/" 分割，取第二部分（服务名）
-		parts := strings.Split(fullMethod, "/")
-		if len(parts) >= 2 {
-			return parts[1] // 返回 "pkg.Service"
+// StreamServerInterceptor 返回 gRPC 流式调用服务端拦截器
+// 默认在每次 RecvMsg 前进行限流检查；keyFunc 为空时使用 fullMethod
+func StreamServerInterceptor(
+	limiter Limiter,
+	keyFunc func(ctx context.Context, fullMethod string) string,
+	limitFunc func(ctx context.Context, fullMethod string) Limit,
+) grpc.StreamServerInterceptor {
+	if limiter == nil {
+		limiter = Discard()
+	}
+	if keyFunc == nil {
+		keyFunc = defaultGRPCKeyFunc
+	}
+	if limitFunc == nil {
+		limitFunc = func(ctx context.Context, fullMethod string) Limit {
+			return Limit{}
 		}
-		return fullMethod
 	}
-}
 
-// MethodLevelKey 方法级别限流键
-// 返回完整的方法名: "/pkg.Service/Method"
-func MethodLevelKey() KeyFunc {
-	return func(ctx context.Context, fullMethod string) string {
-		return fullMethod
-	}
-}
-
-// IPLevelKey IP 级别限流键
-// 从 gRPC Peer 信息中提取客户端 IP 地址
-// 返回: "ip:10.0.0.1"
-// 如果无法获取 IP，返回: "ip:unknown"
-func IPLevelKey() KeyFunc {
-	return func(ctx context.Context, fullMethod string) string {
-		// 从 peer.Context 中获取客户端地址
-		if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
-			return "ip:" + p.Addr.String()
+	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		wrapped := &serverStreamWrapper{
+			ServerStream: stream,
+			limiter:      limiter,
+			keyFunc:      keyFunc,
+			limitFunc:    limitFunc,
+			fullMethod:   info.FullMethod,
 		}
-		return "ip:unknown"
+		return handler(srv, wrapped)
 	}
 }
 
-// CompositeKey 组合多维度
-// 返回: "service:pkg.Service:method:/pkg.Service/Method"
-func CompositeKey(keyFuncs ...KeyFunc) KeyFunc {
-	return func(ctx context.Context, fullMethod string) string {
-		var result string
-		for i, kf := range keyFuncs {
-			if i > 0 {
-				result += ":"
-			}
-			result += kf(ctx, fullMethod)
+// StreamClientInterceptor 返回 gRPC 流式调用客户端拦截器
+// 默认在每次 SendMsg 前进行限流检查；keyFunc 为空时使用 fullMethod
+func StreamClientInterceptor(
+	limiter Limiter,
+	keyFunc func(ctx context.Context, fullMethod string) string,
+	limitFunc func(ctx context.Context, fullMethod string) Limit,
+) grpc.StreamClientInterceptor {
+	if limiter == nil {
+		limiter = Discard()
+	}
+	if keyFunc == nil {
+		keyFunc = defaultGRPCKeyFunc
+	}
+	if limitFunc == nil {
+		limitFunc = func(ctx context.Context, fullMethod string) Limit {
+			return Limit{}
 		}
-		return result
+	}
+
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		clientStream, err := streamer(ctx, desc, cc, method, opts...)
+		if err != nil {
+			return nil, err
+		}
+		return &clientStreamWrapper{
+			ClientStream: clientStream,
+			limiter:      limiter,
+			keyFunc:      keyFunc,
+			limitFunc:    limitFunc,
+			fullMethod:   method,
+		}, nil
 	}
 }
 
-// ========================================
-// 日志记录辅助
-// ========================================
+func defaultGRPCKeyFunc(ctx context.Context, fullMethod string) string {
+	return fullMethod
+}
 
-// WithKeyLogger 创建带日志记录的拦截器包装器
-// 可用于调试和监控限流行为
-func WithKeyLogger(logger clog.Logger, keyFunc KeyFunc) KeyFunc {
-	if logger == nil {
-		return keyFunc
+type serverStreamWrapper struct {
+	grpc.ServerStream
+	limiter    Limiter
+	keyFunc    func(ctx context.Context, fullMethod string) string
+	limitFunc  func(ctx context.Context, fullMethod string) Limit
+	fullMethod string
+}
+
+func (s *serverStreamWrapper) RecvMsg(m interface{}) error {
+	key := s.keyFunc(s.Context(), s.fullMethod)
+	limit := s.limitFunc(s.Context(), s.fullMethod)
+	if limit.Rate <= 0 || limit.Burst <= 0 {
+		return s.ServerStream.RecvMsg(m)
 	}
-	return func(ctx context.Context, fullMethod string) string {
-		key := keyFunc(ctx, fullMethod)
-		logger.Debug("rate limit key generated",
-			clog.String("method", fullMethod),
-			clog.String("key", key))
-		return key
+
+	allowed, err := s.limiter.Allow(s.Context(), key, limit)
+	if err != nil {
+		return s.ServerStream.RecvMsg(m)
 	}
+	if !allowed {
+		return status.Error(codes.ResourceExhausted, ErrRateLimitExceeded.Error())
+	}
+	return s.ServerStream.RecvMsg(m)
+}
+
+type clientStreamWrapper struct {
+	grpc.ClientStream
+	limiter    Limiter
+	keyFunc    func(ctx context.Context, fullMethod string) string
+	limitFunc  func(ctx context.Context, fullMethod string) Limit
+	fullMethod string
+}
+
+func (s *clientStreamWrapper) SendMsg(m interface{}) error {
+	key := s.keyFunc(s.Context(), s.fullMethod)
+	limit := s.limitFunc(s.Context(), s.fullMethod)
+	if limit.Rate <= 0 || limit.Burst <= 0 {
+		return s.ClientStream.SendMsg(m)
+	}
+
+	allowed, err := s.limiter.Allow(s.Context(), key, limit)
+	if err != nil {
+		return s.ClientStream.SendMsg(m)
+	}
+	if !allowed {
+		return status.Error(codes.ResourceExhausted, ErrRateLimitExceeded.Error())
+	}
+	return s.ClientStream.SendMsg(m)
 }

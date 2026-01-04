@@ -69,7 +69,7 @@ func WithEtcdConnector(conn connector.EtcdConnector) Option
 ### 3.4 RateLimit 组件
 -   **API**:
     -   `New` 逻辑更新，支持通过 `Driver` 字段分发
-    -   保留 `NewStandalone`, `NewDistributed`
+    -   移除导出 `NewStandalone`, `NewDistributed`，仅保留内部 `newStandalone`, `newDistributed`
 -   **Config**: `Mode` 字段迁移/标准化为 `Driver` ("standalone", "distributed")
 -   **Options**: 优化 Connector 注入
 

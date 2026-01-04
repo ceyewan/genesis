@@ -6,137 +6,25 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
-
-// TestMethodLevelKey 测试方法级别 KeyFunc
-func TestMethodLevelKey(t *testing.T) {
-	keyFunc := MethodLevelKey()
-	ctx := context.Background()
-	method := "/pkg.Service/Method"
-
-	key := keyFunc(ctx, method)
-	if key != method {
-		t.Errorf("MethodLevelKey should return method, got: %s", key)
-	}
-}
-
-// TestServiceLevelKey 测试服务级别 KeyFunc
-func TestServiceLevelKey(t *testing.T) {
-	keyFunc := ServiceLevelKey()
-	ctx := context.Background()
-	method := "/pkg.Service/Method"
-
-	key := keyFunc(ctx, method)
-	// 应该返回服务名: "pkg.Service"
-	expected := "pkg.Service"
-	if key != expected {
-		t.Errorf("ServiceLevelKey should return '%s', got: '%s'", expected, key)
-	}
-}
-
-// TestServiceLevelKeyEdgeCases 测试服务级别 KeyFunc 边界情况
-func TestServiceLevelKeyEdgeCases(t *testing.T) {
-	keyFunc := ServiceLevelKey()
-	ctx := context.Background()
-
-	tests := []struct {
-		name     string
-		method   string
-		expected string
-	}{
-		{
-			name:     "normal method",
-			method:   "/pkg.Service/Method",
-			expected: "pkg.Service",
-		},
-		{
-			name:     "method with dots",
-			method:   "/com.example.pkg.Service/Method",
-			expected: "com.example.pkg.Service",
-		},
-		{
-			name:     "invalid format - no slash",
-			method:   "pkg.Service/Method",
-			expected: "Method", // strings.Split 后第二部分是 "Method"
-		},
-		{
-			name:     "invalid format - only service",
-			method:   "/Service",
-			expected: "Service", // 只有一个元素，返回原值去掉 /
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			key := keyFunc(ctx, tt.method)
-			if key != tt.expected {
-				t.Errorf("For method '%s', expected '%s', got: '%s'", tt.method, tt.expected, key)
-			}
-		})
-	}
-}
-
-// TestIPLevelKey 测试 IP 级别 KeyFunc
-func TestIPLevelKey(t *testing.T) {
-	keyFunc := IPLevelKey()
-	ctx := context.Background()
-	method := "/pkg.Service/Method"
-
-	// 没有 Peer 信息时应该返回 "ip:unknown"
-	key := keyFunc(ctx, method)
-	if key != "ip:unknown" {
-		t.Errorf("IPLevelKey without peer should return 'ip:unknown', got: '%s'", key)
-	}
-}
-
-// TestIPLevelKeyWithPeer 测试有 Peer 信息时的 IP 级别 KeyFunc
-func TestIPLevelKeyWithPeer(t *testing.T) {
-	keyFunc := IPLevelKey()
-
-	// 创建带有 Peer 信息的 Context
-	ctx := context.Background()
-
-	// 注意：由于 peer.Context 需要 Peer 对象，这里简化测试
-	// 在实际使用中，gRPC 会自动注入 Peer 信息
-	key := keyFunc(ctx, "/pkg.Service/Method")
-	if key != "ip:unknown" {
-		t.Logf("IPLevelKey returned: %s (expected 'ip:unknown' without peer)", key)
-	}
-}
-
-// TestCompositeKey 测试组合 KeyFunc
-func TestCompositeKey(t *testing.T) {
-	ctx := context.Background()
-	method := "/pkg.Service/Method"
-
-	// 单个 KeyFunc
-	composite := CompositeKey(MethodLevelKey())
-	key := composite(ctx, method)
-	if key != method {
-		t.Errorf("CompositeKey with single func should return method, got: %s", key)
-	}
-
-	// 多个 KeyFunc
-	composite = CompositeKey(
-		MethodLevelKey(),
-		ServiceLevelKey(),
-	)
-	key = composite(ctx, method)
-	if key == "" {
-		t.Error("CompositeKey should return a non-empty key")
-	}
-}
 
 // TestUnaryServerInterceptor 测试服务端拦截器
 func TestUnaryServerInterceptor(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
-	limiter, _ := NewStandalone(&StandaloneConfig{}, WithLogger(logger))
+	limiter, err := New(&Config{Driver: DriverStandalone, Standalone: &StandaloneConfig{}}, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("New should not return error, got: %v", err)
+	}
+	defer limiter.Close()
 
 	limitFunc := func(ctx context.Context, fullMethod string) Limit {
 		return Limit{Rate: 1, Burst: 1}
 	}
 
-	interceptor := UnaryServerInterceptor(limiter, MethodLevelKey(), limitFunc)
+	interceptor := UnaryServerInterceptor(limiter, nil, limitFunc)
 
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return "response", nil
@@ -167,7 +55,7 @@ func TestUnaryServerInterceptorWithDiscard(t *testing.T) {
 		return Limit{Rate: 0, Burst: 0}
 	}
 
-	interceptor := UnaryServerInterceptor(limiter, MethodLevelKey(), limitFunc)
+	interceptor := UnaryServerInterceptor(limiter, nil, limitFunc)
 
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return "response", nil
@@ -188,13 +76,17 @@ func TestUnaryServerInterceptorWithDiscard(t *testing.T) {
 // TestUnaryClientInterceptor 测试客户端拦截器
 func TestUnaryClientInterceptor(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
-	limiter, _ := NewStandalone(&StandaloneConfig{}, WithLogger(logger))
+	limiter, err := New(&Config{Driver: DriverStandalone, Standalone: &StandaloneConfig{}}, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("New should not return error, got: %v", err)
+	}
+	defer limiter.Close()
 
 	limitFunc := func(ctx context.Context, fullMethod string) Limit {
 		return Limit{Rate: 100, Burst: 100}
 	}
 
-	interceptor := UnaryClientInterceptor(limiter, MethodLevelKey(), limitFunc)
+	interceptor := UnaryClientInterceptor(limiter, nil, limitFunc)
 
 	invoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
 		return nil
@@ -203,7 +95,7 @@ func TestUnaryClientInterceptor(t *testing.T) {
 	ctx := context.Background()
 
 	// 模拟调用（不需要真实的连接）
-	err := interceptor(ctx, "/test/Method", "request", "reply", nil, invoker)
+	err = interceptor(ctx, "/test/Method", "request", "reply", nil, invoker)
 	if err != nil {
 		t.Fatalf("Call should succeed, got error: %v", err)
 	}
@@ -212,13 +104,17 @@ func TestUnaryClientInterceptor(t *testing.T) {
 // TestUnaryServerInterceptorNilKeyFunc 测试 nil KeyFunc 时的默认行为
 func TestUnaryServerInterceptorNilKeyFunc(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
-	limiter, _ := NewStandalone(&StandaloneConfig{}, WithLogger(logger))
+	limiter, err := New(&Config{Driver: DriverStandalone, Standalone: &StandaloneConfig{}}, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("New should not return error, got: %v", err)
+	}
+	defer limiter.Close()
 
 	limitFunc := func(ctx context.Context, fullMethod string) Limit {
 		return Limit{Rate: 100, Burst: 100}
 	}
 
-	// 传入 nil KeyFunc，应该使用默认的 MethodLevelKey
+	// 传入 nil KeyFunc，应该使用默认的 fullMethod
 	interceptor := UnaryServerInterceptor(limiter, nil, limitFunc)
 
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
@@ -228,7 +124,7 @@ func TestUnaryServerInterceptorNilKeyFunc(t *testing.T) {
 	ctx := context.Background()
 	info := &grpc.UnaryServerInfo{FullMethod: "/test/Method"}
 
-	_, err := interceptor(ctx, "request", info, handler)
+	_, err = interceptor(ctx, "request", info, handler)
 	if err != nil {
 		t.Fatalf("Call with nil keyFunc should succeed, got error: %v", err)
 	}
@@ -237,14 +133,18 @@ func TestUnaryServerInterceptorNilKeyFunc(t *testing.T) {
 // TestUnaryServerInterceptorInvalidLimit 测试无效限流规则时放行
 func TestUnaryServerInterceptorInvalidLimit(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
-	limiter, _ := NewStandalone(&StandaloneConfig{}, WithLogger(logger))
+	limiter, err := New(&Config{Driver: DriverStandalone, Standalone: &StandaloneConfig{}}, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("New should not return error, got: %v", err)
+	}
+	defer limiter.Close()
 
 	// 返回无效的限流规则
 	limitFunc := func(ctx context.Context, fullMethod string) Limit {
 		return Limit{Rate: 0, Burst: 0}
 	}
 
-	interceptor := UnaryServerInterceptor(limiter, MethodLevelKey(), limitFunc)
+	interceptor := UnaryServerInterceptor(limiter, nil, limitFunc)
 
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return "response", nil
@@ -254,8 +154,126 @@ func TestUnaryServerInterceptorInvalidLimit(t *testing.T) {
 	info := &grpc.UnaryServerInfo{FullMethod: "/test/Method"}
 
 	// 无效限流规则应该放行
-	_, err := interceptor(ctx, "request", info, handler)
+	_, err = interceptor(ctx, "request", info, handler)
 	if err != nil {
 		t.Fatalf("Call with invalid limit should pass through, got error: %v", err)
 	}
+}
+
+func TestStreamServerInterceptor(t *testing.T) {
+	limiter := &sequenceLimiter{allowed: []bool{true, false}}
+	limitFunc := func(ctx context.Context, fullMethod string) Limit {
+		return Limit{Rate: 1, Burst: 1}
+	}
+
+	interceptor := StreamServerInterceptor(limiter, nil, limitFunc)
+
+	stream := &stubServerStream{ctx: context.Background()}
+	info := &grpc.StreamServerInfo{FullMethod: "/test/Method"}
+
+	handler := func(srv interface{}, stream grpc.ServerStream) error {
+		var msg any
+		if err := stream.RecvMsg(&msg); err != nil {
+			return err
+		}
+		if err := stream.RecvMsg(&msg); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	err := interceptor(nil, stream, info, handler)
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("Second RecvMsg should be rate limited with ResourceExhausted, got error: %v", err)
+	}
+	if stream.recvCount != 1 {
+		t.Fatalf("RecvMsg should be called once, got: %d", stream.recvCount)
+	}
+}
+
+func TestStreamClientInterceptor(t *testing.T) {
+	limiter := &sequenceLimiter{allowed: []bool{true, false}}
+	limitFunc := func(ctx context.Context, fullMethod string) Limit {
+		return Limit{Rate: 1, Burst: 1}
+	}
+
+	interceptor := StreamClientInterceptor(limiter, nil, limitFunc)
+
+	stream := &stubClientStream{ctx: context.Background()}
+	streamer := func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		return stream, nil
+	}
+
+	clientStream, err := interceptor(context.Background(), &grpc.StreamDesc{ClientStreams: true}, nil, "/test/Method", streamer)
+	if err != nil {
+		t.Fatalf("Stream interceptor should succeed, got error: %v", err)
+	}
+
+	if err := clientStream.SendMsg("message-1"); err != nil {
+		t.Fatalf("First SendMsg should succeed, got error: %v", err)
+	}
+	if err := clientStream.SendMsg("message-2"); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("Second SendMsg should be rate limited with ResourceExhausted, got error: %v", err)
+	}
+	if stream.sendCount != 1 {
+		t.Fatalf("SendMsg should be called once, got: %d", stream.sendCount)
+	}
+}
+
+type sequenceLimiter struct {
+	allowed []bool
+	index   int
+}
+
+func (l *sequenceLimiter) Allow(ctx context.Context, key string, limit Limit) (bool, error) {
+	if l.index >= len(l.allowed) {
+		return true, nil
+	}
+	allowed := l.allowed[l.index]
+	l.index++
+	return allowed, nil
+}
+
+func (l *sequenceLimiter) AllowN(ctx context.Context, key string, limit Limit, n int) (bool, error) {
+	return l.Allow(ctx, key, limit)
+}
+
+func (l *sequenceLimiter) Wait(ctx context.Context, key string, limit Limit) error {
+	return nil
+}
+
+func (l *sequenceLimiter) Close() error {
+	return nil
+}
+
+type stubServerStream struct {
+	grpc.ServerStream
+	ctx       context.Context
+	recvCount int
+}
+
+func (s *stubServerStream) SetHeader(metadata.MD) error  { return nil }
+func (s *stubServerStream) SendHeader(metadata.MD) error { return nil }
+func (s *stubServerStream) SetTrailer(metadata.MD)       {}
+func (s *stubServerStream) Context() context.Context     { return s.ctx }
+func (s *stubServerStream) SendMsg(m interface{}) error  { return nil }
+func (s *stubServerStream) RecvMsg(m interface{}) error {
+	s.recvCount++
+	return nil
+}
+
+type stubClientStream struct {
+	grpc.ClientStream
+	ctx       context.Context
+	sendCount int
+}
+
+func (s *stubClientStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *stubClientStream) Trailer() metadata.MD         { return nil }
+func (s *stubClientStream) CloseSend() error             { return nil }
+func (s *stubClientStream) Context() context.Context     { return s.ctx }
+func (s *stubClientStream) RecvMsg(m interface{}) error  { return nil }
+func (s *stubClientStream) SendMsg(m interface{}) error {
+	s.sendCount++
+	return nil
 }

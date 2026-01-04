@@ -44,12 +44,12 @@ logger, _ := clog.New(&clog.Config{Level: "info"})
 
 // 创建单机限流器
 limiter, _ := ratelimit.New(&ratelimit.Config{
-    Mode: ratelimit.ModeStandalone,
-    Standalone: ratelimit.StandaloneConfig{
+    Driver: ratelimit.DriverStandalone,
+    Standalone: &ratelimit.StandaloneConfig{
         CleanupInterval: 1 * time.Minute,
         IdleTimeout:     5 * time.Minute,
     },
-}, nil, ratelimit.WithLogger(logger))
+}, ratelimit.WithLogger(logger))
 
 // 定义限流规则：10 QPS，突发 20
 limit := ratelimit.Limit{Rate: 10, Burst: 20}
@@ -84,11 +84,11 @@ defer redisConn.Close()
 
 // 创建分布式限流器
 limiter, _ := ratelimit.New(&ratelimit.Config{
-    Mode: ratelimit.ModeDistributed,
-    Distributed: ratelimit.DistributedConfig{
+    Driver: ratelimit.DriverDistributed,
+    Distributed: &ratelimit.DistributedConfig{
         Prefix: "api:ratelimit:",
     },
-}, redisConn, ratelimit.WithLogger(logger))
+}, ratelimit.WithRedisConnector(redisConn), ratelimit.WithLogger(logger))
 
 // 使用方式与单机模式相同
 allowed, _ := limiter.Allow(ctx, "user:123", limit)
@@ -108,6 +108,9 @@ type Limiter interface {
 
     // Wait 阻塞等待直到获取 1 个令牌
     Wait(ctx context.Context, key string, limit Limit) error
+
+    // Close 释放资源（如后台清理协程）
+    Close() error
 }
 ```
 
@@ -132,9 +135,9 @@ limit := Limit{Rate: 100, Burst: 200}
 
 ```go
 type Config struct {
-    Mode        Mode                // 限流模式：standalone | distributed
-    Standalone  StandaloneConfig    // 单机模式配置
-    Distributed DistributedConfig   // 分布式模式配置
+    Driver      DriverType          // 限流模式：standalone | distributed
+    Standalone  *StandaloneConfig   // 单机模式配置
+    Distributed *DistributedConfig  // 分布式模式配置
 }
 ```
 
@@ -162,8 +165,10 @@ type DistributedConfig struct {
 ```go
 // 为 HTTP API 设置全局限流
 r := gin.New()
-r.Use(ratelimit.GinMiddleware(limiter, nil, func(c *gin.Context) ratelimit.Limit {
-    return ratelimit.Limit{Rate: 1000, Burst: 2000}
+r.Use(ratelimit.GinMiddleware(limiter, &ratelimit.GinMiddlewareOptions{
+    LimitFunc: func(c *gin.Context) ratelimit.Limit {
+        return ratelimit.Limit{Rate: 1000, Burst: 2000}
+    },
 }))
 ```
 
@@ -171,9 +176,14 @@ r.Use(ratelimit.GinMiddleware(limiter, nil, func(c *gin.Context) ratelimit.Limit
 
 ```go
 // 为每个用户设置独立的限流规则
-r.Use(ratelimit.GinMiddlewarePerUser(limiter, func(c *gin.Context) ratelimit.Limit {
-    // 不同用户的限流规则可能不同
-    return ratelimit.Limit{Rate: 100, Burst: 200}
+r.Use(ratelimit.GinMiddleware(limiter, &ratelimit.GinMiddlewareOptions{
+    KeyFunc: func(c *gin.Context) string {
+        return "user:" + c.GetString("user_id")
+    },
+    LimitFunc: func(c *gin.Context) ratelimit.Limit {
+        // 不同用户的限流规则可能不同
+        return ratelimit.Limit{Rate: 100, Burst: 200}
+    },
 }))
 ```
 
@@ -187,24 +197,34 @@ pathLimits := map[string]ratelimit.Limit{
     "/api/upload":  {Rate: 2, Burst: 5},     // 上传接口限流最严格
 }
 
-r.Use(ratelimit.GinMiddlewarePerPath(limiter, pathLimits,
-    ratelimit.Limit{Rate: 50, Burst: 100}))
+r.Use(ratelimit.GinMiddleware(limiter, &ratelimit.GinMiddlewareOptions{
+    KeyFunc: func(c *gin.Context) string {
+        return c.ClientIP() + ":" + c.Request.URL.Path
+    },
+    LimitFunc: func(c *gin.Context) ratelimit.Limit {
+        if limit, ok := pathLimits[c.Request.URL.Path]; ok {
+            return limit
+        }
+        return ratelimit.Limit{Rate: 50, Burst: 100}
+    },
+}))
 ```
 
 ### 4. 自定义限流键
 
 ```go
 // 基于自定义业务逻辑的限流
-r.Use(ratelimit.GinMiddleware(limiter,
-    func(c *gin.Context) string {
+r.Use(ratelimit.GinMiddleware(limiter, &ratelimit.GinMiddlewareOptions{
+    KeyFunc: func(c *gin.Context) string {
         // 可以组合多个维度
         return fmt.Sprintf("user:%s:api:%s",
             c.GetString("user_id"),
             c.Request.URL.Path)
     },
-    func(c *gin.Context) ratelimit.Limit {
+    LimitFunc: func(c *gin.Context) ratelimit.Limit {
         return ratelimit.Limit{Rate: 100, Burst: 200}
-    }))
+    },
+}))
 ```
 
 ## 可观测性
@@ -236,7 +256,8 @@ ratelimit.LabelErrorType // "error_type" - 错误类型
 
 ```go
 // 传入 Logger 进行日志记录
-limiter, err := ratelimit.New(cfg, redisConn,
+limiter, err := ratelimit.New(cfg,
+    ratelimit.WithRedisConnector(redisConn),
     ratelimit.WithLogger(logger))
 ```
 
@@ -265,7 +286,7 @@ if err != nil {
 ### New
 
 ```go
-func New(cfg *Config, redisConn connector.RedisConnector, opts ...Option) (Limiter, error)
+func New(cfg *Config, opts ...Option) (Limiter, error)
 ```
 
 创建限流组件实例（独立模式），这是标准的工厂函数，支持在不依赖容器的情况下独立实例化。
@@ -273,7 +294,6 @@ func New(cfg *Config, redisConn connector.RedisConnector, opts ...Option) (Limit
 **参数**：
 
 - `cfg`: 限流组件配置
-- `redisConn`: Redis 连接器（仅分布式模式需要，单机模式传 nil）
 - `opts`: 可选参数（Logger, Meter）
 
 **根据配置模式自动选择单机或分布式实现**。
@@ -283,13 +303,13 @@ func New(cfg *Config, redisConn connector.RedisConnector, opts ...Option) (Limit
 ```go
 // 单机模式
 limiter, _ := ratelimit.New(&ratelimit.Config{
-    Mode: ratelimit.ModeStandalone,
-}, nil, ratelimit.WithLogger(logger))
+    Driver: ratelimit.DriverStandalone,
+}, ratelimit.WithLogger(logger))
 
 // 分布式模式
 limiter, _ := ratelimit.New(&ratelimit.Config{
-    Mode: ratelimit.ModeDistributed,
-}, redisConn, ratelimit.WithLogger(logger))
+    Driver: ratelimit.DriverDistributed,
+}, ratelimit.WithRedisConnector(redisConn), ratelimit.WithLogger(logger))
 ```
 
 ### 选项函数
@@ -297,6 +317,7 @@ limiter, _ := ratelimit.New(&ratelimit.Config{
 ```go
 func WithLogger(logger clog.Logger) Option
 func WithMeter(meter metrics.Meter) Option
+func WithRedisConnector(redisConn connector.RedisConnector) Option
 ```
 
 ## Gin 中间件
@@ -304,46 +325,49 @@ func WithMeter(meter metrics.Meter) Option
 ### GinMiddleware - 基础中间件
 
 ```go
-func GinMiddleware(
-    limiter Limiter,
-    keyFunc func(*gin.Context) string,      // 提取限流键，nil 时使用客户端 IP
-    limitFunc func(*gin.Context) Limit,     // 获取限流规则
-) gin.HandlerFunc
-```
+type GinMiddlewareOptions struct {
+    WithHeaders bool
+    KeyFunc     func(*gin.Context) string
+    LimitFunc   func(*gin.Context) Limit
+}
 
-### GinMiddlewareWithHeaders - 带响应头的中间件
+func GinMiddleware(limiter Limiter, opts *GinMiddlewareOptions) gin.HandlerFunc
 
-```go
-func GinMiddlewareWithHeaders(
-    limiter Limiter,
-    keyFunc func(*gin.Context) string,
-    limitFunc func(*gin.Context) Limit,
-) gin.HandlerFunc
-
-// 返回的响应头
+// WithHeaders=true 时返回的响应头
 // X-RateLimit-Limit: rate=100.00, burst=200
 // X-RateLimit-Remaining: 0 (被限流时)
 ```
 
-### GinMiddlewarePerUser - 用户级限流
+## gRPC 拦截器
+
+### UnaryServerInterceptor / UnaryClientInterceptor
 
 ```go
-func GinMiddlewarePerUser(
-    limiter Limiter,
-    limitFunc func(*gin.Context) Limit,
-) gin.HandlerFunc
-
-// 从 context 中读取 "userID" 字段进行限流
+server := grpc.NewServer(
+    grpc.ChainUnaryInterceptor(
+        ratelimit.UnaryServerInterceptor(limiter,
+            nil,
+            func(ctx context.Context, fullMethod string) ratelimit.Limit {
+                return ratelimit.Limit{Rate: 100, Burst: 200}
+            }),
+    ),
+)
 ```
 
-### GinMiddlewarePerPath - 路径级限流
+### StreamServerInterceptor / StreamClientInterceptor
+
+流式默认按**每条消息**限流（服务端 RecvMsg / 客户端 SendMsg）。`keyFunc` 为空时使用 `fullMethod` 作为限流键。
 
 ```go
-func GinMiddlewarePerPath(
-    limiter Limiter,
-    pathLimits map[string]Limit,        // 路径 -> 限流规则
-    defaultLimit Limit,                  // 默认限流规则
-) gin.HandlerFunc
+server := grpc.NewServer(
+    grpc.ChainStreamInterceptor(
+        ratelimit.StreamServerInterceptor(limiter,
+            nil,
+            func(ctx context.Context, fullMethod string) ratelimit.Limit {
+                return ratelimit.Limit{Rate: 100, Burst: 200}
+            }),
+    ),
+)
 ```
 
 ## 最佳实践
@@ -397,11 +421,11 @@ if !allowed {
 ```go
 // 确保所有实例使用相同的 Redis 实例和 Prefix
 limiter, _ := ratelimit.New(&ratelimit.Config{
-    Mode: ratelimit.ModeDistributed,
-    Distributed: ratelimit.DistributedConfig{
+    Driver: ratelimit.DriverDistributed,
+    Distributed: &ratelimit.DistributedConfig{
         Prefix: "myservice:ratelimit:", // 命名需要避免冲突
     },
-}, redisConn)
+}, ratelimit.WithRedisConnector(redisConn))
 ```
 
 ## 完整示例
