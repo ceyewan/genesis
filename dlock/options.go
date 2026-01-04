@@ -3,7 +3,6 @@ package dlock
 import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/metrics"
 )
 
 // Option DLock 组件初始化选项函数
@@ -12,7 +11,6 @@ type Option func(*options)
 // options 选项结构（内部使用，小写）
 type options struct {
 	logger         clog.Logger
-	meter          metrics.Meter
 	redisConnector connector.RedisConnector
 	etcdConnector  connector.EtcdConnector
 }
@@ -24,14 +22,6 @@ func WithLogger(l clog.Logger) Option {
 		if l != nil {
 			o.logger = l
 		}
-	}
-}
-
-// WithMeter 注入指标收集器
-// 注意：当前仅保留扩展点，暂未输出指标。
-func WithMeter(m metrics.Meter) Option {
-	return func(o *options) {
-		o.meter = m
 	}
 }
 

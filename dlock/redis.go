@@ -12,14 +12,12 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/metrics"
 )
 
 type redisLocker struct {
 	client *redis.Client
 	cfg    *Config
 	logger clog.Logger
-	meter  metrics.Meter
 	locks  map[string]*redisLockEntry
 	mu     sync.RWMutex
 }
@@ -33,7 +31,7 @@ type redisLockEntry struct {
 }
 
 // newRedisLocker 创建 Redis Locker 实例
-func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger, meter metrics.Meter) (Locker, error) {
+func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger) (Locker, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("redis connector is nil")
 	}
@@ -45,7 +43,6 @@ func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger, me
 		client: conn.GetClient(),
 		cfg:    cfg,
 		logger: logger,
-		meter:  meter,
 		locks:  make(map[string]*redisLockEntry),
 	}, nil
 }
