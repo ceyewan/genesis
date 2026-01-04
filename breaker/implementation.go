@@ -93,6 +93,32 @@ func (cb *circuitBreaker) Execute(ctx context.Context, serviceName string, fn fu
 	return result, err
 }
 
+// executeWithoutFallback 执行受熔断保护的函数，但不执行降级逻辑
+// 仅用于内部流式拦截器等不需要降级的场景
+func (cb *circuitBreaker) executeWithoutFallback(serviceName string, fn func() (interface{}, error)) (interface{}, error) {
+	if serviceName == "" {
+		return nil, ErrKeyEmpty
+	}
+
+	// 获取或创建服务级熔断器
+	breaker := cb.getOrCreateBreaker(serviceName)
+
+	// 执行熔断保护的函数
+	result, err := breaker.Execute(fn)
+
+	// 如果熔断器打开，直接返回错误，不走 fallback
+	if err != nil && xerrors.Is(err, gobreaker.ErrOpenState) {
+		if cb.logger != nil {
+			cb.logger.Warn("circuit breaker open (stream msg)",
+				clog.String("service", serviceName),
+				clog.Error(err))
+		}
+		return nil, ErrOpenState
+	}
+
+	return result, err
+}
+
 // State 获取指定服务的熔断器状态
 func (cb *circuitBreaker) State(serviceName string) (State, error) {
 	if serviceName == "" {

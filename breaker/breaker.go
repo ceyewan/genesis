@@ -61,6 +61,15 @@ type Breaker interface {
 	// 支持 InterceptorOption 配置 Key 生成策略
 	UnaryClientInterceptor(opts ...InterceptorOption) grpc.UnaryClientInterceptor
 
+	// StreamClientInterceptor 返回 gRPC 流式调用客户端拦截器
+	// 支持 InterceptorOption 配置 Key 生成策略
+	//
+	// 流式熔断策略：
+	// 1. 在创建流时进行熔断检查
+	// 2. 在每次 SendMsg/RecvMsg 时进行熔断检查
+	// 3. io.EOF 不计为失败，其他错误计为失败
+	StreamClientInterceptor(opts ...InterceptorOption) grpc.StreamClientInterceptor
+
 	// State 获取指定键的熔断器状态
 	State(key string) (State, error)
 }

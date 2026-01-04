@@ -1,390 +1,108 @@
-# Breaker 组件
+# breaker
 
-Breaker 是 Genesis 微服务框架的熔断器组件，专注于 gRPC 客户端的故障隔离与自动恢复。基于 [gobreaker](https://github.com/sony/gobreaker) 实现，提供轻量级、高性能的熔断保护能力。
+`breaker` 是 Genesis 治理层的核心组件，提供了专注于 gRPC 客户端的故障隔离与自动恢复能力。它基于 [sony/gobreaker](https://github.com/sony/gobreaker) 实现，支持服务级粒度的熔断管理。
 
 ## 特性
 
-- ✅ **故障隔离** - 当下游服务频繁失败时，自动熔断请求，避免级联故障
-- ✅ **自动恢复** - 通过半开状态定期探测，在下游服务恢复后自动闭合熔断器
-- ✅ **轻量化** - 单机模式，基于内存统计，无外部依赖，启动快、性能高
-- ✅ **服务级粒度** - 按目标服务名熔断，不同服务独立管理，互不影响
-- ✅ **灵活降级** - 支持直接快速失败和自定义降级逻辑两种策略
-- ✅ **无侵入集成** - 提供 gRPC Interceptor，业务代码无需修改即可接入熔断保护
-- ✅ **错误处理** - 统一的错误定义与处理
+*   **服务级熔断**：按目标服务名（或自定义 Key）独立管理熔断状态。
+*   **gRPC 集成**：提供 `UnaryClientInterceptor` 和 `StreamClientInterceptor`，无侵入式集成。
+*   **流式熔断支持**：支持细粒度的流式消息熔断（Connect/Send/Recv），并提供灵活的策略配置。
+*   **自动恢复**：支持半开状态（Half-Open）探测，自动从故障中恢复。
+*   **灵活降级**：支持快速失败或自定义降级逻辑（Fallback）。
+*   **可观测性**：集成 Genesis 标准日志（clog）和指标（metrics，待实现）。
 
-## 目录结构（完全扁平化设计）
+## 安装
 
+```bash
+go get github.com/ceyewan/genesis/breaker
 ```
-breaker/
-├── breaker.go          # 核心接口、配置与工厂函数
-├── implementation.go   # 熔断器实现
-├── interceptor.go      # gRPC 拦截器
-├── options.go          # 初始化选项函数
-├── errors.go           # 错误定义（使用 xerrors）
-└── README.md           # 本文件
-```
-
-**设计原则**：完全扁平化设计，所有公开 API 和实现都在根目录，无 `types/` 子包
 
 ## 快速开始
 
-### 基本使用
+### 1. 创建熔断器
 
 ```go
 import (
-    "context"
-    "time"
     "github.com/ceyewan/genesis/breaker"
     "github.com/ceyewan/genesis/clog"
-    "google.golang.org/grpc"
+    "time"
 )
 
-// 创建 Logger
-logger, _ := clog.New(&clog.Config{Level: "info"})
+// 配置熔断规则
+cfg := &breaker.Config{
+    MaxRequests:     5,                // 半开状态下允许的最大请求数
+    Interval:        60 * time.Second, // 统计周期
+    Timeout:         30 * time.Second, // 熔断打开状态持续时间
+    FailureRatio:    0.6,              // 触发熔断的失败率阈值 (60%)
+    MinimumRequests: 10,               // 触发熔断的最小请求数
+}
 
-// 创建熔断器
-brk, _ := breaker.New(&breaker.Config{
-    MaxRequests:     5,              // 半开状态允许 5 个探测请求
-    Interval:        60 * time.Second, // 60 秒统计周期
-    Timeout:         30 * time.Second, // 熔断 30 秒后进入半开状态
-    FailureRatio:    0.6,             // 失败率 60% 触发熔断
-    MinimumRequests: 10,              // 至少 10 个请求才触发熔断
-}, breaker.WithLogger(logger))
+// 创建实例
+brk, err := breaker.New(cfg, breaker.WithLogger(logger))
+```
 
-// 使用 gRPC Interceptor
-conn, _ := grpc.NewClient(
+### 2. 使用 gRPC 拦截器
+
+#### 一元调用 (Unary)
+
+```go
+conn, err := grpc.NewClient(
     "localhost:9001",
     grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
 )
-defer conn.Close()
-
-// 正常使用 gRPC 客户端，熔断器会自动保护
-client := pb.NewYourServiceClient(conn)
-resp, err := client.YourMethod(context.Background(), &pb.Request{})
 ```
 
-### 自定义降级逻辑
+#### 流式调用 (Stream)
+
+流式拦截器支持更细粒度的控制，可以通过 `InterceptorOption` 调整熔断策略。
 
 ```go
-// 创建带降级逻辑的熔断器
-brk, _ := breaker.New(&breaker.Config{
-    MaxRequests:     5,
-    Timeout:         30 * time.Second,
-    FailureRatio:    0.6,
-    MinimumRequests: 10,
-},
-    breaker.WithLogger(logger),
-    breaker.WithFallback(func(ctx context.Context, serviceName string, err error) error {
-        // 返回缓存数据或默认值
-        logger.Warn("circuit breaker open, using fallback",
-            clog.String("service", serviceName),
-            clog.Error(err))
-        // 返回 nil 表示降级成功
-        return nil
-    }),
+conn, err := grpc.NewClient(
+    "localhost:9001",
+    grpc.WithStreamInterceptor(brk.StreamClientInterceptor(
+        // 开启建流熔断 (默认开启)
+        breaker.WithBreakOnCreate(true),
+        // 开启消息级熔断 (默认关闭，建议长连接场景按需开启)
+        breaker.WithBreakOnMessage(true),
+        // 自定义错误分类器 (可选)
+        breaker.WithFailureClassifier(func(err error) bool {
+             // 忽略 Canceled 错误，不计入熔断失败
+            return err != nil && err != io.EOF && status.Code(err) != codes.Canceled
+        }),
+    )),
 )
 ```
-
-## 核心接口
-
-### Breaker 接口
-
-```go
-type Breaker interface {
-    // Execute 执行受熔断保护的函数
-    Execute(ctx context.Context, serviceName string, fn func() (interface{}, error)) (interface{}, error)
-
-    // UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器
-    UnaryClientInterceptor() grpc.UnaryClientInterceptor
-
-    // State 获取指定服务的熔断器状态
-    State(serviceName string) (State, error)
-}
-```
-
-### State 状态
-
-```go
-const (
-    StateClosed   State = iota // 闭合状态（正常）
-    StateHalfOpen              // 半开状态（探测恢复）
-    StateOpen                  // 打开状态（熔断中）
-)
-```
-
-## 配置结构
-
-### Config
-
-```go
-type Config struct {
-    // MaxRequests 半开状态下允许通过的最大请求数（默认：1）
-    MaxRequests uint32
-
-    // Interval 闭合状态下的统计周期（默认：0，不清空统计）
-    Interval time.Duration
-
-    // Timeout 打开状态持续时间（默认：60s）
-    Timeout time.Duration
-
-    // FailureRatio 失败率阈值（默认：0.6，即 60%）
-    FailureRatio float64
-
-    // MinimumRequests 触发熔断的最小请求数（默认：10）
-    MinimumRequests uint32
-}
-```
-
-## 应用场景
-
-### 1. gRPC 客户端保护
-
-```go
-// 为 gRPC 客户端添加熔断保护
-conn, _ := grpc.NewClient(
-    "user-service:9001",
-    grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
-)
-
-client := pb.NewUserServiceClient(conn)
-// 自动受熔断保护
-resp, err := client.GetUser(ctx, &pb.GetUserRequest{ID: "123"})
-```
-
-### 2. 直接使用 Execute 方法
-
-```go
-// 保护任意函数调用
-result, err := brk.Execute(ctx, "payment-service", func() (interface{}, error) {
-    return paymentClient.ProcessPayment(ctx, req)
-})
-```
-
-### 3. 查询熔断器状态
-
-```go
-state, err := brk.State("user-service")
-if err != nil {
-    logger.Error("failed to get breaker state", clog.Error(err))
-}
-
-switch state {
-case breaker.StateClosed:
-    logger.Info("circuit breaker is closed (normal)")
-case breaker.StateHalfOpen:
-    logger.Info("circuit breaker is half-open (probing)")
-case breaker.StateOpen:
-    logger.Warn("circuit breaker is open (circuit broken)")
-}
-```
-
-## 工作原理
-
-### 熔断器状态机
-
-```
-┌─────────┐
-│ Closed  │ ◄──────────────────┐
-│ (正常)  │                    │
-└────┬────┘                    │
-     │                         │
-     │ 失败率 >= 阈值           │ 成功请求 >= MaxRequests
-     │                         │
-     ▼                         │
-┌─────────┐                ┌──┴──────┐
-│  Open   │───────────────►│HalfOpen │
-│ (熔断)  │   Timeout后     │ (探测)  │
-└─────────┘                └─────────┘
-```
-
-### 状态说明
-
-1. **Closed（闭合状态）**
-    - 正常状态，所有请求正常通过
-    - 统计请求成功/失败次数
-    - 当失败率超过阈值时，转换到 Open 状态
-
-2. **Open（打开状态）**
-    - 熔断状态，所有请求被快速拒绝
-    - 不会真正调用下游服务
-    - 可以执行降级逻辑
-    - Timeout 时间后，转换到 HalfOpen 状态
-
-3. **HalfOpen（半开状态）**
-    - 探测状态，允许少量请求通过
-    - 如果请求成功，转换到 Closed 状态
-    - 如果请求失败，转换回 Open 状态
 
 ## 配置说明
 
-### 参数详解
+### 核心配置 (Config)
 
-| 参数              | 类型          | 默认值 | 说明                                 |
-| ----------------- | ------------- | ------ | ------------------------------------ |
-| `MaxRequests`     | uint32        | 1      | 半开状态下允许通过的最大请求数       |
-| `Interval`        | time.Duration | 0      | 闭合状态下的统计周期（0 表示不清空） |
-| `Timeout`         | time.Duration | 60s    | 打开状态持续时间                     |
-| `FailureRatio`    | float64       | 0.6    | 失败率阈值（0.0-1.0）                |
-| `MinimumRequests` | uint32        | 10     | 触发熔断的最小请求数                 |
+| 字段 | 类型 | 说明 | 默认值 |
+| :--- | :--- | :--- | :--- |
+| `MaxRequests` | `uint32` | 半开状态下允许通过的最大请求数 | 1 |
+| `Interval` | `duration` | 闭合状态下的统计周期 (0 表示不清空) | 0 |
+| `Timeout` | `duration` | 打开状态持续时间 (冷却时间) | 60s |
+| `FailureRatio` | `float64` | 触发熔断的失败率阈值 | 0.6 |
+| `MinimumRequests` | `uint32` | 触发熔断的最小请求数 | 10 |
 
-### 配置建议
+### 拦截器选项 (InterceptorOption)
 
-**高可用场景**（宽松熔断）：
+*   `WithKeyFunc(fn KeyFunc)`: 自定义熔断 Key 生成策略（默认使用 `cc.Target()`）。
+*   `WithBreakOnCreate(bool)`: 控制流式调用是否在创建流时进行熔断检查（默认 `true`）。
+*   `WithBreakOnMessage(bool)`: 控制流式调用是否在 `SendMsg`/`RecvMsg` 时进行熔断检查（默认 `false`）。
+*   `WithFailureClassifier(fn)`: 自定义错误判定逻辑，决定哪些错误计入熔断失败。
 
-```go
-&breaker.Config{
-    MaxRequests:     10,
-    Timeout:         30 * time.Second,
-    FailureRatio:    0.7,  // 70% 失败率才熔断
-    MinimumRequests: 20,   // 至少 20 个请求
-}
-```
+## 降级策略 (Fallback)
 
-**快速失败场景**（严格熔断）：
+您可以为熔断器配置 `Fallback` 函数，当熔断器打开时执行自定义逻辑。
+
+> **注意**：流式调用的消息级熔断（`BreakOnMessage`）**不支持** Fallback，以防止静默丢弃消息。熔断器打开时，`SendMsg`/`RecvMsg` 将直接返回错误。
 
 ```go
-&breaker.Config{
-    MaxRequests:     3,
-    Timeout:         10 * time.Second,
-    FailureRatio:    0.5,  // 50% 失败率就熔断
-    MinimumRequests: 5,    // 只需 5 个请求
-}
-```
-
-## 最佳实践
-
-### 1. 合理设置阈值
-
-```go
-// ❌ 错误：阈值过低，容易误触发
-&breaker.Config{
-    FailureRatio:    0.1,  // 10% 失败率就熔断，太敏感
-    MinimumRequests: 2,    // 只需 2 个请求，样本太少
+fallback := func(ctx context.Context, key string, err error) error {
+    // 返回缓存数据或 nil (表示降级成功)
+    return nil
 }
 
-// ✅ 正确：合理的阈值
-&breaker.Config{
-    FailureRatio:    0.5,  // 50% 失败率才熔断
-    MinimumRequests: 10,   // 至少 10 个请求，样本充足
-}
+brk, _ := breaker.New(cfg, breaker.WithFallback(fallback))
 ```
-
-### 2. 使用降级逻辑
-
-```go
-// ✅ 推荐：提供降级逻辑，提升用户体验
-brk, _ := breaker.New(cfg,
-    breaker.WithFallback(func(ctx context.Context, serviceName string, err error) error {
-        // 返回缓存数据
-        cachedData := cache.Get(ctx, "user:123")
-        if cachedData != nil {
-            return nil
-        }
-        // 返回默认值
-        return nil
-    }),
-)
-```
-
-### 4. 日志记录
-
-```go
-// 注入 Logger 以便追踪熔断器行为
-brk, _ := breaker.New(cfg, breaker.WithLogger(logger))
-
-// 日志会自动记录：
-// - 熔断器创建
-// - 状态变更（closed -> open -> half_open -> closed）
-// - 熔断拒绝
-```
-
-## 错误处理
-
-### 错误类型
-
-```go
-// ErrConfigNil - 配置为空
-if err == breaker.ErrConfigNil {
-    // 处理配置错误
-}
-
-// ErrKeyEmpty - 熔断键为空
-if err == breaker.ErrKeyEmpty {
-    // 处理熔断键错误
-}
-
-// ErrOpenState - 熔断器打开
-if errors.Is(err, breaker.ErrOpenState) {
-    // 执行降级逻辑
-}
-```
-
-## 运行示例
-
-```bash
-# 运行示例
-go run examples/breaker/main.go
-
-```
-
-## 与其他组件集成
-
-### 与 Registry 集成
-
-```go
-// 使用服务发现 + 熔断器
-conn, _ := registry.GetConnection(ctx, "user-service",
-    grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
-)
-```
-
-### 与 RateLimit 集成
-
-```go
-// 限流 + 熔断双重保护
-conn, _ := grpc.NewClient(
-    "user-service:9001",
-    grpc.WithChainUnaryInterceptor(
-        ratelimit.UnaryClientInterceptor(limiter),
-        brk.UnaryClientInterceptor(),
-    ),
-)
-```
-
-## 常见问题
-
-### Q: 熔断器和限流器有什么区别？
-
-**A:**
-
-- **限流器（RateLimit）**：控制请求速率，防止过载
-- **熔断器（Breaker）**：检测故障，快速失败，避免级联故障
-
-两者可以配合使用，提供更完善的保护。
-
-### Q: 如何选择合适的 Timeout 值？
-
-**A:**
-
-- 短 Timeout（5-10s）：快速恢复，但可能频繁切换状态
-- 长 Timeout（30-60s）：稳定性好，但恢复较慢
-- 建议：根据下游服务的恢复时间设置，通常 30s 是一个合理的值
-
-### Q: 为什么我的熔断器没有触发？
-
-**A:** 检查以下几点：
-
-1. 请求数是否达到 `MinimumRequests`
-2. 失败率是否超过 `FailureRatio`
-3. 是否正确注入了拦截器
-4. 查看日志确认熔断器是否正常工作
-
-## 参考资料
-
-- [gobreaker 库文档](https://github.com/sony/gobreaker)
-- [Circuit Breaker 模式](https://martinfowler.com/bliki/CircuitBreaker.html)
-- [微服务容错模式](https://docs.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker)
-
-## 许可证
-
-本组件遵循 Genesis 项目的许可证。
