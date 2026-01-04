@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
@@ -17,9 +16,12 @@ func main() {
 
 	// 1. 创建 Logger
 	logger, _ := clog.New(&clog.Config{
-		Level:  "info",
-		Format: "console",
-		Output: "stdout",
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		EnableColor: true,
+		AddSource:   true,
+		SourceRoot:  "genesis",
 	})
 
 	// 2. 创建 Etcd 连接器
@@ -27,26 +29,30 @@ func main() {
 		Endpoints: []string{"localhost:2379"},
 	}, connector.WithLogger(logger))
 	if err != nil {
-		log.Fatalf("Failed to create etcd connector: %v", err)
+		logger.Error("failed to create etcd connector", clog.Error(err))
+		return
 	}
 	defer etcdConn.Close()
 
+	ctx := context.Background()
+	if err := etcdConn.Connect(ctx); err != nil {
+		logger.Error("failed to connect etcd", clog.Error(err))
+		return
+	}
+
 	// 3. 创建 Registry 实例
 	reg, err := registry.New(etcdConn, &registry.Config{
-		Namespace:       "/genesis/services",
-		Schema:          "etcd",
-		DefaultTTL:      30 * time.Second,
-		RetryInterval:   1 * time.Second,
-		EnableCache:     true,
-		CacheExpiration: 10 * time.Second,
+		Namespace:     "/genesis/services",
+		DefaultTTL:    30 * time.Second,
+		RetryInterval: 1 * time.Second,
 	}, registry.WithLogger(logger))
 	if err != nil {
-		log.Fatalf("Failed to create registry: %v", err)
+		logger.Error("failed to create registry", clog.Error(err))
+		return
 	}
 
 	// 4. 延迟关闭 Registry
 	defer reg.Close()
-	ctx := context.Background()
 
 	// 5. 注册服务实例
 	service := &registry.ServiceInstance{
@@ -62,7 +68,8 @@ func main() {
 
 	fmt.Println("1. Registering service instance...")
 	if err := reg.Register(ctx, service, 30*time.Second); err != nil {
-		log.Fatalf("Failed to register service: %v", err)
+		logger.Error("failed to register service", clog.Error(err))
+		return
 	}
 	fmt.Printf("✓ Service registered: %s (ID: %s)\n\n", service.Name, service.ID)
 
@@ -70,7 +77,7 @@ func main() {
 	defer func() {
 		fmt.Println("\n6. Deregistering service...")
 		if err := reg.Deregister(ctx, service.ID); err != nil {
-			log.Printf("Failed to deregister service: %v", err)
+			logger.Error("failed to deregister service", clog.Error(err))
 		} else {
 			fmt.Println("✓ Service deregistered")
 		}
@@ -81,7 +88,8 @@ func main() {
 	time.Sleep(500 * time.Millisecond) // 等待注册生效
 	instances, err := reg.GetService(ctx, "user-service")
 	if err != nil {
-		log.Fatalf("Failed to get service: %v", err)
+		logger.Error("failed to get service", clog.Error(err))
+		return
 	}
 	fmt.Printf("✓ Found %d instance(s):\n", len(instances))
 	for _, inst := range instances {
@@ -97,7 +105,8 @@ func main() {
 
 	eventCh, err := reg.Watch(watchCtx, "user-service")
 	if err != nil {
-		log.Fatalf("Failed to watch service: %v", err)
+		logger.Error("failed to watch service", clog.Error(err))
+		return
 	}
 
 	// 启动事件监听
@@ -129,13 +138,14 @@ func main() {
 	}
 
 	if err := reg.Register(ctx, service2, 30*time.Second); err != nil {
-		log.Fatalf("Failed to register service 2: %v", err)
+		logger.Error("failed to register service 2", clog.Error(err))
+		return
 	}
 	fmt.Printf("✓ Service registered: %s (ID: %s)\n", service2.Name, service2.ID)
 
 	defer func() {
 		if err := reg.Deregister(ctx, service2.ID); err != nil {
-			log.Printf("Failed to deregister service 2: %v", err)
+			logger.Error("failed to deregister service 2", clog.Error(err))
 		}
 	}()
 
@@ -144,7 +154,8 @@ func main() {
 	fmt.Println("\n5. Discovering services again...")
 	instances, err = reg.GetService(ctx, "user-service")
 	if err != nil {
-		log.Fatalf("Failed to get service: %v", err)
+		logger.Error("failed to get service", clog.Error(err))
+		return
 	}
 	fmt.Printf("✓ Found %d instance(s):\n", len(instances))
 	for _, inst := range instances {
@@ -158,7 +169,7 @@ func main() {
 	fmt.Println("\n=== Example Completed ===")
 	fmt.Println("\nKey Features Demonstrated:")
 	fmt.Println("  ✓ Service Registration with TTL and KeepAlive")
-	fmt.Println("  ✓ Service Discovery with Local Cache")
+	fmt.Println("  ✓ Service Discovery")
 	fmt.Println("  ✓ Service Watch with Real-time Events")
 	fmt.Println("  ✓ Multiple Service Instances")
 	fmt.Println("  ✓ Graceful Deregistration")

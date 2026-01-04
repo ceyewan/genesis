@@ -11,7 +11,6 @@
 - **设计原则**：
     - **借用模型**：借用 Etcd 连接器的连接，不负责连接的生命周期
     - **gRPC 原生支持**：实现 gRPC resolver.Builder 接口，支持 `etcd://<service_name>` 解析
-    - **本地缓存**：服务发现内置本地缓存机制，减少对注册中心的直接请求压力
     - **实时监听**：通过 Etcd Watch 机制实时感知服务变化
     - **自动续约**：Lease 机制确保服务可用性，自动处理续租
     - **优雅下线**：Close() 方法自动撤销租约，停止监听器
@@ -50,11 +49,8 @@ etcdConn.Connect(ctx)
 
 // 2. 创建注册组件
 reg, _ := registry.New(etcdConn, &registry.Config{
-    Namespace:       "/genesis/services",
-    Schema:          "etcd",
-    DefaultTTL:      30 * time.Second,
-    EnableCache:     true,
-    CacheExpiration: 10 * time.Second,
+    Namespace:  "/genesis/services",
+    DefaultTTL: 30 * time.Second,
 }, registry.WithLogger(logger))
 defer reg.Close()
 
@@ -121,22 +117,15 @@ type Config struct {
     // Namespace: Etcd Key 前缀，默认 "/genesis/services"
     Namespace string `json:"namespace" yaml:"namespace"`
 
-    // Schema: gRPC resolver 的 schema，默认 "etcd"
-    Schema string `json:"schema" yaml:"schema"`
-
     // DefaultTTL: 默认服务注册租约时长，默认 30s
     DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
 
     // RetryInterval: 重连/重试间隔，默认 1s
     RetryInterval time.Duration `json:"retry_interval" yaml:"retry_interval"`
-
-    // EnableCache: 是否启用本地服务发现缓存，默认 true
-    EnableCache bool `json:"enable_cache" yaml:"enable_cache"`
-
-    // CacheExpiration: 本地缓存过期时间，默认 10s
-    CacheExpiration time.Duration `json:"cache_expiration" yaml:"cache_expiration"`
 }
 ```
+
+说明：gRPC resolver 的 scheme 固定为 `etcd`，无需额外配置。
 
 ## 使用模式
 
@@ -416,12 +405,9 @@ func main() {
     }
 
     // 3. 创建 Registry 实例
-    reg, err := registry.New(etcdConn, &registry.Config{
-        Namespace:       "/genesis/services",
-        Schema:          "etcd",
-        DefaultTTL:      30 * time.Second,
-        EnableCache:     true,
-        CacheExpiration: 10 * time.Second,
+reg, err := registry.New(etcdConn, &registry.Config{
+        Namespace:  "/genesis/services",
+        DefaultTTL: 30 * time.Second,
     }, registry.WithLogger(logger))
     if err != nil {
         panic(err)
@@ -463,9 +449,9 @@ func main() {
     select {}
 }
 
-func watchUserService(reg *registry.Registry, logger clog.Logger) {
+func watchUserService(reg registry.Registry, logger clog.Logger) {
     ctx := context.Background()
-    eventCh, err := (*reg).Watch(ctx, "user-service")
+    eventCh, err := reg.Watch(ctx, "user-service")
     if err != nil {
         logger.Error("failed to watch user service", clog.Error(err))
         return
@@ -485,11 +471,11 @@ func watchUserService(reg *registry.Registry, logger clog.Logger) {
     }
 }
 
-func callUserService(reg *registry.Registry, logger clog.Logger) {
+func callUserService(reg registry.Registry, logger clog.Logger) {
     ctx := context.Background()
 
     // 方式一：使用 GetConnection
-    conn, err := (*reg).GetConnection(ctx, "user-service")
+    conn, err := reg.GetConnection(ctx, "user-service")
     if err != nil {
         logger.Error("failed to get user service connection", clog.Error(err))
         return

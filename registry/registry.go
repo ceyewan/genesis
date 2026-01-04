@@ -3,7 +3,6 @@
 // registry 组件是 Genesis 治理层的核心组件，它在 Etcd 连接器的基础上提供了：
 // - 服务注册与发现能力
 // - 实时服务变化监听
-// - 本地缓存机制提升性能
 // - gRPC Resolver 集成，支持 `etcd://<service_name>` 解析
 // - 自动租约续约和优雅下线
 // - 与 L0 基础组件（日志、指标、错误）的深度集成
@@ -15,10 +14,8 @@
 //	etcdConn.Connect(ctx)
 //
 //	reg, _ := registry.New(etcdConn, &registry.Config{
-//		Namespace:       "/genesis/services",
-//		DefaultTTL:      30 * time.Second,
-//		EnableCache:     true,
-//		CacheExpiration: 10 * time.Second,
+//		Namespace:  "/genesis/services",
+//		DefaultTTL: 30 * time.Second,
 //	}, registry.WithLogger(logger))
 //	defer reg.Close()
 //
@@ -67,7 +64,6 @@
 // - **借用模型**：registry 组件借用 Etcd 连接器的连接，不负责连接的生命周期
 // - **显式依赖**：通过构造函数显式注入连接器和选项
 // - **gRPC 原生支持**：深度集成 gRPC 生态，提供开箱即用的服务发现
-// - **高性能**：本地缓存 + 实时监听，减少对注册中心的直接请求
 // - **可观测性**：集成 clog 和 metrics，提供完整的日志和指标能力
 package registry
 
@@ -77,6 +73,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
@@ -86,8 +83,8 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/resolver"
 )
 
 // New 创建 Registry 实例（基于 Etcd）
@@ -127,17 +124,11 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 	if cfg.Namespace == "" {
 		cfg.Namespace = "/genesis/services"
 	}
-	if cfg.Schema == "" {
-		cfg.Schema = "etcd"
-	}
 	if cfg.DefaultTTL == 0 {
 		cfg.DefaultTTL = 30 * time.Second
 	}
 	if cfg.RetryInterval == 0 {
 		cfg.RetryInterval = 1 * time.Second
-	}
-	if cfg.CacheExpiration == 0 {
-		cfg.CacheExpiration = 10 * time.Second
 	}
 
 	if opt.logger == nil {
@@ -149,22 +140,17 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 	}
 
 	r := &etcdRegistry{
-		client:   client,
-		cfg:      cfg,
-		logger:   opt.logger,
-		meter:    opt.meter,
-		leases:   make(map[string]clientv3.LeaseID),
+		client:     client,
+		cfg:        cfg,
+		logger:     opt.logger,
+		meter:      opt.meter,
+		leases:     make(map[string]clientv3.LeaseID),
 		keepAlives: make(map[string]*leaseKeepAlive),
-		watchers: make(map[string]context.CancelFunc),
-		cache:    make(map[string][]*ServiceInstance),
-		stopChan: make(chan struct{}),
+		watchers:   make(map[uint64]context.CancelFunc),
+		stopChan:   make(chan struct{}),
 	}
 
-	// 创建 resolver builder
-	r.resolverBuilder = newEtcdResolverBuilder(r, cfg.Schema)
-
-	// 注册 gRPC resolver
-	resolver.Register(r.resolverBuilder)
+	setDefaultRegistry(r)
 
 	return r, nil
 }
@@ -176,6 +162,7 @@ type leaseKeepAlive struct {
 	cancel      context.CancelFunc
 	serviceID   string
 	serviceName string
+	closed      uint32
 }
 
 // etcdRegistry 基于 Etcd 的服务注册发现实现
@@ -186,16 +173,13 @@ type etcdRegistry struct {
 	meter  metrics.Meter
 
 	// 后台任务管理
-	leases      map[string]clientv3.LeaseID   // serviceID -> leaseID (废弃，保留用于兼容)
-	keepAlives  map[string]*leaseKeepAlive    // serviceID -> keepAlive info
-	watchers    map[string]context.CancelFunc // serviceName -> cancel
-	cache       map[string][]*ServiceInstance // serviceName -> instances
-	stopChan    chan struct{}
+	leases     map[string]clientv3.LeaseID   // serviceID -> leaseID (废弃，保留用于兼容)
+	keepAlives map[string]*leaseKeepAlive    // serviceID -> keepAlive info
+	watchers   map[uint64]context.CancelFunc // watchID -> cancel
+	watchSeq   uint64
+	stopChan   chan struct{}
 	wg          sync.WaitGroup
 	mu          sync.RWMutex
-
-	// resolver builder
-	resolverBuilder *etcdResolverBuilder
 }
 
 // Register 注册服务实例
@@ -254,7 +238,7 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 	}
 
 	// 启动 KeepAlive 后台协程
-	keepAliveCtx, keepAliveCancel := context.WithCancel(ctx)
+	keepAliveCtx, keepAliveCancel := context.WithCancel(context.Background())
 	keepAliveCh, err := r.client.KeepAlive(keepAliveCtx, lease.ID)
 	if err != nil {
 		keepAliveCancel()
@@ -304,6 +288,7 @@ func (r *etcdRegistry) Deregister(ctx context.Context, serviceID string) error {
 	}
 	leaseID := ka.leaseID
 	// 取消 KeepAlive 协程
+	atomic.StoreUint32(&ka.closed, 1)
 	ka.cancel()
 	delete(r.keepAlives, serviceID)
 	delete(r.leases, serviceID)
@@ -329,16 +314,6 @@ func (r *etcdRegistry) GetService(ctx context.Context, serviceName string) ([]*S
 		return nil, ErrInvalidServiceInstance
 	}
 
-	// 如果启用缓存，先尝试从缓存获取
-	if r.cfg.EnableCache {
-		r.mu.RLock()
-		instances, exists := r.cache[serviceName]
-		r.mu.RUnlock()
-		if exists && len(instances) > 0 {
-			return instances, nil
-		}
-	}
-
 	// 从 Etcd 查询
 	prefix := r.buildPrefix(serviceName)
 	resp, err := r.client.Get(ctx, prefix, clientv3.WithPrefix())
@@ -361,13 +336,6 @@ func (r *etcdRegistry) GetService(ctx context.Context, serviceName string) ([]*S
 		instances = append(instances, &instance)
 	}
 
-	// 更新缓存
-	if r.cfg.EnableCache && len(instances) > 0 {
-		r.mu.Lock()
-		r.cache[serviceName] = instances
-		r.mu.Unlock()
-	}
-
 	return instances, nil
 }
 
@@ -386,7 +354,9 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 
 	// 保存 cancel 函数
 	r.mu.Lock()
-	r.watchers[serviceName] = cancel
+	r.watchSeq++
+	watchID := r.watchSeq
+	r.watchers[watchID] = cancel
 	r.mu.Unlock()
 
 	// 启动 watch goroutine
@@ -394,6 +364,11 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 	go func() {
 		defer r.wg.Done()
 		defer close(eventCh)
+		defer func() {
+			r.mu.Lock()
+			delete(r.watchers, watchID)
+			r.mu.Unlock()
+		}()
 
 		var lastRev int64 = 0
 		retryInterval := r.cfg.RetryInterval
@@ -469,11 +444,6 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 								Type:    EventTypePut,
 								Service: &instance,
 							}
-							// 更新缓存（带 revision 版本控制）
-							if r.cfg.EnableCache {
-								r.updateCache(serviceName, &instance, true, ev.Kv.ModRevision)
-							}
-
 						case clientv3.EventTypeDelete:
 							// DELETE 事件：从 key 中提取服务 ID
 							// Key 格式: /namespace/service_name/instance_id
@@ -485,10 +455,6 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 							event = ServiceEvent{
 								Type:    EventTypeDelete,
 								Service: &instance,
-							}
-							// 更新缓存（带 revision 版本控制）
-							if r.cfg.EnableCache {
-								r.updateCache(serviceName, &instance, false, ev.Kv.ModRevision)
 							}
 						}
 
@@ -521,9 +487,10 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 }
 
 // GetConnection 获取到指定服务的 gRPC 连接
+// 当 ctx 带有 deadline 时，会主动触发连接并等待 Ready 或超时返回
 func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
 	// 使用 resolver builder 创建连接
-	target := fmt.Sprintf("%s:///%s", r.cfg.Schema, serviceName)
+	target := fmt.Sprintf("%s:///%s", resolverScheme, serviceName)
 
 	// 合并默认选项
 	defaultOpts := []grpc.DialOption{
@@ -540,7 +507,36 @@ func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, op
 		return nil, xerrors.Wrap(err, "dial failed")
 	}
 
+	if ctx != nil {
+		if _, hasDeadline := ctx.Deadline(); hasDeadline {
+			if err := waitForReady(ctx, conn); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+		}
+	}
+
 	return conn, nil
+}
+
+func waitForReady(ctx context.Context, conn *grpc.ClientConn) error {
+	if ctx.Err() != nil {
+		return xerrors.Wrap(ctx.Err(), "connect canceled")
+	}
+
+	conn.Connect()
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready {
+			return nil
+		}
+		if !conn.WaitForStateChange(ctx, state) {
+			if ctx.Err() != nil {
+				return xerrors.Wrap(ctx.Err(), "wait for connection ready")
+			}
+			return xerrors.New("wait for connection ready")
+		}
+	}
 }
 
 // Close 停止后台任务并清理资源（撤销租约、停止监听）
@@ -562,31 +558,37 @@ func (r *etcdRegistry) Close() error {
 	close(r.stopChan)
 	r.mu.Unlock()
 
+	var leaseSnapshot map[string]clientv3.LeaseID
+
 	// 取消所有 watchers
 	r.mu.Lock()
-	for serviceName, cancelFunc := range r.watchers {
+	for _, cancelFunc := range r.watchers {
 		cancelFunc()
-		delete(r.watchers, serviceName)
 	}
+	r.watchers = make(map[uint64]context.CancelFunc)
+
 	// 取消所有 KeepAlive 协程
 	for serviceID, ka := range r.keepAlives {
+		atomic.StoreUint32(&ka.closed, 1)
 		ka.cancel()
 		delete(r.keepAlives, serviceID)
-		delete(r.leases, serviceID)
 	}
+
+	leaseSnapshot = make(map[string]clientv3.LeaseID, len(r.leases))
+	for serviceID, leaseID := range r.leases {
+		leaseSnapshot[serviceID] = leaseID
+	}
+	r.leases = make(map[string]clientv3.LeaseID)
 	r.mu.Unlock()
 
 	// 撤销所有租约
-	r.mu.Lock()
-	for serviceID, leaseID := range r.leases {
+	for serviceID, leaseID := range leaseSnapshot {
 		if _, err := r.client.Revoke(ctx, leaseID); err != nil {
 			r.logger.Warn("failed to revoke lease during shutdown",
 				clog.String("service_id", serviceID),
 				clog.Error(err))
 		}
 	}
-	r.leases = make(map[string]clientv3.LeaseID)
-	r.mu.Unlock()
 
 	// 等待所有 goroutine 结束
 	r.wg.Wait()
@@ -622,6 +624,15 @@ func (r *etcdRegistry) monitorKeepAlive(ka *leaseKeepAlive) {
 
 		case kaResp, ok := <-ka.keepAliveCh:
 			if !ok {
+				// 正常关闭（Deregister/Close）不应记录为错误
+				if atomic.LoadUint32(&ka.closed) == 1 {
+					r.logger.Info("keepalive channel closed by caller",
+						clog.String("service_id", serviceID),
+						clog.String("service_name", serviceName),
+						clog.Int64("lease_id", int64(leaseID)))
+					return
+				}
+
 				// KeepAlive channel 关闭，表示租约失效或 Etcd 连接断开
 				r.logger.Error("keepalive channel closed, lease expired or connection lost",
 					clog.String("service_id", serviceID),
@@ -655,40 +666,4 @@ func (r *etcdRegistry) monitorKeepAlive(ka *leaseKeepAlive) {
 // buildPrefix 构建前缀
 func (r *etcdRegistry) buildPrefix(serviceName string) string {
 	return fmt.Sprintf("%s/%s/", r.cfg.Namespace, serviceName)
-}
-
-// updateCache 更新缓存（带版本控制）
-// revision: Etcd ModRevision，用于判断事件的新旧，避免旧数据覆盖新数据
-func (r *etcdRegistry) updateCache(serviceName string, instance *ServiceInstance, isAdd bool, revision int64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	instances, exists := r.cache[serviceName]
-	if !exists {
-		if isAdd {
-			r.cache[serviceName] = []*ServiceInstance{instance}
-		}
-		return
-	}
-
-	if isAdd {
-		// 检查是否已存在
-		for i, inst := range instances {
-			if inst.ID == instance.ID {
-				// 如果已有实例，直接更新（Etcd 已保证 revision 顺序）
-				instances[i] = instance
-				return
-			}
-		}
-		r.cache[serviceName] = append(instances, instance)
-	} else {
-		// 删除
-		newInstances := make([]*ServiceInstance, 0, len(instances))
-		for _, inst := range instances {
-			if inst.ID != instance.ID {
-				newInstances = append(newInstances, inst)
-			}
-		}
-		r.cache[serviceName] = newInstances
-	}
 }
