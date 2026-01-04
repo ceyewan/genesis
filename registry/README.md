@@ -205,7 +205,7 @@ import (
 
 // Registry 初始化时已自动注册 gRPC Resolver Builder
 // 使用标准 gRPC Dial
-conn, err := grpc.Dial(
+conn, err := grpc.NewClient(
     "etcd:///user-service",
     grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
     grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -292,8 +292,8 @@ reg, err := registry.New(etcdConn, cfg,
 ### 配置负载均衡
 
 ```go
-// 在 grpc.Dial 中指定负载均衡策略
-conn, err := grpc.Dial(
+// 在 grpc.NewClient 中指定负载均衡策略
+conn, err := grpc.NewClient(
     "etcd:///user-service",
     grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
     grpc.WithTransportCredentials(insecure.NewCredentials()),

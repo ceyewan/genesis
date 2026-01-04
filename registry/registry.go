@@ -53,7 +53,7 @@
 //	conn, err := reg.GetConnection(ctx, "user-service")
 //
 //	// 方式二：使用原生 gRPC Dial
-//	conn, err := grpc.Dial(
+//	conn, err := grpc.NewClient(
 //		"etcd:///user-service",
 //		grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
 //		grpc.WithTransportCredentials(insecure.NewCredentials()),

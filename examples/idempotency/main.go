@@ -184,7 +184,7 @@ func demonstrateHTTP() {
 
 // demonstrateGRPCUnary 演示 gRPC 一元拦截器
 func demonstrateGRPCUnary(addr string) {
-	conn, err := grpc.Dial(
+	conn, err := grpc.NewClient(
 		addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)

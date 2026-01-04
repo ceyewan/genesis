@@ -6,7 +6,6 @@
 // - 自动故障隔离和自动恢复（通过半开状态探测）
 // - 灵活的降级策略（快速失败或自定义降级逻辑）
 // - gRPC Interceptor 无侵入集成
-// - 与 L0 基础组件（日志、指标）的深度集成
 //
 // ## 基本使用
 //
@@ -20,7 +19,7 @@
 //	}, breaker.WithLogger(logger))
 //
 //	// 使用 gRPC Interceptor
-//	conn, _ := grpc.Dial(
+//	conn, _ := grpc.NewClient(
 //		"localhost:9001",
 //		grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
 //	)
@@ -34,15 +33,6 @@
 //			// 返回缓存数据或默认值
 //			return nil
 //		}),
-//	)
-//
-// ## 可观测性
-//
-// 通过注入 Logger 和 Meter 实现统一的日志和指标收集：
-//
-//	brk, _ := breaker.New(cfg,
-//		breaker.WithLogger(logger),
-//		breaker.WithMeter(meter),
 //	)
 package breaker
 
@@ -70,9 +60,6 @@ type Breaker interface {
 	// UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器
 	// 支持 InterceptorOption 配置 Key 生成策略
 	UnaryClientInterceptor(opts ...InterceptorOption) grpc.UnaryClientInterceptor
-
-	// StreamClientInterceptor 返回 gRPC 流式调用客户端拦截器
-	StreamClientInterceptor() grpc.StreamClientInterceptor
 
 	// State 获取指定键的熔断器状态
 	State(key string) (State, error)
@@ -140,7 +127,7 @@ type Config struct {
 //
 // 参数:
 //   - cfg: 熔断器配置
-//   - opts: 可选参数 (Logger, Meter, Fallback)
+//   - opts: 可选参数 (Logger, Fallback)
 //
 // 使用示例:
 //
@@ -177,5 +164,5 @@ func New(cfg *Config, opts ...Option) (Breaker, error) {
 			clog.Int("minimum_requests", int(cfg.MinimumRequests)))
 	}
 
-	return newBreaker(cfg, logger, opt.meter, opt.fallback)
+	return newBreaker(cfg, logger, opt.fallback)
 }

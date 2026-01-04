@@ -88,7 +88,7 @@ func UnaryServerInterceptor(
 //
 // 使用示例:
 //
-//	conn, _ := grpc.Dial(
+//	conn, _ := grpc.NewClient(
 //	    "localhost:9001",
 //	    grpc.WithUnaryInterceptor(
 //	        ratelimit.UnaryClientInterceptor(limiter,

@@ -10,7 +10,6 @@ Breaker 是 Genesis 微服务框架的熔断器组件，专注于 gRPC 客户端
 - ✅ **服务级粒度** - 按目标服务名熔断，不同服务独立管理，互不影响
 - ✅ **灵活降级** - 支持直接快速失败和自定义降级逻辑两种策略
 - ✅ **无侵入集成** - 提供 gRPC Interceptor，业务代码无需修改即可接入熔断保护
-- ✅ **指标埋点** - 完整的可观测性支持（OpenTelemetry）
 - ✅ **错误处理** - 统一的错误定义与处理
 
 ## 目录结构（完全扁平化设计）
@@ -22,7 +21,6 @@ breaker/
 ├── interceptor.go      # gRPC 拦截器
 ├── options.go          # 初始化选项函数
 ├── errors.go           # 错误定义（使用 xerrors）
-├── metrics.go          # 指标常量定义
 └── README.md           # 本文件
 ```
 
@@ -54,10 +52,9 @@ brk, _ := breaker.New(&breaker.Config{
 }, breaker.WithLogger(logger))
 
 // 使用 gRPC Interceptor
-conn, _ := grpc.Dial(
+conn, _ := grpc.NewClient(
     "localhost:9001",
     grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
-    grpc.WithStreamInterceptor(brk.StreamClientInterceptor()),
 )
 defer conn.Close()
 
@@ -99,9 +96,6 @@ type Breaker interface {
 
     // UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器
     UnaryClientInterceptor() grpc.UnaryClientInterceptor
-
-    // StreamClientInterceptor 返回 gRPC 流式调用客户端拦截器
-    StreamClientInterceptor() grpc.StreamClientInterceptor
 
     // State 获取指定服务的熔断器状态
     State(serviceName string) (State, error)
@@ -147,7 +141,7 @@ type Config struct {
 
 ```go
 // 为 gRPC 客户端添加熔断保护
-conn, _ := grpc.Dial(
+conn, _ := grpc.NewClient(
     "user-service:9001",
     grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
 )
@@ -257,32 +251,6 @@ case breaker.StateOpen:
 }
 ```
 
-## 指标说明
-
-### 可用指标
-
-| 指标名                             | 类型      | 标签                          | 说明               |
-| ---------------------------------- | --------- | ----------------------------- | ------------------ |
-| `breaker_requests_total`           | Counter   | service, method, result       | 请求总数           |
-| `breaker_success_total`            | Counter   | service                       | 成功请求数         |
-| `breaker_failures_total`           | Counter   | service                       | 失败请求数         |
-| `breaker_rejects_total`            | Counter   | service                       | 被熔断拒绝的请求数 |
-| `breaker_state_changes_total`      | Counter   | service, from_state, to_state | 状态变更次数       |
-| `breaker_request_duration_seconds` | Histogram | service                       | 请求耗时           |
-
-### Prometheus 查询示例
-
-```promql
-# 查看各服务的熔断拒绝率
-rate(breaker_rejects_total[1m]) / rate(breaker_requests_total[1m])
-
-# 查看状态变更频率
-rate(breaker_state_changes_total{to_state="open"}[5m])
-
-# 查看请求成功率
-rate(breaker_success_total[1m]) / rate(breaker_requests_total[1m])
-```
-
 ## 最佳实践
 
 ### 1. 合理设置阈值
@@ -318,26 +286,6 @@ brk, _ := breaker.New(cfg,
 )
 ```
 
-### 3. 监控和告警
-
-```yaml
-# Prometheus 告警规则示例
-groups:
-    - name: breaker
-      rules:
-          - alert: CircuitBreakerOpen
-            expr: breaker_state_changes_total{to_state="open"} > 0
-            for: 1m
-            annotations:
-                summary: "熔断器打开: {{ $labels.service }}"
-
-          - alert: HighRejectRate
-            expr: rate(breaker_rejects_total[5m]) / rate(breaker_requests_total[5m]) > 0.5
-            for: 2m
-            annotations:
-                summary: "熔断拒绝率过高: {{ $labels.service }}"
-```
-
 ### 4. 日志记录
 
 ```go
@@ -360,9 +308,9 @@ if err == breaker.ErrConfigNil {
     // 处理配置错误
 }
 
-// ErrServiceNameEmpty - 服务名为空
-if err == breaker.ErrServiceNameEmpty {
-    // 处理服务名错误
+// ErrKeyEmpty - 熔断键为空
+if err == breaker.ErrKeyEmpty {
+    // 处理熔断键错误
 }
 
 // ErrOpenState - 熔断器打开
@@ -377,8 +325,6 @@ if errors.Is(err, breaker.ErrOpenState) {
 # 运行示例
 go run examples/breaker/main.go
 
-# 查看 Prometheus 指标
-curl http://localhost:9090/metrics | grep breaker
 ```
 
 ## 与其他组件集成
@@ -387,9 +333,7 @@ curl http://localhost:9090/metrics | grep breaker
 
 ```go
 // 使用服务发现 + 熔断器
-conn, _ := registry.GetConnection(ctx, "user-service")
-conn = grpc.Dial(
-    conn.Target(),
+conn, _ := registry.GetConnection(ctx, "user-service",
     grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
 )
 ```
@@ -398,7 +342,7 @@ conn = grpc.Dial(
 
 ```go
 // 限流 + 熔断双重保护
-conn, _ := grpc.Dial(
+conn, _ := grpc.NewClient(
     "user-service:9001",
     grpc.WithChainUnaryInterceptor(
         ratelimit.UnaryClientInterceptor(limiter),
