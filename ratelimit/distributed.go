@@ -117,7 +117,7 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 	}
 
 	if n <= 0 {
-		return false, xerrors.Wrapf(xerrors.ErrInvalidInput, "ratelimit: n must be positive")
+		return false, ErrInvalidLimit
 	}
 
 	// 构建 Redis key

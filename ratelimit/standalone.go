@@ -10,7 +10,6 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
-	"github.com/ceyewan/genesis/xerrors"
 )
 
 // limiterWrapper 包装 rate.Limiter 并记录最后访问时间
@@ -78,7 +77,7 @@ func (l *standaloneLimiter) AllowN(ctx context.Context, key string, limit Limit,
 	}
 
 	if n <= 0 {
-		return false, xerrors.Wrapf(xerrors.ErrInvalidInput, "ratelimit: n must be positive")
+		return false, ErrInvalidLimit
 	}
 
 	// 获取或创建 limiter

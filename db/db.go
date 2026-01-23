@@ -106,16 +106,16 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 	switch cfg.Driver {
 	case "mysql":
 		if opt.mysqlConnector == nil {
-			return nil, xerrors.Wrap(xerrors.ErrInvalidInput, "mysql connector is required when driver=mysql")
+			return nil, ErrMySQLConnectorRequired
 		}
 		gormDB = opt.mysqlConnector.GetClient()
 	case "sqlite":
 		if opt.sqliteConnector == nil {
-			return nil, xerrors.Wrap(xerrors.ErrInvalidInput, "sqlite connector is required when driver=sqlite")
+			return nil, ErrSQLiteConnectorRequired
 		}
 		gormDB = opt.sqliteConnector.GetClient()
 	default:
-		return nil, xerrors.Wrapf(xerrors.ErrInvalidInput, "unknown driver: %s", cfg.Driver)
+		return nil, xerrors.Wrapf(ErrInvalidConfig, "unknown driver: %s", cfg.Driver)
 	}
 
 	// 配置 GORM logger
