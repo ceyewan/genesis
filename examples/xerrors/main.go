@@ -7,6 +7,15 @@ import (
 	"github.com/ceyewan/genesis/xerrors"
 )
 
+// 定义业务相关的哨兵错误
+var (
+	ErrUserNotFound = xerrors.New("user: not found")
+	ErrInvalidInput = xerrors.New("input: invalid")
+	ErrTimeout      = xerrors.New("operation: timeout")
+	ErrConflict     = xerrors.New("resource: conflict")
+	ErrUnavailable  = xerrors.New("service: unavailable")
+)
+
 func main() {
 	fmt.Println("=== xerrors 示例 ===")
 	fmt.Println()
@@ -56,47 +65,41 @@ func main() {
 
 // basicWrapping 演示基础错误包装
 func basicWrapping() error {
-	// 模拟一个底层错误
 	baseErr := errors.New("connection refused")
-
-	// 使用 Wrap 添加上下文
 	wrapped := xerrors.Wrap(baseErr, "failed to connect to database")
-
-	// 使用 Wrapf 添加格式化上下文
 	wrapped = xerrors.Wrapf(wrapped, "host: %s, port: %d", "localhost", 5432)
-
 	return wrapped
 }
 
 // sentinelErrorsDemo 演示 Sentinel Errors 的检查
 func sentinelErrorsDemo() {
 	// 场景 1: 资源未找到
-	err := xerrors.Wrap(xerrors.ErrNotFound, "user not found")
-	if xerrors.Is(err, xerrors.ErrNotFound) {
-		fmt.Println("✓ 检测到 ErrNotFound")
+	err := xerrors.Wrap(ErrUserNotFound, "user not found")
+	if xerrors.Is(err, ErrUserNotFound) {
+		fmt.Println("✓ 检测到 ErrUserNotFound")
 	}
 
 	// 场景 2: 无效输入
-	err = xerrors.ErrInvalidInput
-	if xerrors.Is(err, xerrors.ErrInvalidInput) {
+	err = ErrInvalidInput
+	if xerrors.Is(err, ErrInvalidInput) {
 		fmt.Println("✓ 检测到 ErrInvalidInput")
 	}
 
 	// 场景 3: 超时
-	err = xerrors.Wrap(xerrors.ErrTimeout, "request timeout after 30s")
-	if xerrors.Is(err, xerrors.ErrTimeout) {
+	err = xerrors.Wrap(ErrTimeout, "request timeout after 30s")
+	if xerrors.Is(err, ErrTimeout) {
 		fmt.Println("✓ 检测到 ErrTimeout")
 	}
 
 	// 场景 4: 冲突
-	err = xerrors.Wrapf(xerrors.ErrConflict, "user %d already exists", 123)
-	if xerrors.Is(err, xerrors.ErrConflict) {
+	err = xerrors.Wrapf(ErrConflict, "user %d already exists", 123)
+	if xerrors.Is(err, ErrConflict) {
 		fmt.Println("✓ 检测到 ErrConflict")
 	}
 
 	// 使用 errors.As 提取具体错误
 	var sentinel error
-	wrappedErr := xerrors.Wrap(xerrors.ErrUnavailable, "service temporarily unavailable")
+	wrappedErr := xerrors.Wrap(ErrUnavailable, "service temporarily unavailable")
 	if xerrors.As(wrappedErr, &sentinel) {
 		fmt.Printf("✓ 提取底层错误: %v\n", sentinel)
 	}
@@ -112,8 +115,8 @@ func codedErrorDemo() {
 	code := xerrors.GetCode(codedErr)
 	fmt.Printf("Code: %s\n", code)
 
-	// 场景 2: 通过 WithCode 包装 Sentinel Error
-	notFoundErr := xerrors.WithCode(xerrors.ErrNotFound, "USER_NOT_FOUND")
+	// 场景 2: 通过 WithCode 包装自定义 Sentinel Error
+	notFoundErr := xerrors.WithCode(ErrUserNotFound, "USER_NOT_FOUND")
 	fmt.Printf("Error: %v\n", notFoundErr)
 
 	code = xerrors.GetCode(notFoundErr)
@@ -226,25 +229,19 @@ func parseInteger(s string) (int, error) {
 
 // apiSceneDemo 演示实际 API 场景的错误处理
 func apiSceneDemo() {
-	// 场景: 获取用户信息的 API
-
 	userID := int64(123)
 
-	// 步骤 1: 从数据库查询
 	user, err := getUserFromDB(userID)
 	if err != nil {
-		if xerrors.Is(err, xerrors.ErrNotFound) {
-			// 返回 404
+		if xerrors.Is(err, ErrUserNotFound) {
 			fmt.Printf("返回 HTTP 404: 用户不存在\n")
 			fmt.Printf("错误码: %s\n", xerrors.GetCode(err))
 			return
 		}
-		if xerrors.Is(err, xerrors.ErrTimeout) {
-			// 返回 503
+		if xerrors.Is(err, ErrTimeout) {
 			fmt.Printf("返回 HTTP 503: 数据库超时\n")
 			return
 		}
-		// 返回 500
 		fmt.Printf("返回 HTTP 500: 内部错误: %v\n", err)
 		return
 	}
@@ -258,19 +255,14 @@ type User struct {
 }
 
 func getUserFromDB(id int64) (*User, error) {
-	// 模拟不同的错误场景
 	switch id {
 	case 123:
-		// 成功
 		return &User{ID: 123, Name: "Alice"}, nil
 	case 404:
-		// 不存在
-		return nil, xerrors.WithCode(xerrors.ErrNotFound, "USER_NOT_FOUND")
+		return nil, xerrors.WithCode(ErrUserNotFound, "USER_NOT_FOUND")
 	case 500:
-		// 数据库超时
-		return nil, xerrors.Wrap(xerrors.ErrTimeout, "database query timeout")
+		return nil, xerrors.Wrap(ErrTimeout, "database query timeout")
 	default:
-		// 未知错误
 		return nil, xerrors.WithCode(
 			errors.New("unknown user id"),
 			"UNKNOWN_ERROR",

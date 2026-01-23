@@ -165,15 +165,17 @@ func TestCombine(t *testing.T) {
 }
 
 func TestSentinelErrors(t *testing.T) {
-	// 哨兵错误应可用 errors.Is 匹配
-	err := Wrap(ErrNotFound, "user lookup")
-	if !errors.Is(err, ErrNotFound) {
-		t.Error("errors.Is(wrapped, ErrNotFound) = false，期望 true")
+	// 自定义哨兵错误应可用 errors.Is 匹配
+	errNotFound := errors.New("not found")
+	err := Wrap(errNotFound, "user lookup")
+	if !errors.Is(err, errNotFound) {
+		t.Error("errors.Is(wrapped, errNotFound) = false，期望 true")
 	}
 
 	// 不同的哨兵错误不应匹配
-	if errors.Is(err, ErrTimeout) {
-		t.Error("errors.Is(wrapped, ErrTimeout) = true，期望 false")
+	errTimeout := errors.New("timeout")
+	if errors.Is(err, errTimeout) {
+		t.Error("errors.Is(wrapped, errTimeout) = true，期望 false")
 	}
 }
 
