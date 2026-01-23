@@ -12,8 +12,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
 )
 
-// Discard 初始化一个不导出数据的 TracerProvider，但仍会生成 TraceID。
-// 适用于仅需要日志关联、而不需要上报 Trace 的场景。
+// Discard 创建不导出的 TracerProvider，仅生成 TraceID。
 func Discard(serviceName string) (func(context.Context) error, error) {
 	ctx := context.Background()
 
@@ -26,7 +25,7 @@ func Discard(serviceName string) (func(context.Context) error, error) {
 
 	res, err := resource.New(ctx, resOpts...)
 	if err != nil {
-		return nil, xerrors.Wrap(err, "failed to create resource")
+		return nil, xerrors.Wrap(err, "create resource")
 	}
 
 	tp := sdktrace.NewTracerProvider(

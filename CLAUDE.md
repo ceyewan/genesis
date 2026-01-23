@@ -1,8 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-此文件用于约束 Claude Code (claude.ai/code) 在 `Genesis` 仓库中的工作方式。请全程使用中文交流与记录，遵守下述行为准则，并对自己负责。
+此文件用于约束 AI 助手在 `Genesis` 仓库中的工作方式。请全程使用中文交流与记录，遵守下述行为准则，并对自己负责。
 
 ## 项目概览
 
