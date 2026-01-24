@@ -6,19 +6,18 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strconv"
+	"os"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/examples/observability/middleware"
 	"github.com/ceyewan/genesis/examples/observability/proto"
 	"github.com/ceyewan/genesis/metrics"
 	genesistrace "github.com/ceyewan/genesis/trace"
 	"github.com/gin-gonic/gin"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/propagation"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -51,10 +50,7 @@ func startMQConsumer() {
 			// A. 提取 Context (关键!)
 			// 将 MQ Header 中的 Trace 信息还原到 Context 中
 			// 这样后续的 Log/Trace 才能关联上之前的链路
-			ctx := otel.GetTextMapPropagator().Extract(
-				context.Background(),
-				propagation.MapCarrier(msg.Headers),
-			)
+			ctx := genesistrace.Extract(context.Background(), msg.Headers)
 
 			// B. 开始一个新的 Span (作为消费者 Span)
 			tracer := otel.Tracer("mq-consumer")
@@ -107,7 +103,7 @@ func (s *OrderServiceImpl) CreateOrder(ctx context.Context, req *proto.CreateOrd
 
 	// 发送 MQ 消息 (Context Propagation 注入)
 	headers := make(map[string]string)
-	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(headers))
+	genesistrace.Inject(ctx, headers)
 
 	msg := MQMessage{
 		Payload: fmt.Sprintf("Order created for %s", req.UserId),
@@ -159,22 +155,12 @@ func startGateway() {
 	grpcClient := proto.NewOrderServiceClient(conn)
 
 	// 初始化 Gin
-	r := gin.Default()
-	r.Use(otelgin.Middleware("api-gateway")) // Tracing 中间件
-
-	// 添加自定义 Metrics 中间件 (Gin 没有内置 OTel Metrics 中间件)
-	r.Use(func(c *gin.Context) {
-		start := time.Now()
-		c.Next()
-		duration := time.Since(start).Seconds()
-
-		// 记录请求耗时 P99
-		httpRequestDuration.Record(c.Request.Context(), duration,
-			metrics.L("method", c.Request.Method),
-			metrics.L("path", c.FullPath()),
-			metrics.L("status", strconv.Itoa(c.Writer.Status())),
-		)
-	})
+	r := gin.New()
+	// 使用统一的可观测性中间件 (Panic Recover + Tracing + Metrics)
+	r.Use(middleware.Observability(
+		middleware.WithServiceName("api-gateway"),
+		middleware.WithHistogram(httpRequestDuration),
+	))
 
 	r.POST("/orders", func(c *gin.Context) {
 		ctx := c.Request.Context()
@@ -217,9 +203,14 @@ func main() {
 	ctx := context.Background()
 
 	// 1. 初始化 Trace (Tempo/Jaeger)
+	// 支持 OTLP_ENDPOINT 环境变量覆盖（用于 Docker 环境）
+	otlpEndpoint := os.Getenv("OTLP_ENDPOINT")
+	if otlpEndpoint == "" {
+		otlpEndpoint = "localhost:4317" // 本地开发默认值
+	}
 	traceShutdown, err := genesistrace.Init(&genesistrace.Config{
 		ServiceName: "observability-demo",
-		Endpoint:    "localhost:4317",
+		Endpoint:    otlpEndpoint,
 		Sampler:     1.0,
 		Insecure:    true,
 	})
@@ -230,12 +221,13 @@ func main() {
 
 	// 2. 初始化 Logger (带 Trace 关联)
 	logger, _ = clog.New(
-		&clog.Config{Level: "info", Format: "console"},
+		&clog.Config{Level: "info", Format: "json"},
 		clog.WithTraceContext(),
 	)
 
 	// 3. 初始化 Metrics
 	metricsCfg := metrics.NewDevDefaultConfig("observability-demo")
+	metricsCfg.Port = 9100 // 避免与 gRPC 端口冲突
 	metricsCfg.EnableRuntime = true // 开启 Runtime 监控 (Goroutine, GC)
 	meter, err = metrics.New(metricsCfg)
 	if err != nil {

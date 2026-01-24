@@ -2,7 +2,29 @@ version: "3.8"
 
 services:
   # ============================================================================
-  # 1. Logs: Loki (存储) + Promtail (采集)
+  # 0. Application: Observability Demo
+  # ============================================================================
+  app:
+    build:
+      context: ../..
+      dockerfile: examples/observability/Dockerfile
+    container_name: demo-app
+    ports:
+      - "8080:8080"   # HTTP Gateway
+      - "9091:9090"   # gRPC Server
+      - "9100:9100"   # Prometheus Metrics
+    environment:
+      - OTLP_ENDPOINT=tempo:4317
+    depends_on:
+      - tempo
+      - prometheus
+      - loki
+    restart: unless-stopped
+    networks:
+      - demo-network
+
+  # ============================================================================
+  # 1. Logs: Loki (存储)
   # ============================================================================
   loki:
     image: grafana/loki:latest
@@ -12,24 +34,32 @@ services:
       - ./config/loki.yaml:/etc/loki/local-config.yaml
     ports:
       - "3100:3100"
+    networks:
+      - demo-network
 
+  # ============================================================================
+  # 1.1 Logs: Promtail (采集)
+  # ============================================================================
   promtail:
     image: grafana/promtail:latest
     container_name: demo-promtail
-    command: -config.file=/etc/promtail/config.yaml
+    command: -config.file=/etc/promtail/promtail.yaml
     volumes:
-      - ./config/promtail.yaml:/etc/promtail/config.yaml
-      - /var/log:/var/log
+      - ./config/promtail.yaml:/etc/promtail/promtail.yaml
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
     depends_on:
       - loki
+    networks:
+      - demo-network
 
   # ============================================================================
-  # 2. Traces: Tempo (存储)
+  # 2. Traces: Tempo (存储) - 使用 --target=all 运行所有组件
   # ============================================================================
   tempo:
     image: grafana/tempo:latest
     container_name: demo-tempo
-    command: [ "-config.file=/etc/tempo.yaml" ]
+    command: [ "-config.file=/etc/tempo.yaml", "--target=all" ]
     volumes:
       - ./config/tempo.yaml:/etc/tempo.yaml
       - ./tempo-data:/tmp/tempo
@@ -37,6 +67,9 @@ services:
       - "3200:3200"   # Tempo HTTP
       - "4317:4317"   # OTLP gRPC (Receiver)
       - "4318:4318"   # OTLP HTTP
+      - "9095:9095"   # Tempo gRPC (内部通信)
+    networks:
+      - demo-network
 
   # ============================================================================
   # 3. Metrics: Prometheus (存储)
@@ -52,8 +85,8 @@ services:
       - ./config/prometheus.yaml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway" # 允许容器访问宿主机端口 (Linux需要)
+    networks:
+      - demo-network
 
   # ============================================================================
   # 4. Infrastructure: cAdvisor (容器监控)
@@ -68,10 +101,10 @@ services:
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
     ports:
-      - "8080:8080"
+      - "8081:8080"
     privileged: true
-    devices:
-      - /dev/kmsg
+    networks:
+      - demo-network
 
   # ============================================================================
   # 5. Visualization: Grafana (展示)
@@ -93,3 +126,12 @@ services:
       - loki
       - tempo
       - prometheus
+    networks:
+      - demo-network
+
+networks:
+  demo-network:
+    driver: bridge
+
+volumes:
+  tempo-data:

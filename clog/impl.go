@@ -152,6 +152,10 @@ func (l *loggerImpl) log(ctx context.Context, level Level, msg string, fields ..
 }
 
 // SetLevel 动态调整日志级别
+//
+// TODO: 目前未实现真正的动态级别切换。slog.Handler 的 Level 在创建时固定，
+// 运行时修改需要包装 Handler 并使用 atomic.Value 或互斥锁保护级别变量。
+// 当前实现仅作为接口兼容占位。
 func (l *loggerImpl) SetLevel(level Level) error {
 	if h, ok := l.handler.(interface{ SetLevel(Level) error }); ok {
 		return h.SetLevel(level)

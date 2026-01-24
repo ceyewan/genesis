@@ -1,3 +1,4 @@
+# Tempo 配置
 server:
   http_listen_port: 3200
 
@@ -6,31 +7,28 @@ distributor:
     otlp:
       protocols:
         grpc:
+          endpoint: "[::]:4317"
         http:
+          endpoint: "[::]:4318"
 
 ingester:
-  trace_idle_period: 10s
-  max_block_bytes: 1_000_000
-  max_block_duration: 5m
+  lifecycler:
+    ring:
+      kvstore:
+        store: memberlist
+      replication_factor: 1
+    # 注册到 memberlist ring
+    register_ring_members:
+      - tempo
 
-compactor:
-  compaction:
-    compaction_window: 1h
-    max_block_bytes: 100_000_000
-    block_retention: 1h
-    compacted_block_retention: 10m
+memberlist:
+  join_members:
+    - tempo
 
 storage:
   trace:
-    backend: local                     # backend configuration to use
-    block:
-      bloom_filter_false_positive: .05 # bloom filter false positive rate.  lower values create larger filters but fewer false positives
-      index_downsample_bytes: 1000     # number of bytes per index record
-      encoding: zstd                   # block encoding compression.  options: none, gzip, lz4-64k, zstd, wal, snappy
+    backend: local
     wal:
-      path: /tmp/tempo/wal             # where to store the wal locally
+      path: /tmp/tempo/wal
     local:
       path: /tmp/tempo/blocks
-    pool:
-      max_workers: 100                 # worker pool determines the number of parallel requests to the object store backend
-      queue_depth: 10000
