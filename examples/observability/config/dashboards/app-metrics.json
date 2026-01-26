@@ -253,7 +253,7 @@
       },
       "targets": [
         {
-          "expr": "rate(mq_handle_duration_seconds_count[1m])",
+          "expr": "sum(rate({__name__=\"mq.consume_total\"}[1m])) by (subject)",
           "interval": "",
           "legendFormat": "{{subject}}",
           "refId": "A"
@@ -335,13 +335,25 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum(rate(mq_handle_duration_seconds_bucket[5m])) by (le, subject))",
+          "expr": "histogram_quantile(0.99, sum(rate({__name__=\"mq.handle.duration_seconds_bucket\"}[5m])) by (le, subject))",
           "interval": "",
           "legendFormat": "{{subject}} P99",
           "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate({__name__=\"mq.handle.duration_seconds_bucket\"}[5m])) by (le, subject))",
+          "interval": "",
+          "legendFormat": "{{subject}} P95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum(rate({__name__=\"mq.handle.duration_seconds_bucket\"}[5m])) by (le, subject))",
+          "interval": "",
+          "legendFormat": "{{subject}} P90",
+          "refId": "C"
         }
       ],
-      "title": "MQ Latency P99",
+      "title": "MQ Latency P90/P95/P99",
       "type": "timeseries"
     }
   ],
