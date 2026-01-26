@@ -6,6 +6,10 @@ service OrderService {
   rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
 }
 
+service GatewayCallbackService {
+  rpc PushResult (PushResultRequest) returns (PushResultResponse);
+}
+
 message CreateOrderRequest {
   string user_id = 1;
   string product_id = 2;
@@ -14,4 +18,17 @@ message CreateOrderRequest {
 message CreateOrderResponse {
   string order_id = 1;
   string status = 2;
+}
+
+message OrderResult {
+  string order_id = 1;
+  string status = 2;
+}
+
+message PushResultRequest {
+  OrderResult result = 1;
+}
+
+message PushResultResponse {
+  bool ok = 1;
 }

@@ -1,25 +1,83 @@
-version: "3.8"
-
 services:
   # ============================================================================
-  # 0. Application: Observability Demo
+  # 0. Application: Observability Demo (3 services)
   # ============================================================================
-  app:
+  gateway:
     build:
       context: ../..
       dockerfile: examples/observability/Dockerfile
-    container_name: demo-app
+    container_name: demo-gateway
     ports:
-      - "8080:8080"   # HTTP Gateway
-      - "9091:9090"   # gRPC Server
-      - "9100:9100"   # Prometheus Metrics
+      - "8080:8080"   # HTTP (user -> gateway)
+      - "9091:9091"   # gRPC (task -> gateway)
+      - "9101:9101"   # Prometheus Metrics
     environment:
       - OTLP_ENDPOINT=tempo:4317
+      - LOGIC_GRPC_TARGET=logic:9090
+      - GATEWAY_CALLBACK_GRPC_ADDR=:9091
     depends_on:
       - tempo
       - prometheus
       - loki
+      - nats
     restart: unless-stopped
+    networks:
+      - demo-network
+
+  logic:
+    build:
+      context: ../..
+      dockerfile: examples/observability/Dockerfile
+    container_name: demo-logic
+    command: ["./logic"]
+    ports:
+      - "9092:9090"   # gRPC (host 9092 -> container 9090)
+      - "9102:9102"   # Prometheus Metrics
+    environment:
+      - OTLP_ENDPOINT=tempo:4317
+      - NATS_URL=nats://nats:4222
+      - LOGIC_GRPC_ADDR=:9090
+      - SQLITE_PATH=/data/logic.sqlite
+    volumes:
+      - logic-data:/data
+    depends_on:
+      - tempo
+      - prometheus
+      - loki
+      - nats
+    restart: unless-stopped
+    networks:
+      - demo-network
+
+  task:
+    build:
+      context: ../..
+      dockerfile: examples/observability/Dockerfile
+    container_name: demo-task
+    command: ["./task"]
+    ports:
+      - "9103:9103"   # Prometheus Metrics
+    environment:
+      - OTLP_ENDPOINT=tempo:4317
+      - NATS_URL=nats://nats:4222
+      - GATEWAY_CALLBACK_TARGET=gateway:9091
+    depends_on:
+      - tempo
+      - prometheus
+      - loki
+      - nats
+    restart: unless-stopped
+    networks:
+      - demo-network
+
+  # ============================================================================
+  # 0.1 Message Queue: NATS Core
+  # ============================================================================
+  nats:
+    image: nats:2.10-alpine
+    container_name: demo-nats
+    ports:
+      - "4222:4222"
     networks:
       - demo-network
 
@@ -135,3 +193,4 @@ networks:
 
 volumes:
   tempo-data:
+  logic-data:

@@ -21,8 +21,8 @@ import (
 //	r.Use(middleware.Observability(
 //	    middleware.WithServiceName("api-gateway"),
 //	    middleware.WithHistogram(histogram),
-//	))
-func Observability(opts ...MiddlewareOption) gin.HandlerFunc {
+//	)...)
+func Observability(opts ...MiddlewareOption) []gin.HandlerFunc {
 	cfg := &middlewareConfig{
 		serviceName: "api",
 	}
@@ -54,11 +54,7 @@ func Observability(opts ...MiddlewareOption) gin.HandlerFunc {
 		})
 	}
 
-	return func(c *gin.Context) {
-		for _, mw := range middlewares {
-			mw(c)
-		}
-	}
+	return middlewares
 }
 
 // middlewareConfig 中间件配置

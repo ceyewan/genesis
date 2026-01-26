@@ -6,8 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -26,8 +29,11 @@ type stats struct {
 }
 
 func main() {
+	const targetQPS = 5
+
 	var (
 		url         = flag.String("url", "http://localhost:8080/orders", "Target URL")
+		authHeader  = flag.String("auth", "Bearer demo-token", "Authorization header value")
 		concurrency = flag.Int("concurrency", 10, "Number of concurrent workers")
 		reportEvery = flag.Duration("report", 5*time.Second, "Report interval")
 	)
@@ -49,12 +55,20 @@ func main() {
 	stopCh := make(chan struct{})
 	var wg sync.WaitGroup
 
+	// 支持 Ctrl+C 优雅退出
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		close(stopCh)
+	}()
+
 	// 创建请求通道以控制 QPS
 	requestCh := make(chan struct{}, *concurrency)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(20 * time.Millisecond) // 50 QPS
+		ticker := time.NewTicker(time.Second / targetQPS)
 		defer ticker.Stop()
 		for {
 			select {
@@ -104,9 +118,10 @@ func main() {
 				// 计算平均响应时间
 				avgDuration := durationSum / success
 
-				fmt.Printf("[%s] QPS: %.2f (target: 50.00) | Total: %d | Success: %d | Failed: %d | Avg: %.2fms | Min: %.2fms | Max: %.2fms\n",
+				fmt.Printf("[%s] QPS: %.2f (target: %d) | Total: %d | Success: %d | Failed: %d | Avg: %.2fms | Min: %.2fms | Max: %.2fms\n",
 					now.Format("15:04:05"),
 					currentQPS,
+					targetQPS,
 					total,
 					success,
 					failed,
@@ -140,7 +155,18 @@ func main() {
 					}
 
 					reqStart := time.Now()
-					resp, err := client.Post(*url, "application/json", bytes.NewBuffer(payloadBytes))
+					req, err := http.NewRequest(http.MethodPost, *url, bytes.NewBuffer(payloadBytes))
+					if err != nil {
+						atomic.AddInt64(&s.totalRequests, 1)
+						atomic.AddInt64(&s.failed, 1)
+						continue
+					}
+					req.Header.Set("Content-Type", "application/json")
+					if *authHeader != "" {
+						req.Header.Set("Authorization", *authHeader)
+					}
+
+					resp, err := client.Do(req)
 					reqDuration := time.Since(reqStart)
 
 					atomic.AddInt64(&s.totalRequests, 1)
@@ -188,12 +214,11 @@ func main() {
 	}
 
 	fmt.Println("Load test started. Press Ctrl+C to stop.")
-	fmt.Printf("Target: 50 QPS, Concurrency: %d\n", *concurrency)
+	fmt.Printf("Target: %d QPS, Concurrency: %d\n", targetQPS, *concurrency)
 	fmt.Println("--------------------------------------------------")
 
 	// 等待中断信号
 	<-stopCh
-	close(stopCh)
 	wg.Wait()
 
 	fmt.Println("\nLoad test stopped.")
