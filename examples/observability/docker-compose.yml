@@ -115,17 +115,17 @@ services:
   # 2. Traces: Tempo (存储) - 使用 --target=all 运行所有组件
   # ============================================================================
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:2.8.3
     container_name: demo-tempo
-    command: [ "-config.file=/etc/tempo.yaml", "--target=all" ]
+    command: [ "-config.file=/etc/tempo.yaml" ]
     volumes:
-      - ./config/tempo.yaml:/etc/tempo.yaml
-      - ./tempo-data:/tmp/tempo
+      - ./config/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
     ports:
       - "3200:3200"   # Tempo HTTP
       - "4317:4317"   # OTLP gRPC (Receiver)
       - "4318:4318"   # OTLP HTTP
-      - "9095:9095"   # Tempo gRPC (内部通信)
+    restart: unless-stopped
     networks:
       - demo-network
 

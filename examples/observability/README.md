@@ -39,6 +39,7 @@ docker compose up -d --build
 - **NATS**: localhost:4222
 - **Prometheus**: http://localhost:9090
 - **Grafana**: http://localhost:3000
+- **Tempo (Ready)**: http://localhost:3200/ready（启动后前 ~15s 可能返回 503，随后变为 `ready`）
 
 > 提示：`docker compose ps` 可以查看所有服务是否健康启动。
 
@@ -66,7 +67,7 @@ curl -X POST http://localhost:8080/orders \
 - 打开 **Dashboards**，选择预置的 **"Observability Demo App"**。
 - 或直接在 Prometheus 查询：
   - `http_request_duration_seconds_bucket`
-  - `mq_processing_duration_seconds_bucket`
+  - `mq_handle_duration_seconds_bucket`
 
 ### B. 链路（Tracing）
 1. 进入 **Explore**。

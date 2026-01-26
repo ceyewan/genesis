@@ -253,9 +253,9 @@
       },
       "targets": [
         {
-          "expr": "rate(mq_processing_duration_seconds_count[1m])",
+          "expr": "rate(mq_handle_duration_seconds_count[1m])",
           "interval": "",
-          "legendFormat": "{{status}}",
+          "legendFormat": "{{subject}}",
           "refId": "A"
         }
       ],
@@ -335,9 +335,9 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum(rate(mq_processing_duration_seconds_bucket[5m])) by (le, status))",
+          "expr": "histogram_quantile(0.99, sum(rate(mq_handle_duration_seconds_bucket[5m])) by (le, subject))",
           "interval": "",
-          "legendFormat": "{{status}} P99",
+          "legendFormat": "{{subject}} P99",
           "refId": "A"
         }
       ],

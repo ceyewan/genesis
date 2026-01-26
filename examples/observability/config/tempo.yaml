@@ -1,4 +1,5 @@
-# Tempo 配置
+auth_enabled: false
+
 server:
   http_listen_port: 3200
 
@@ -7,28 +8,29 @@ distributor:
     otlp:
       protocols:
         grpc:
-          endpoint: "[::]:4317"
+          endpoint: 0.0.0.0:4317
         http:
-          endpoint: "[::]:4318"
+          endpoint: 0.0.0.0:4318
 
 ingester:
-  lifecycler:
-    ring:
-      kvstore:
-        store: memberlist
-      replication_factor: 1
-    # 注册到 memberlist ring
-    register_ring_members:
-      - tempo
+  trace_idle_period: 10s
+  max_block_bytes: 1000000
+  max_block_duration: 5m
 
-memberlist:
-  join_members:
-    - tempo
+compactor:
+  compaction:
+    compaction_window: 1h
+    max_block_bytes: 100000000
+    block_retention: 24h
+    compacted_block_retention: 10m
 
 storage:
   trace:
     backend: local
     wal:
-      path: /tmp/tempo/wal
+      path: /var/tempo/wal
     local:
-      path: /tmp/tempo/blocks
+      path: /var/tempo/blocks
+    pool:
+      max_workers: 50
+      queue_depth: 10000

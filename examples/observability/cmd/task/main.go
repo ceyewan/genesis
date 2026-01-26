@@ -10,11 +10,13 @@ import (
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/examples/observability/internal/bootstrap"
 	"github.com/ceyewan/genesis/examples/observability/proto"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/mq"
 	"github.com/ceyewan/genesis/trace"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -77,23 +79,44 @@ func main() {
 	cbClient := proto.NewGatewayCallbackServiceClient(cbConn)
 
 	tracer := otel.Tracer("obs-task")
-	mqProcessingDuration, _ := obs.Meter.Histogram(
-		"mq_processing_duration_seconds",
-		"MQ processing duration",
-		metrics.WithBuckets([]float64{0.005, 0.01, 0.05, 0.1, 0.5, 1}),
-	)
 
 	sub, err := mqClient.Subscribe(ctx, orderSubject, func(ctx context.Context, msg mq.Message) error {
-		ev := orderCreatedEvent{}
-		if err := json.Unmarshal(msg.Data(), &ev); err != nil {
-			obs.Logger.ErrorContext(ctx, "unmarshal order event failed", clog.Error(err))
-			return err
+		parentCtx := trace.Extract(context.Background(), msg.Headers())
+		remoteSC := oteltrace.SpanContextFromContext(parentCtx)
+		links := make([]oteltrace.Link, 0, 1)
+		if remoteSC.IsValid() {
+			links = append(links, oteltrace.Link{SpanContext: remoteSC})
 		}
 
-		parentCtx := trace.Extract(context.Background(), msg.Headers())
-		handledCtx, span := tracer.Start(parentCtx, "task.handle_order_created")
+		consumeCtx, consumeSpan := tracer.Start(
+			parentCtx,
+			"mq.consume orders.created",
+			oteltrace.WithSpanKind(oteltrace.SpanKindConsumer),
+			oteltrace.WithLinks(links...),
+		)
+		defer consumeSpan.End()
+		consumeSpan.SetAttributes(
+			attribute.String("messaging.system", "nats"),
+			attribute.String("messaging.destination", orderSubject),
+			attribute.String("messaging.operation", "process"),
+			attribute.String("messaging.consumer.group", "order-task-workers"),
+		)
+
+		ev := orderCreatedEvent{}
+		if err := json.Unmarshal(msg.Data(), &ev); err != nil {
+			consumeSpan.RecordError(err)
+			consumeSpan.SetStatus(codes.Error, err.Error())
+			obs.Logger.ErrorContext(consumeCtx, "unmarshal order event failed", clog.Error(err))
+			return err
+		}
+		consumeSpan.SetAttributes(
+			attribute.String("order.id", ev.OrderID),
+			attribute.String("order.user_id", ev.UserID),
+			attribute.String("order.product_id", ev.ProductID),
+		)
+
+		handledCtx, span := tracer.Start(consumeCtx, "task.handle_order_created")
 		defer span.End()
-		start := time.Now()
 
 		obs.Logger.InfoContext(handledCtx, "task received order event",
 			clog.String("order_id", ev.OrderID),
@@ -111,12 +134,12 @@ func main() {
 		})
 		if err != nil {
 			obs.Logger.ErrorContext(handledCtx, "push result to gateway failed", clog.Error(err))
-			mqProcessingDuration.Record(handledCtx, time.Since(start).Seconds(), metrics.L("status", "error"))
+			consumeSpan.RecordError(err)
+			consumeSpan.SetStatus(codes.Error, err.Error())
 			return err
 		}
 
 		obs.Logger.InfoContext(handledCtx, "task pushed result to gateway", clog.String("order_id", ev.OrderID))
-		mqProcessingDuration.Record(handledCtx, time.Since(start).Seconds(), metrics.L("status", "success"))
 		return nil
 	}, mq.WithQueueGroup("order-task-workers"))
 	if err != nil {

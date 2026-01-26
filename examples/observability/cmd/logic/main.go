@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"gorm.io/gorm"
@@ -96,11 +97,28 @@ func (s *orderService) CreateOrder(ctx context.Context, req *proto.CreateOrderRe
 		return nil, xerrors.Wrap(err, "marshal event")
 	}
 
+	tracer := otel.Tracer("obs-logic")
 	headers := map[string]string{}
-	trace.Inject(ctx, headers)
-	if err := s.mq.Publish(ctx, orderSubject, data, mq.WithHeaders(headers)); err != nil {
+	pubCtx, pubSpan := tracer.Start(
+		ctx,
+		"mq.publish orders.created",
+		oteltrace.WithSpanKind(oteltrace.SpanKindProducer),
+	)
+	pubSpan.SetAttributes(
+		attribute.String("messaging.system", "nats"),
+		attribute.String("messaging.destination", orderSubject),
+		attribute.String("messaging.operation", "publish"),
+		attribute.String("order.id", orderID),
+	)
+
+	trace.Inject(pubCtx, headers)
+	if err := s.mq.Publish(pubCtx, orderSubject, data, mq.WithHeaders(headers)); err != nil {
+		pubSpan.RecordError(err)
+		pubSpan.SetStatus(codes.Error, err.Error())
+		pubSpan.End()
 		return nil, xerrors.Wrap(err, "publish order event")
 	}
+	pubSpan.End()
 
 	return &proto.CreateOrderResponse{
 		OrderId: orderID,
