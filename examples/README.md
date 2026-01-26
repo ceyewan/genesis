@@ -8,7 +8,6 @@
 
 - **[clog](./clog/)** - 日志组件使用示例
 - **[config](./config/)** - 配置管理示例
-- **[metrics](./metrics/)** - 指标收集示例（包含 Grafana 仪表板）
 - **[xerrors](./xerrors/)** - 错误处理示例
 
 ### Level 1 - 连接管理示例
@@ -44,7 +43,6 @@ make examples
 # 运行特定组件示例
 make example-cache      # 运行缓存示例
 make example-dlock      # 运行分布式锁示例
-make example-metrics    # 运行指标示例
 
 # 运行所有示例
 make example-all
@@ -77,7 +75,6 @@ go run main.go -config config.yaml
 
 ### 特殊说明
 
-- **metrics** 示例包含 Grafana 仪表板配置文件
 - **breaker** 和 **grpc-registry** 示例包含 Protocol Buffer 定义文件
 - **dlock** 示例支持 Redis 和 Etcd 两种实现
 - **config** 示例展示了多环境配置的使用
