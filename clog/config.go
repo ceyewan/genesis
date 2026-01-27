@@ -14,7 +14,7 @@ type Config struct {
 	Output      string `json:"output" yaml:"output"`           // stdout|stderr|<file path>
 	EnableColor bool   `json:"enableColor" yaml:"enableColor"` // 仅在 console 格式下有效，开发环境可启用彩色输出
 	AddSource   bool   `json:"addSource" yaml:"addSource"`     // 是否添加调用源信息
-	SourceRoot  string `json:"sourceRoot" yaml:"sourceRoot"`   // 用于裁剪文件路径
+	SourceRoot  string `json:"sourceRoot" yaml:"sourceRoot"`   // 用于裁剪文件路径，推荐设置为你的项目根目录，获取相对路径
 }
 
 // NewDevDefaultConfig 创建开发环境的默认日志配置

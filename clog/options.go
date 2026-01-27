@@ -56,11 +56,7 @@ func WithContextField(key any, fieldName string) Option {
 //   - user_id: 用户标识
 //   - request_id: 请求标识
 //
-// 示例：
-//
-//	ctx := context.WithValue(context.Background(), "trace_id", "abc123")
-//	logger.WithStandardContext().InfoContext(ctx, "Request processed")
-//	// 日志中会包含：trace_id=abc123
+// 需要搭配 InfoContext 等方法使用，如 logger.InfoContext(ctx, "message")
 func WithStandardContext() Option {
 	return func(o *options) {
 		o.contextFields = append(o.contextFields,

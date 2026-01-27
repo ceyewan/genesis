@@ -8,11 +8,6 @@ type noopLogger struct{}
 // Discard 创建一个静默的 Logger 实例
 //
 // 返回的 Logger 实现了 Logger 接口，但所有方法体都是空操作。
-//
-// 示例：
-//
-//	logger := clog.Discard()
-//	logger.Info("这条日志不会输出") // 无任何效果
 func Discard() Logger {
 	return &noopLogger{}
 }

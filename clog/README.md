@@ -1,6 +1,6 @@
-[![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/clog.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/clog)
-
 # clog - Genesis 结构化日志组件
+
+[![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/clog.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/clog)
 
 `clog` 是 Genesis 框架的结构化日志组件，基于 Go 标准库 `log/slog` 构建。
 
@@ -21,7 +21,7 @@ clog/                     # 根目录 - 扁平化设计
 ├── README.md             # 本文档
 ├── clog.go              # 构造函数：New()
 ├── config.go            # 配置结构：Config + validate()
-├── noop.go             # No-op 实现：Discard()
+├── noop.go              # No-op 实现：Discard()
 ├── options.go           # 函数式选项：Option、WithNamespace 等
 ├── logger.go            # Logger 接口定义
 ├── level.go             # 日志级别：Level、ParseLevel
@@ -268,6 +268,7 @@ logger.Error("Error message")      // 红色加粗，最醒目
 ```
 
 输出示例：
+
 ```
 15:01:01.340 | INFO  | user-service.api | main.go:42 | Service started
 15:01:02.123 | ERROR | user-service.api | main.go:50 | Failed to connect
