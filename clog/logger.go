@@ -3,7 +3,7 @@
 //
 // 特性：
 //   - 抽象接口，不暴露底层实现（slog）
-//   - 支持层级命名空间，适配微服务架构
+//   - 支持层级命名空间，对于子模块 order，可使用 logger.WithNamespace("order")
 //   - 零外部依赖（仅依赖 Go 标准库）
 //   - 采用函数式选项模式，符合 Genesis 标准
 //   - 零内存分配（Zero Allocation）设计，Field 直接映射到 slog.Attr
@@ -22,7 +22,9 @@
 //
 //	logger, _ := clog.New(&clog.Config{Level: "info"},
 //	    clog.WithNamespace("my-service", "api"),
-//	    clog.WithStandardContext(), // 自动提取 trace_id, user_id, request_id
+//	    clog.WithContextField("trace_id", "trace_id"),
+//	    clog.WithContextField("user_id", "user_id"),
+//	    clog.WithContextField("request_id", "request_id"),
 //	)
 //
 // 带 Context 的日志：

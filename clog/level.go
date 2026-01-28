@@ -19,19 +19,14 @@ import (
 type Level int
 
 const (
-	DebugLevel Level = iota - 4 // 调试级别
-	InfoLevel                   // 信息级别
-	WarnLevel                   // 警告级别
-	ErrorLevel                  // 错误级别
-	FatalLevel                  // 致命级别
+	DebugLevel Level = -4 // 调试级别
+	InfoLevel  Level = 0  // 信息级别
+	WarnLevel  Level = 4  // 警告级别
+	ErrorLevel Level = 8  // 错误级别
+	FatalLevel Level = 12 // 致命级别
 )
 
 // String 返回 Level 的字符串表示
-//
-// 示例：
-//
-//	clog.InfoLevel.String() // "info"
-//	clog.ErrorLevel.String() // "error"
 func (l Level) String() string {
 	switch l {
 	case DebugLevel:
@@ -56,11 +51,6 @@ func (l Level) String() string {
 //	"debug", "info", "warn", "error", "fatal"
 //
 // 如果无法解析，会返回 InfoLevel 和错误信息。
-//
-// 示例：
-//
-//	level, err := clog.ParseLevel("INFO")
-//	level, err := clog.ParseLevel("debug")
 func ParseLevel(s string) (Level, error) {
 	switch strings.ToLower(s) {
 	case "debug":

@@ -1,6 +1,6 @@
-[![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/clog.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/clog)
-
 # clog - Genesis 结构化日志组件
+
+[![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/clog.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/clog)
 
 `clog` 是 Genesis 框架的结构化日志组件，基于 Go 标准库 `log/slog` 构建。
 
@@ -21,7 +21,7 @@ clog/                     # 根目录 - 扁平化设计
 ├── README.md             # 本文档
 ├── clog.go              # 构造函数：New()
 ├── config.go            # 配置结构：Config + validate()
-├── noop.go             # No-op 实现：Discard()
+├── noop.go              # No-op 实现：Discard()
 ├── options.go           # 函数式选项：Option、WithNamespace 等
 ├── logger.go            # Logger 接口定义
 ├── level.go             # 日志级别：Level、ParseLevel
@@ -29,7 +29,7 @@ clog/                     # 根目录 - 扁平化设计
 ├── impl.go              # Logger 实现（私有）
 ├── context.go           # Context 字段提取（私有）
 ├── namespace.go         # 命名空间处理（私有）
-└── slog_handler.go      # slog Handler 适配器（私有）
+└── handler.go           # slog Handler 适配器（私有）
 ```
 
 **说明**：采用完全扁平化设计，所有公开 API 直接在根目录，实现细节通过私有函数隐藏。
@@ -105,8 +105,8 @@ type Config struct {
 
 ```go
 func WithNamespace(parts ...string) Option              // 命名空间
-func WithStandardContext() Option                       // trace_id, user_id, request_id
 func WithContextField(key any, fieldName string) Option // 自定义 Context 字段
+func WithTraceContext() Option                          // OpenTelemetry trace_id/span_id
 ```
 
 ## 4. 工厂函数
@@ -210,7 +210,9 @@ logger, _ := clog.New(&clog.Config{
     Output: "stdout",
 },
     clog.WithNamespace("order-service", "api"),
-    clog.WithStandardContext(),
+    clog.WithContextField("trace_id", "trace_id"),
+    clog.WithContextField("user_id", "user_id"),
+    clog.WithContextField("request_id", "request_id"),
 )
 ```
 
@@ -221,8 +223,11 @@ logger, _ := clog.New(&clog.Config{
 ctx := context.WithValue(context.Background(), "trace_id", "abc123")
 ctx = context.WithValue(ctx, "user_id", "user-456")
 
-// 使用 WithStandardContext 自动提取
-logger, _ := clog.New(&clog.Config{Level: "info"}, clog.WithStandardContext())
+// 使用 WithContextField 自定义提取
+logger, _ := clog.New(&clog.Config{Level: "info"},
+    clog.WithContextField("trace_id", "trace_id"),
+    clog.WithContextField("user_id", "user_id"),
+)
 logger.InfoContext(ctx, "Request processed")
 // 输出: {"trace_id":"abc123", "user_id":"user-456", "msg":"Request processed", ...}
 ```
@@ -268,6 +273,7 @@ logger.Error("Error message")      // 红色加粗，最醒目
 ```
 
 输出示例：
+
 ```
 15:01:01.340 | INFO  | user-service.api | main.go:42 | Service started
 15:01:02.123 | ERROR | user-service.api | main.go:50 | Failed to connect
@@ -310,6 +316,6 @@ go doc ./clog.String
 ## 10. 最佳实践
 
 1. **命名空间使用**：应用级 Logger 设置主服务名，组件内使用 WithNamespace 追加
-2. **Context 提取**：使用 WithStandardContext 自动提取标准字段，或自定义配置
+2. **Context 提取**：使用 WithContextField 自定义字段，或启用 WithTraceContext 自动提取 TraceID/SpanID
 3. **错误处理**：使用 Error/ErrorWithCode 统一错误日志格式
 4. **性能考虑**：避免在热路径中创建大量 Field，复用 Logger 实例

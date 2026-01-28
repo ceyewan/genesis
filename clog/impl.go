@@ -79,22 +79,31 @@ func (l *loggerImpl) WithNamespace(parts ...string) Logger {
 	newOptions.namespaceParts = append(l.options.namespaceParts, parts...)
 
 	newLogger := &loggerImpl{
-		handler: l.handler,
-		config:  l.config,
-		options: &newOptions,
+		handler:   l.handler,
+		config:    l.config,
+		options:   &newOptions,
+		baseAttrs: append([]slog.Attr(nil), l.baseAttrs...),
 	}
-	newLogger.setupBaseAttrs()
 
 	return newLogger
 }
 
 func (l *loggerImpl) With(fields ...Field) Logger {
-	// 直接将 slog.Attr 字段追加到 baseAttrs
+	// 直接将 slog.Attr 字段追加到 baseAttrs。
+	//
+	// 注意：这里必须复制 baseAttrs，避免派生 Logger 之间共享底层数组导致字段互相覆盖。
+	// 例如：
+	//   base := logger.With(a).With(b)  // baseAttrs 可能有多余 cap
+	//   c1 := base.With(x)
+	//   c2 := base.With(y)             // 若不复制，可能覆盖 c1 的 x
+	baseAttrs := append([]slog.Attr(nil), l.baseAttrs...)
+	baseAttrs = append(baseAttrs, fields...)
+
 	newLogger := &loggerImpl{
 		handler:   l.handler,
 		config:    l.config,
 		options:   l.options,
-		baseAttrs: append(l.baseAttrs, fields...),
+		baseAttrs: baseAttrs,
 	}
 
 	return newLogger
@@ -153,9 +162,7 @@ func (l *loggerImpl) log(ctx context.Context, level Level, msg string, fields ..
 
 // SetLevel 动态调整日志级别
 //
-// TODO: 目前未实现真正的动态级别切换。slog.Handler 的 Level 在创建时固定，
-// 运行时修改需要包装 Handler 并使用 atomic.Value 或互斥锁保护级别变量。
-// 当前实现仅作为接口兼容占位。
+// 通过底层 handler 的 SetLevel 实现（基于 slog.LevelVar），可在运行时生效。
 func (l *loggerImpl) SetLevel(level Level) error {
 	if h, ok := l.handler.(interface{ SetLevel(Level) error }); ok {
 		return h.SetLevel(level)
