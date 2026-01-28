@@ -22,11 +22,6 @@ type options struct {
 // WithNamespace 设置日志命名空间，支持多级命名空间
 //
 // 命名空间会以 "." 连接，作为日志中的 namespace 字段。
-//
-// 示例：
-//
-//	// 设置为 "order-service.api"
-//	clog.WithNamespace("order-service", "api")
 func WithNamespace(parts ...string) Option {
 	return func(o *options) {
 		o.namespaceParts = append(o.namespaceParts, parts...)
@@ -36,34 +31,14 @@ func WithNamespace(parts ...string) Option {
 // WithContextField 添加自定义的 Context 字段提取规则
 //
 // 可以从 Context 中提取任意字段并添加到日志中。
-//
-// 示例：
-//
-//	clog.WithContextField("trace-id", "trace_id")
+// 推荐常用字段：trace_id、user_id、request_id
+// 如果开启了 OpenTelemetry TraceID 提取，则无需手动添加 trace_id 字段。
 func WithContextField(key any, fieldName string) Option {
 	return func(o *options) {
 		o.contextFields = append(o.contextFields, ContextField{
 			Key:       key,
 			FieldName: fieldName,
 		})
-	}
-}
-
-// WithStandardContext 自动提取标准的上下文字段
-//
-// 这是一个便捷方法，会自动添加以下常用字段的提取规则：
-//   - trace_id: 追踪标识
-//   - user_id: 用户标识
-//   - request_id: 请求标识
-//
-// 需要搭配 InfoContext 等方法使用，如 logger.InfoContext(ctx, "message")
-func WithStandardContext() Option {
-	return func(o *options) {
-		o.contextFields = append(o.contextFields,
-			ContextField{Key: "trace_id", FieldName: "trace_id"},
-			ContextField{Key: "user_id", FieldName: "user_id"},
-			ContextField{Key: "request_id", FieldName: "request_id"},
-		)
 	}
 }
 

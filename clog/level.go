@@ -19,11 +19,11 @@ import (
 type Level int
 
 const (
-	DebugLevel Level = iota - 4 // 调试级别
-	InfoLevel                   // 信息级别
-	WarnLevel                   // 警告级别
-	ErrorLevel                  // 错误级别
-	FatalLevel                  // 致命级别
+	DebugLevel Level = -4 // 调试级别
+	InfoLevel  Level = 0  // 信息级别
+	WarnLevel  Level = 4  // 警告级别
+	ErrorLevel Level = 8  // 错误级别
+	FatalLevel Level = 12 // 致命级别
 )
 
 // String 返回 Level 的字符串表示

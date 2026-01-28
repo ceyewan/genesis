@@ -22,7 +22,9 @@
 //
 //	logger, _ := clog.New(&clog.Config{Level: "info"},
 //	    clog.WithNamespace("my-service", "api"),
-//	    clog.WithStandardContext(), // 自动提取 trace_id, user_id, request_id
+//	    clog.WithContextField("trace_id", "trace_id"),
+//	    clog.WithContextField("user_id", "user_id"),
+//	    clog.WithContextField("request_id", "request_id"),
 //	)
 //
 // 带 Context 的日志：

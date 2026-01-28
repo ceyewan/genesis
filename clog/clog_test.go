@@ -59,7 +59,9 @@ func TestNew(t *testing.T) {
 			},
 			opts: []Option{
 				WithNamespace("test", "service"),
-				WithStandardContext(),
+				WithContextField("trace_id", "trace_id"),
+				WithContextField("user_id", "user_id"),
+				WithContextField("request_id", "request_id"),
 			},
 			wantErr: false,
 		},
@@ -323,6 +325,43 @@ func TestLoggerWith(t *testing.T) {
 	}
 	if logEntry["version"] != float64(1) {
 		t.Errorf("Expected version = 1, got %v", logEntry["version"])
+	}
+}
+
+func TestLoggerWith_DerivedLoggerDoesNotMutateSiblings(t *testing.T) {
+	var buf bytes.Buffer
+	logger, _ := New(&Config{
+		Level:  "debug",
+		Format: "json",
+		Output: "buffer",
+	}, withBuffer(&buf))
+
+	// 先构造一个 base，使其 baseAttrs 具备“多余 cap”的可能，
+	// 以覆盖“append 复用底层数组导致兄弟 Logger 字段互相污染”的场景。
+	base := logger.With(
+		String("k1", "v1"),
+		String("k2", "v2"),
+		String("k3", "v3"),
+		String("k4", "v4"),
+	).With(String("k5", "v5"))
+
+	a := base.With(String("x", "A"))
+	_ = base.With(String("x", "B"))
+
+	a.Info("msg")
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("Expected 1 log line, got %d: %q", len(lines), buf.String())
+	}
+
+	var logEntry map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &logEntry); err != nil {
+		t.Fatalf("Failed to parse log entry: %v", err)
+	}
+
+	if logEntry["x"] != "A" {
+		t.Fatalf("Expected x = A, got %v", logEntry["x"])
 	}
 }
 

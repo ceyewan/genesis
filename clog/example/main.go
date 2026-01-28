@@ -1,0 +1,1 @@
+../../examples/clog/main.go

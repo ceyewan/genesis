@@ -12,143 +12,140 @@ import (
 	"sync"
 )
 
-// clogHandler 封装了底层的 slog.Handler，并处理 Source 路径裁剪和动态级别调整。
+// clogHandler 封装 slog.Handler，提供动态级别和 Flush 能力。
 type clogHandler struct {
 	slog.Handler
-	levelVar   *slog.LevelVar // 用于动态调整级别
-	sourceRoot string
+	levelVar *slog.LevelVar
 }
 
 // newHandler 创建并返回一个适配 clog 配置的 slog.Handler（内部使用）。
+//
+// 构造顺序：writer -> handler options -> base handler -> (optional) color handler -> wrapper。
 func newHandler(config *Config, options *options) (slog.Handler, error) {
-	var w io.Writer
+	w, err := resolveWriter(config, options)
+	if err != nil {
+		return nil, err
+	}
+
+	levelVar := new(slog.LevelVar)
+	levelVar.Set(slogLevelFromConfig(config.Level))
+
+	replaceAttr := newReplaceAttr(config)
+	opts := &slog.HandlerOptions{
+		AddSource:   config.AddSource,
+		Level:       levelVar,
+		ReplaceAttr: replaceAttr,
+	}
+
+	format := strings.ToLower(config.Format)
+	var handler slog.Handler
+	if format == "json" {
+		handler = slog.NewJSONHandler(w, opts)
+	} else {
+		textFactory := func(writer io.Writer) slog.Handler {
+			return slog.NewTextHandler(writer, opts)
+		}
+
+		if config.EnableColor {
+			handler = newColoredTextHandler(textFactory, w)
+		} else {
+			handler = textFactory(w)
+		}
+	}
+
+	return &clogHandler{Handler: handler, levelVar: levelVar}, nil
+}
+
+// resolveWriter 根据配置创建输出 writer。
+func resolveWriter(config *Config, options *options) (io.Writer, error) {
 	switch strings.ToLower(config.Output) {
 	case "stdout":
-		w = os.Stdout
+		return os.Stdout, nil
 	case "stderr":
-		w = os.Stderr
+		return os.Stderr, nil
 	case "buffer":
-		// 测试专用，使用缓冲区
 		if options.buffer != nil {
-			w = options.buffer
-		} else {
-			return nil, fmt.Errorf("buffer output requires options.buffer to be set")
+			return options.buffer, nil
 		}
+		return nil, fmt.Errorf("buffer output requires options.buffer to be set")
 	default:
-		// 假设是文件路径
 		f, err := os.OpenFile(config.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 		if err != nil {
 			return nil, err
 		}
-		w = f
+		return f, nil
 	}
-
-	levelVar := new(slog.LevelVar)
-
-	// 解析配置的级别字符串，直接映射到slog级别
-	var slogLevel slog.Level
-	switch strings.ToLower(config.Level) {
-	case "debug":
-		slogLevel = slog.LevelDebug
-	case "info":
-		slogLevel = slog.LevelInfo
-	case "warn":
-		slogLevel = slog.LevelWarn
-	case "error":
-		slogLevel = slog.LevelError
-	case "fatal":
-		slogLevel = slog.LevelError + 4 // Fatal比Error更高
-	default:
-		slogLevel = slog.LevelInfo // 默认info级别
-	}
-
-	levelVar.Set(slogLevel)
-
-	opts := &slog.HandlerOptions{
-		AddSource: config.AddSource,
-		Level:     levelVar,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			// 修复级别显示 - 正确映射slog级别到字符串
-			if a.Key == slog.LevelKey {
-				level := a.Value.Any().(slog.Level)
-				var levelStr string
-				switch {
-				case level <= slog.LevelDebug:
-					levelStr = "DEBUG"
-				case level <= slog.LevelInfo:
-					levelStr = "INFO"
-				case level <= slog.LevelWarn:
-					levelStr = "WARN"
-				case level <= slog.LevelError:
-					levelStr = "ERROR"
-				default:
-					levelStr = "FATAL"
-				}
-				a.Value = slog.StringValue(levelStr)
-			}
-
-			// 统一时间戳格式为 ISO8601
-			if a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
-				// 使用 ISO8601 格式：2006-01-02T15:04:05.000Z
-				a.Value = slog.StringValue(a.Value.Time().Format(timeFormat))
-			}
-
-			// 路径裁剪和调用信息处理 - 显示为caller字段
-			if a.Key == slog.SourceKey {
-				if source, ok := a.Value.Any().(*slog.Source); ok {
-					fileName := source.File
-					if config.SourceRoot != "" {
-						// 如果指定了SourceRoot，尝试从该路径开始裁剪
-						relPath, err := filepath.Rel(config.SourceRoot, fileName)
-						if err == nil && !strings.HasPrefix(relPath, "..") {
-							fileName = relPath
-						} else {
-							// 如果SourceRoot无效，尝试查找包含"genesis"的路径并裁剪
-							if idx := strings.Index(fileName, "genesis"); idx != -1 {
-								fileName = fileName[idx:]
-							}
-						}
-					}
-					// 创建caller字段，格式：文件名:行号
-					caller := fmt.Sprintf("%s:%d", fileName, source.Line)
-					// 返回caller属性而不是修改source
-					return slog.String("caller", caller)
-				}
-			}
-			return a
-		},
-	}
-
-	var handler slog.Handler
-	format := strings.ToLower(config.Format)
-	if format == "json" {
-		handler = slog.NewJSONHandler(w, opts)
-	} else {
-		// console 格式
-		baseHandler := slog.NewTextHandler(w, opts)
-		if config.EnableColor {
-			handler = &coloredTextHandler{
-				baseHandler: baseHandler,
-				writer:      w,
-				levelVar:    levelVar,
-				addSource:   config.AddSource,
-				sourceRoot:  config.SourceRoot,
-			}
-		} else {
-			handler = baseHandler
-		}
-	}
-
-	return &clogHandler{
-		Handler:    handler,
-		levelVar:   levelVar,
-		sourceRoot: config.SourceRoot,
-	}, nil
 }
 
-// SetLevel 动态调整日志级别
+// slogLevelFromConfig 将配置的 Level 映射为 slog.Level。
+func slogLevelFromConfig(level string) slog.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	case "fatal":
+		return slog.LevelError + 4
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// newReplaceAttr 统一处理 Level/Time/Source 等字段。
+func newReplaceAttr(config *Config) func(groups []string, a slog.Attr) slog.Attr {
+	return func(groups []string, a slog.Attr) slog.Attr {
+		switch a.Key {
+		case slog.LevelKey:
+			level := a.Value.Any().(slog.Level)
+			var levelStr string
+		switch {
+		case level <= slog.LevelDebug:
+			levelStr = "DEBUG"
+		case level <= slog.LevelInfo:
+			levelStr = "INFO"
+		case level <= slog.LevelWarn:
+			levelStr = "WARN"
+		case level <= slog.LevelError:
+			levelStr = "ERROR"
+			default:
+				levelStr = "FATAL"
+			}
+			a.Value = slog.StringValue(levelStr)
+		case slog.TimeKey:
+			if a.Value.Kind() == slog.KindTime {
+				a.Value = slog.StringValue(a.Value.Time().Format(timeFormat))
+			}
+		case slog.SourceKey:
+			if source, ok := a.Value.Any().(*slog.Source); ok {
+				fileName := trimSourcePath(source.File, config.SourceRoot)
+				caller := fmt.Sprintf("%s:%d", fileName, source.Line)
+				return slog.String("caller", caller)
+			}
+		}
+		return a
+	}
+}
+
+// trimSourcePath 根据 sourceRoot 和项目路径裁剪调用文件路径。
+func trimSourcePath(fileName, sourceRoot string) string {
+	if sourceRoot != "" {
+		relPath, err := filepath.Rel(sourceRoot, fileName)
+		if err == nil && !strings.HasPrefix(relPath, "..") {
+			return relPath
+		}
+	}
+	if idx := strings.Index(fileName, "genesis"); idx != -1 {
+		return fileName[idx:]
+	}
+	return fileName
+}
+
+// SetLevel 动态调整日志级别。
 func (h *clogHandler) SetLevel(level Level) error {
-	// 根据Level映射到slog.Level
 	var slogLevel slog.Level
 	switch level {
 	case DebugLevel:
@@ -161,13 +158,15 @@ func (h *clogHandler) SetLevel(level Level) error {
 		slogLevel = slog.LevelError
 	case FatalLevel:
 		slogLevel = slog.LevelError + 4
+	default:
+		slogLevel = slog.LevelInfo
 	}
 
 	h.levelVar.Set(slogLevel)
 	return nil
 }
 
-// Flush 强制同步所有缓冲区的日志 (slog 默认是同步的，这里留空)
+// Flush 强制同步所有缓冲区的日志 (slog 默认是同步的，这里留空)。
 func (h *clogHandler) Flush() {
 	// No-op for standard slog handlers
 }
@@ -188,97 +187,84 @@ const (
 	ansiBgRed   = "\033[41m" // 红底色，用于 Fatal
 )
 
-// coloredTextHandler 为 TextHandler 添加彩色支持
+// coloredTextHandler 为 TextHandler 添加彩色支持。
+//
+// 结构：coloredTextHandler -> textFactory -> slog.TextHandler
+// 每次 Handle 时用临时 TextHandler 输出到 buffer，再进行着色。
 type coloredTextHandler struct {
-	baseHandler slog.Handler
+	textFactory func(io.Writer) slog.Handler
 	writer      io.Writer
-	levelVar    *slog.LevelVar
-	addSource   bool
-	sourceRoot  string
-	mu          sync.Mutex
+	attrs       []slog.Attr
+	groups      []string
+	mu          *sync.Mutex
 }
 
-// Enabled 检查日志级别是否启用
+func newColoredTextHandler(textFactory func(io.Writer) slog.Handler, writer io.Writer) slog.Handler {
+	return &coloredTextHandler{
+		textFactory: textFactory,
+		writer:      writer,
+		mu:          &sync.Mutex{},
+	}
+}
+
+// Enabled 检查日志级别是否启用。
 func (h *coloredTextHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.baseHandler.Enabled(ctx, level)
+	base := h.baseHandler(io.Discard)
+	return base.Enabled(ctx, level)
 }
 
-// Handle 处理日志记录，添加颜色输出
+// Handle 处理日志记录，添加颜色输出。
 func (h *coloredTextHandler) Handle(ctx context.Context, r slog.Record) error {
-	// 使用缓冲区捕获基础 handler 的输出
 	var buf bytes.Buffer
 
-	// 创建临时的 TextHandler，输出到缓冲区
-	replaceAttr := func(groups []string, a slog.Attr) slog.Attr {
-		// 处理 Source 字段路径裁剪
-		if a.Key == slog.SourceKey && h.addSource {
-			if source, ok := a.Value.Any().(*slog.Source); ok {
-				fileName := source.File
-				if h.sourceRoot != "" {
-					relPath, err := filepath.Rel(h.sourceRoot, fileName)
-					if err == nil && !strings.HasPrefix(relPath, "..") {
-						fileName = relPath
-					} else {
-						if idx := strings.Index(fileName, "genesis"); idx != -1 {
-							fileName = fileName[idx:]
-						}
-					}
-				}
-				caller := fmt.Sprintf("%s:%d", fileName, source.Line)
-				return slog.String("caller", caller)
-			}
-		}
-		return a
-	}
-
-	baseOpts := &slog.HandlerOptions{
-		AddSource:   h.addSource,
-		Level:       h.levelVar,
-		ReplaceAttr: replaceAttr,
-	}
-	tempHandler := slog.NewTextHandler(&buf, baseOpts)
-
-	// 输出到缓冲区
-	if err := tempHandler.Handle(ctx, r); err != nil {
+	base := h.baseHandler(&buf)
+	if err := base.Handle(ctx, r); err != nil {
 		return err
 	}
 
-	// 获取输出内容
-	output := buf.String()
+	coloredOutput := h.colorizeOutput(buf.String(), r.Level)
 
-	// 解析和着色输出
-	coloredOutput := h.colorizeOutput(output, r.Level)
-
-	// 写入最终输出
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	_, err := h.writer.Write([]byte(coloredOutput))
 	return err
 }
 
-// WithAttrs 返回带有附加属性的新 handler
+// WithAttrs 返回带有附加属性的新 handler。
 func (h *coloredTextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &coloredTextHandler{
-		baseHandler: h.baseHandler.WithAttrs(attrs),
+		textFactory: h.textFactory,
 		writer:      h.writer,
-		levelVar:    h.levelVar,
-		addSource:   h.addSource,
-		sourceRoot:  h.sourceRoot,
+		attrs:       append(append([]slog.Attr(nil), h.attrs...), attrs...),
+		groups:      append([]string(nil), h.groups...),
+		mu:          h.mu,
 	}
 }
 
-// WithGroup 返回带有分组的新 handler
+// WithGroup 返回带有分组的新 handler。
 func (h *coloredTextHandler) WithGroup(name string) slog.Handler {
 	return &coloredTextHandler{
-		baseHandler: h.baseHandler.WithGroup(name),
+		textFactory: h.textFactory,
 		writer:      h.writer,
-		levelVar:    h.levelVar,
-		addSource:   h.addSource,
-		sourceRoot:  h.sourceRoot,
+		attrs:       append([]slog.Attr(nil), h.attrs...),
+		groups:      append(append([]string(nil), h.groups...), name),
+		mu:          h.mu,
 	}
 }
 
-// colorizeOutput 为日志输出添加 ANSI 颜色
+// baseHandler 构建带 attrs/groups 的基础 TextHandler。
+func (h *coloredTextHandler) baseHandler(writer io.Writer) slog.Handler {
+	base := h.textFactory(writer)
+	if len(h.attrs) > 0 {
+		base = base.WithAttrs(h.attrs)
+	}
+	for _, group := range h.groups {
+		base = base.WithGroup(group)
+	}
+	return base
+}
+
+// colorizeOutput 为日志输出添加 ANSI 颜色。
 func (h *coloredTextHandler) colorizeOutput(output string, level slog.Level) string {
 	output = strings.TrimSpace(output)
 	if output == "" {
@@ -371,8 +357,8 @@ func (h *coloredTextHandler) colorizeOutput(output string, level slog.Level) str
 	return sb.String() + "\n"
 }
 
-// parseKeyValuePairs 解析 "key1=value1 key2=value2 ..." 格式的字符串
-// 处理引号的值（可能包含空格）
+// parseKeyValuePairs 解析 "key1=value1 key2=value2 ..." 格式的字符串。
+// 处理引号的值（可能包含空格）。
 func (h *coloredTextHandler) parseKeyValuePairs(line string) []string {
 	var pairs []string
 	var current strings.Builder
@@ -415,7 +401,7 @@ func (h *coloredTextHandler) parseKeyValuePairs(line string) []string {
 	return pairs
 }
 
-// getLevelColor 根据日志级别返回对应的颜色代码
+// getLevelColor 根据日志级别返回对应的颜色代码。
 func (h *coloredTextHandler) getLevelColor(level slog.Level) string {
 	switch {
 	case level <= slog.LevelDebug:

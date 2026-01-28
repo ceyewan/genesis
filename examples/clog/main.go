@@ -36,6 +36,12 @@ func main() {
 
 	// 示例5：彩色控制台输出 - 开发环境推荐配置
 	coloredExample()
+
+	// 示例6：预设字段 With
+	presetFieldsExample()
+
+	// 示例7：动态调整日志级别
+	dynamicLevelExample()
 }
 
 // basicExample 展示基础配置，推荐用于生产环境
@@ -67,7 +73,9 @@ func contextExample() {
 		Format: "json",
 		Output: "stdout",
 	},
-		clog.WithStandardContext(), // 自动提取 trace_id, user_id, request_id
+		clog.WithContextField("trace_id", "trace_id"),
+		clog.WithContextField("user_id", "user_id"),
+		clog.WithContextField("request_id", "request_id"),
 	)
 
 	// 模拟微服务调用链
@@ -200,4 +208,62 @@ func coloredExample() {
 		clog.ErrorWithCode(err, "DB_001"),
 		clog.String("database", "users"),
 	)
+}
+
+// presetFieldsExample 展示 With 预设字段用法
+func presetFieldsExample() {
+	fmt.Println("\n--- 示例6：预设字段 With ---")
+
+	logger, _ := clog.New(&clog.Config{
+		Level:  "info",
+		Format: "json",
+		Output: "stdout",
+	},
+		clog.WithNamespace("user-service"),
+	)
+
+	// 预设公共字段
+	base := logger.With(
+		clog.String("component", "auth"),
+		clog.String("env", "staging"),
+	)
+
+	base = base.WithNamespace("auth")
+
+	base.Info("登录请求",
+		clog.String("user_id", "u-1001"),
+	)
+
+	// 继续派生，叠加更多字段
+	requestLogger := base.With(clog.String("request_id", "req-001"))
+	requestLogger.Warn("风控命中",
+		clog.String("rule", "ip_blacklist"),
+	)
+}
+
+// dynamicLevelExample 展示动态调整日志级别
+func dynamicLevelExample() {
+	fmt.Println("\n--- 示例7：动态调整日志级别 ---")
+
+	logger, _ := clog.New(&clog.Config{
+		Level:       "info",
+		Format:      "console",
+		Output:      "stdout",
+		EnableColor: false,
+		AddSource:   true,
+		SourceRoot:  "genesis",
+	})
+
+	// 当前为 info，debug 不输出
+	logger.Debug("debug: 这条不会出现")
+	logger.Info("info: 默认级别输出")
+
+	fmt.Println(">> 切换为 debug 级别")
+	if err := logger.SetLevel(clog.DebugLevel); err != nil {
+		fmt.Println("SetLevel failed:", err)
+	}
+
+	// 切换后 debug 生效
+	logger.Debug("debug: 现在会输出")
+	logger.Info("info: 仍然输出")
 }

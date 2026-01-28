@@ -62,11 +62,12 @@ func Group(k string, fields ...any) Field {
 }
 
 const (
-	errorKey      = "error"
-	errorMsgKey   = "msg"
-	errorCodeKey  = "code"
-	errorTypeKey  = "type"
-	errorStackKey = "stack"
+	errorKey          = "error"
+	errorMsgKey       = "msg"
+	errorMsgSimpleKey = "err_msg"
+	errorCodeKey      = "code"
+	errorTypeKey      = "type"
+	errorStackKey     = "stack"
 )
 
 // Error 将错误简化为仅包含错误消息
@@ -76,7 +77,7 @@ func Error(err error) Field {
 	if err == nil {
 		return slog.Attr{}
 	}
-	return slog.String(errorMsgKey, err.Error())
+	return slog.String(errorMsgSimpleKey, err.Error())
 }
 
 // ErrorWithCode 包含错误代码的错误字段
