@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ceyewan/genesis/clog"
@@ -17,11 +18,12 @@ type mysqlConnector struct {
 	db      *gorm.DB
 	logger  clog.Logger
 	healthy atomic.Bool
+	mu      sync.RWMutex
 }
 
 // NewMySQL 创建 MySQL 连接器
+// 注意：实际连接在调用 Connect() 时建立
 func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
-	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid mysql config")
 	}
@@ -37,35 +39,43 @@ func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
 		logger: opt.logger.With(clog.String("connector", "mysql"), clog.String("name", cfg.Name)),
 	}
 
-	// 构建 DSN：优先使用 cfg.DSN，否则从各字段拼接
-	var dsn string
-	if cfg.DSN != "" {
-		dsn = cfg.DSN
-	} else {
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=True&loc=Local",
-			cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.Database, cfg.Charset)
-	}
-
-	// 创建 GORM 实例
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	if err != nil {
-		return nil, xerrors.Wrapf(err, "mysql connector[%s]: connection failed", cfg.Name)
-	}
-
-	c.db = db
 	return c, nil
 }
 
 // Connect 建立连接
 func (c *mysqlConnector) Connect(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// 幂等：如果已连接则直接返回
+	if c.db != nil {
+		return nil
+	}
+
 	c.logger.Info("attempting to connect to mysql",
 		clog.String("host", c.cfg.Host),
 		clog.Int("port", c.cfg.Port))
 
-	sqlDB, err := c.db.DB()
+	// 构建 DSN：优先使用 cfg.DSN，否则从各字段拼接
+	var dsn string
+	if c.cfg.DSN != "" {
+		dsn = c.cfg.DSN
+	} else {
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=True&loc=Local&timeout=%s",
+			c.cfg.Username, c.cfg.Password, c.cfg.Host, c.cfg.Port, c.cfg.Database, c.cfg.Charset, c.cfg.ConnectTimeout)
+	}
+
+	// 创建 GORM 实例
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	if err != nil {
+		c.logger.Error("failed to open mysql connection", clog.Error(err))
+		return xerrors.Wrapf(ErrConnection, "mysql connector[%s]: %v", c.cfg.Name, err)
+	}
+
+	sqlDB, err := db.DB()
 	if err != nil {
 		c.logger.Error("failed to get mysql db instance", clog.Error(err))
-		return xerrors.Wrapf(err, "mysql connector[%s]: failed to get db instance", c.cfg.Name)
+		return xerrors.Wrapf(ErrConnection, "mysql connector[%s]: failed to get db instance: %v", c.cfg.Name, err)
 	}
 
 	// 配置连接池
@@ -74,11 +84,13 @@ func (c *mysqlConnector) Connect(ctx context.Context) error {
 	sqlDB.SetConnMaxLifetime(c.cfg.ConnMaxLifetime)
 
 	// 测试连接
-	if err := sqlDB.Ping(); err != nil {
+	if err := sqlDB.PingContext(ctx); err != nil {
+		sqlDB.Close()
 		c.logger.Error("failed to connect to mysql", clog.Error(err))
-		return xerrors.Wrapf(err, "mysql connector[%s]: ping failed", c.cfg.Name)
+		return xerrors.Wrapf(ErrConnection, "mysql connector[%s]: ping failed: %v", c.cfg.Name, err)
 	}
 
+	c.db = db
 	c.healthy.Store(true)
 	c.logger.Info("successfully connected to mysql",
 		clog.String("host", c.cfg.Host),
@@ -89,8 +101,15 @@ func (c *mysqlConnector) Connect(ctx context.Context) error {
 
 // Close 关闭连接
 func (c *mysqlConnector) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.logger.Info("closing mysql connection")
 	c.healthy.Store(false)
+
+	if c.db == nil {
+		return nil
+	}
 
 	sqlDB, err := c.db.DB()
 	if err != nil {
@@ -103,22 +122,32 @@ func (c *mysqlConnector) Close() error {
 		return err
 	}
 
+	c.db = nil
 	c.logger.Info("mysql connection closed successfully")
 	return nil
 }
 
 // HealthCheck 检查连接健康状态
 func (c *mysqlConnector) HealthCheck(ctx context.Context) error {
-	sqlDB, err := c.db.DB()
-	if err != nil {
+	c.mu.RLock()
+	db := c.db
+	c.mu.RUnlock()
+
+	if db == nil {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(err, "mysql connector[%s]: health check failed - failed to get db instance", c.cfg.Name)
+		return xerrors.Wrapf(ErrClientNil, "mysql connector[%s]", c.cfg.Name)
 	}
 
-	if err := sqlDB.Ping(); err != nil {
+	sqlDB, err := db.DB()
+	if err != nil {
+		c.healthy.Store(false)
+		return xerrors.Wrapf(ErrHealthCheck, "mysql connector[%s]: %v", c.cfg.Name, err)
+	}
+
+	if err := sqlDB.PingContext(ctx); err != nil {
 		c.healthy.Store(false)
 		c.logger.Warn("mysql health check failed", clog.Error(err))
-		return xerrors.Wrapf(err, "mysql connector[%s]: health check failed", c.cfg.Name)
+		return xerrors.Wrapf(ErrHealthCheck, "mysql connector[%s]: %v", c.cfg.Name, err)
 	}
 
 	c.healthy.Store(true)
@@ -137,5 +166,7 @@ func (c *mysqlConnector) Name() string {
 
 // GetClient 返回 GORM 客户端
 func (c *mysqlConnector) GetClient() *gorm.DB {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.db
 }

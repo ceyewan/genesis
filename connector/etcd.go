@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,11 +17,12 @@ type etcdConnector struct {
 	client  *clientv3.Client
 	logger  clog.Logger
 	healthy atomic.Bool
+	mu      sync.RWMutex
 }
 
 // NewEtcd 创建 Etcd 连接器
+// 注意：实际连接在调用 Connect() 时建立
 func NewEtcd(cfg *EtcdConfig, opts ...Option) (EtcdConnector, error) {
-	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid etcd config")
 	}
@@ -36,56 +38,53 @@ func NewEtcd(cfg *EtcdConfig, opts ...Option) (EtcdConnector, error) {
 		logger: opt.logger.With(clog.String("connector", "etcd"), clog.String("name", cfg.Name)),
 	}
 
+	return c, nil
+}
+
+// Connect 建立连接
+func (c *etcdConnector) Connect(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// 幂等：如果已连接则直接返回
+	if c.client != nil {
+		return nil
+	}
+
+	c.logger.Info("attempting to connect to etcd", clog.Any("endpoints", c.cfg.Endpoints))
+
 	// 创建 Etcd 客户端配置
 	clientConfig := clientv3.Config{
-		Endpoints:   cfg.Endpoints,
-		DialTimeout: c.getEffectiveDialTimeout(),
+		Endpoints:   c.cfg.Endpoints,
+		DialTimeout: c.cfg.DialTimeout,
 	}
 
 	// 设置认证
-	if cfg.Username != "" && cfg.Password != "" {
-		clientConfig.Username = cfg.Username
-		clientConfig.Password = cfg.Password
+	if c.cfg.Username != "" && c.cfg.Password != "" {
+		clientConfig.Username = c.cfg.Username
+		clientConfig.Password = c.cfg.Password
 	}
 
 	// 创建客户端
 	client, err := clientv3.New(clientConfig)
 	if err != nil {
-		return nil, xerrors.Wrapf(err, "etcd connector[%s]: connection failed", c.cfg.Name)
+		c.logger.Error("failed to create etcd client", clog.Error(err))
+		return xerrors.Wrapf(ErrConnection, "etcd connector[%s]: %v", c.cfg.Name, err)
+	}
+
+	// 测试连接
+	testCtx, cancel := context.WithTimeout(ctx, c.cfg.DialTimeout)
+	defer cancel()
+
+	_, err = client.Get(testCtx, "health-check")
+	// etcd v3 对于不存在的键返回空响应，不返回错误
+	if err != nil {
+		client.Close()
+		c.logger.Error("failed to connect to etcd", clog.Error(err))
+		return xerrors.Wrapf(ErrConnection, "etcd connector[%s]: %v", c.cfg.Name, err)
 	}
 
 	c.client = client
-	return c, nil
-}
-
-// getEffectiveDialTimeout 获取有效的拨号超时时间
-func (c *etcdConnector) getEffectiveDialTimeout() time.Duration {
-	if c.cfg.DialTimeout > 0 {
-		return c.cfg.DialTimeout
-	}
-	if c.cfg.Timeout > 0 {
-		return c.cfg.Timeout
-	}
-	if c.cfg.ConnectTimeout > 0 {
-		return c.cfg.ConnectTimeout
-	}
-	return 5 * time.Second
-}
-
-// Connect 建立连接
-func (c *etcdConnector) Connect(ctx context.Context) error {
-	c.logger.Info("attempting to connect to etcd", clog.Any("endpoints", c.cfg.Endpoints))
-
-	// 测试连接
-	testCtx, cancel := context.WithTimeout(ctx, c.getEffectiveDialTimeout())
-	defer cancel()
-
-	_, err := c.client.Get(testCtx, "health-check")
-	if err != nil && !isEtcdNotFoundErr(err) {
-		c.logger.Error("failed to connect to etcd", clog.Error(err))
-		return xerrors.Wrapf(err, "etcd connector[%s]: connect failed", c.cfg.Name)
-	}
-
 	c.healthy.Store(true)
 	c.logger.Info("successfully connected to etcd", clog.Any("endpoints", c.cfg.Endpoints))
 	return nil
@@ -93,30 +92,46 @@ func (c *etcdConnector) Connect(ctx context.Context) error {
 
 // Close 关闭连接
 func (c *etcdConnector) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.logger.Info("closing etcd connection")
 	c.healthy.Store(false)
 
-	if c.client != nil {
-		err := c.client.Close()
-		if err != nil {
-			c.logger.Error("failed to close etcd connection", clog.Error(err))
-			return err
-		}
-		c.logger.Info("etcd connection closed successfully")
+	if c.client == nil {
+		return nil
 	}
+
+	if err := c.client.Close(); err != nil {
+		c.logger.Error("failed to close etcd connection", clog.Error(err))
+		return err
+	}
+
+	c.client = nil
+	c.logger.Info("etcd connection closed successfully")
 	return nil
 }
 
 // HealthCheck 检查连接健康状态
 func (c *etcdConnector) HealthCheck(ctx context.Context) error {
+	c.mu.RLock()
+	client := c.client
+	c.mu.RUnlock()
+
+	if client == nil {
+		c.healthy.Store(false)
+		return xerrors.Wrapf(ErrClientNil, "etcd connector[%s]", c.cfg.Name)
+	}
+
 	testCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	_, err := c.client.Get(testCtx, "health-check")
-	if err != nil && !isEtcdNotFoundErr(err) {
+	_, err := client.Get(testCtx, "health-check")
+	// etcd v3 对于不存在的键返回空响应，不返回错误
+	if err != nil {
 		c.healthy.Store(false)
 		c.logger.Warn("etcd health check failed", clog.Error(err))
-		return xerrors.Wrapf(err, "etcd connector[%s]: health check failed", c.cfg.Name)
+		return xerrors.Wrapf(ErrHealthCheck, "etcd connector[%s]: %v", c.cfg.Name, err)
 	}
 
 	c.healthy.Store(true)
@@ -135,15 +150,8 @@ func (c *etcdConnector) Name() string {
 
 // GetClient 返回 Etcd 客户端
 func (c *etcdConnector) GetClient() *clientv3.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.client
 }
 
-// isEtcdNotFoundErr 检查是否是 etcd 的"未找到"错误
-func isEtcdNotFoundErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return err == context.DeadlineExceeded ||
-		err == context.Canceled ||
-		(err.Error() == "etcdserver: requested key not found")
-}

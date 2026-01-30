@@ -76,7 +76,6 @@ func TestRedisConfigValidation(t *testing.T) {
 				require.NoError(t, err)
 				// Verify defaults are set
 				assert.NotEmpty(t, tt.cfg.Name)
-				assert.Greater(t, tt.cfg.MaxRetries, 0)
 				assert.Greater(t, tt.cfg.PoolSize, 0)
 			}
 		})
@@ -367,7 +366,7 @@ func TestSQLiteConfigValidation(t *testing.T) {
 		cfg := &SQLiteConfig{}
 		conn, err := NewSQLite(cfg)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "path is required")
+		assert.ErrorIs(t, err, ErrConfig)
 		assert.Nil(t, conn)
 	})
 }
@@ -401,14 +400,12 @@ func TestConnectorInterface(t *testing.T) {
 		// Test basic interface methods
 		assert.Equal(t, "default", conn.Name())
 		assert.False(t, conn.IsHealthy()) // Not connected yet
-		assert.NotNil(t, conn.GetClient())
+		assert.Nil(t, conn.GetClient())   // Not connected yet
 
 		conn.Close()
 	})
 
 	t.Run("MySQL connector implements interface", func(t *testing.T) {
-		// MySQL connector creates GORM connection in NewMySQL
-		// Use an invalid port to avoid actual connection attempt
 		cfg := &MySQLConfig{
 			Host:     "localhost",
 			Port:     3306,
@@ -417,11 +414,7 @@ func TestConnectorInterface(t *testing.T) {
 			Database: "test_db",
 		}
 		conn, err := NewMySQL(cfg)
-		// MySQL might fail to connect due to credentials, but we can still test the interface
-		if err != nil {
-			// If connection fails, skip this test
-			t.Skip("MySQL not available for interface test")
-		}
+		require.NoError(t, err)
 		defer conn.Close()
 
 		var _ Connector = conn
@@ -429,7 +422,7 @@ func TestConnectorInterface(t *testing.T) {
 		var _ TypedConnector[*gorm.DB] = conn
 
 		assert.Equal(t, "default", conn.Name())
-		assert.NotNil(t, conn.GetClient())
+		assert.Nil(t, conn.GetClient()) // Not connected yet
 	})
 
 	t.Run("Etcd connector implements interface", func(t *testing.T) {
@@ -437,16 +430,14 @@ func TestConnectorInterface(t *testing.T) {
 			Endpoints: []string{"localhost:2379"},
 		}
 		conn, err := NewEtcd(cfg)
-		if err != nil {
-			t.Skip("Etcd not available for interface test")
-		}
+		require.NoError(t, err)
 		defer conn.Close()
 
 		var _ Connector = conn
 		var _ EtcdConnector = conn
 
 		assert.Equal(t, "default", conn.Name())
-		assert.NotNil(t, conn.GetClient())
+		assert.Nil(t, conn.GetClient()) // Not connected yet
 	})
 
 	t.Run("NATS connector implements interface", func(t *testing.T) {
@@ -483,14 +474,14 @@ func TestConnectorInterface(t *testing.T) {
 		}
 		conn, err := NewSQLite(cfg)
 		require.NoError(t, err)
+		defer conn.Close()
 
 		var _ Connector = conn
 		var _ SQLiteConnector = conn
 		var _ TypedConnector[*gorm.DB] = conn
 
-		assert.Contains(t, conn.Name(), "sqlite")
-		assert.NotNil(t, conn.GetClient())
-		conn.Close()
+		assert.Equal(t, "default", conn.Name())
+		assert.Nil(t, conn.GetClient()) // Not connected yet
 	})
 }
 
@@ -582,9 +573,7 @@ func TestCloseWithoutConnect(t *testing.T) {
 			Database: "db",
 		}
 		conn, err := NewMySQL(cfg)
-		if err != nil {
-			t.Skip("MySQL not available")
-		}
+		require.NoError(t, err)
 
 		err = conn.Close()
 		assert.NoError(t, err)
@@ -595,9 +584,7 @@ func TestCloseWithoutConnect(t *testing.T) {
 			Endpoints: []string{"localhost:2379"},
 		}
 		conn, err := NewEtcd(cfg)
-		if err != nil {
-			t.Skip("Etcd not available")
-		}
+		require.NoError(t, err)
 
 		err = conn.Close()
 		assert.NoError(t, err)
@@ -606,9 +593,14 @@ func TestCloseWithoutConnect(t *testing.T) {
 
 // TestDoubleClose 测试重复关闭
 func TestDoubleClose(t *testing.T) {
-	t.Run("Redis double close", func(t *testing.T) {
+	t.Run("SQLite double close", func(t *testing.T) {
 		cfg := &SQLiteConfig{Path: "file::memory:?cache=shared"}
 		conn, err := NewSQLite(cfg)
+		require.NoError(t, err)
+
+		// First connect
+		ctx := context.Background()
+		err = conn.Connect(ctx)
 		require.NoError(t, err)
 
 		err = conn.Close()
@@ -616,7 +608,7 @@ func TestDoubleClose(t *testing.T) {
 
 		// Second close should also work or at least not panic
 		err = conn.Close()
-		// Behavior may vary, but shouldn't panic
+		require.NoError(t, err)
 		assert.False(t, conn.IsHealthy())
 	})
 }

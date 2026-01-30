@@ -20,8 +20,8 @@ type natsConnector struct {
 }
 
 // NewNATS 创建 NATS 连接器
+// 注意：实际连接在调用 Connect() 时建立
 func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
-	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid nats config")
 	}
@@ -45,6 +45,11 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// 幂等：如果已连接则直接返回
+	if c.conn != nil {
+		return nil
+	}
+
 	c.logger.Info("attempting to connect to nats", clog.String("url", c.cfg.URL))
 
 	// 创建 NATS 连接选项
@@ -53,7 +58,7 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 		nats.ReconnectWait(c.cfg.ReconnectWait),
 		nats.MaxReconnects(c.cfg.MaxReconnects),
 		nats.PingInterval(c.cfg.PingInterval),
-		nats.Timeout(c.cfg.Timeout),
+		nats.Timeout(c.cfg.ConnectTimeout),
 	}
 
 	// 添加认证
@@ -68,7 +73,7 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 	conn, err := nats.Connect(c.cfg.URL, natsOpts...)
 	if err != nil {
 		c.logger.Error("failed to connect to nats", clog.Error(err), clog.String("url", c.cfg.URL))
-		return xerrors.Wrapf(err, "nats connector[%s]: connection failed", c.cfg.Name)
+		return xerrors.Wrapf(ErrConnection, "nats connector[%s]: %v", c.cfg.Name, err)
 	}
 
 	c.conn = conn
@@ -86,10 +91,19 @@ func (c *natsConnector) Close() error {
 	c.logger.Info("closing nats connection", clog.String("url", c.cfg.URL))
 	c.healthy.Store(false)
 
-	if c.conn != nil {
-		c.conn.Close()
-		c.logger.Info("nats connection closed successfully")
+	if c.conn == nil {
+		return nil
 	}
+
+	// Drain 确保消息完全处理后再关闭（仅在已连接状态下）
+	if c.conn.Status() == nats.CONNECTED {
+		c.logger.Debug("draining nats connection before close")
+		c.conn.Drain()
+	}
+
+	c.conn.Close()
+	c.conn = nil
+	c.logger.Info("nats connection closed successfully")
 	return nil
 }
 
@@ -101,12 +115,14 @@ func (c *natsConnector) HealthCheck(ctx context.Context) error {
 
 	if conn == nil {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(ErrConnection, "nats connector[%s]: connection is nil", c.cfg.Name)
+		return xerrors.Wrapf(ErrClientNil, "nats connector[%s]", c.cfg.Name)
 	}
 
 	// 检查连接状态
 	status := conn.Status()
-	if status == nats.CLOSED || status == nats.RECONNECTING {
+	// RECONNECTING 是 NATS 的正常故障恢复状态，不应视为不健康
+	// 只有 CLOSED 状态才视为连接失败
+	if status == nats.CLOSED {
 		c.healthy.Store(false)
 		return xerrors.Wrapf(ErrHealthCheck, "nats connector[%s]: connection status: %s", c.cfg.Name, status.String())
 	}
