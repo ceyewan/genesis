@@ -1,6 +1,6 @@
 # 连接器 (Connector)
 
-`connector` 是 Genesis 基础设施层的核心组件，负责管理与外部服务（MySQL、SQLite、Redis、Etcd、NATS、Kafka）的原始连接。它通过封装复杂的连接细节、提供健康检查、生命周期管理以及与 L0 组件（日志、错误）的深度集成，为上层组件提供稳定、类型安全的连接能力。
+`connector` 是 Genesis 基础设施层的核心组件，负责管理与外部服务（MySQL、PostgreSQL、SQLite、Redis、Etcd、NATS、Kafka）的原始连接。它通过封装复杂的连接细节、提供健康检查、生命周期管理以及与 L0 组件（日志、错误）的深度集成，为上层组件提供稳定、类型安全的连接能力。
 
 ## 1. 设计原则
 
@@ -62,14 +62,15 @@ func main() {
 
 ## 4. 支持的连接器类型
 
-| 类型       | 接口               | 底层客户端           | 工厂函数     |
-| :--------- | :----------------- | :------------------- | :----------- |
-| **Redis**  | `RedisConnector`  | `*redis.Client`      | `NewRedis`  |
-| **MySQL**  | `MySQLConnector`  | `*gorm.DB`           | `NewMySQL`  |
-| **SQLite** | `SQLiteConnector` | `*gorm.DB`           | `NewSQLite` |
-| **Etcd**   | `EtcdConnector`   | `*clientv3.Client`   | `NewEtcd`   |
-| **NATS**   | `NATSConnector`   | `*nats.Conn`         | `NewNATS`   |
-| **Kafka**  | `KafkaConnector`  | `*kgo.Client`        | `NewKafka`  |
+| 类型          | 接口                  | 底层客户端           | 工厂函数        |
+| :------------ | :------------------- | :------------------- | :-------------- |
+| **Redis**     | `RedisConnector`    | `*redis.Client`      | `NewRedis`     |
+| **MySQL**     | `MySQLConnector`    | `*gorm.DB`           | `NewMySQL`     |
+| **PostgreSQL**| `PostgreSQLConnector`| `*gorm.DB`          | `NewPostgreSQL`|
+| **SQLite**    | `SQLiteConnector`   | `*gorm.DB`           | `NewSQLite`    |
+| **Etcd**      | `EtcdConnector`     | `*clientv3.Client`   | `NewEtcd`      |
+| **NATS**      | `NATSConnector`     | `*nats.Conn`         | `NewNATS`      |
+| **Kafka**     | `KafkaConnector`    | `*kgo.Client`        | `NewKafka`     |
 
 ## 5. 资源所有权模型
 
@@ -242,6 +243,35 @@ func main() {
 }
 ```
 
+### PostgreSQL 连接器
+
+PostgreSQL 连接器与 MySQL 类似，同样使用 GORM：
+
+```go
+conn, err := connector.NewPostgreSQL(&connector.PostgreSQLConfig{
+    Host:     "localhost",
+    Port:     5432,
+    Username: "postgres",
+    Password: "password",
+    Database: "mydb",
+    SSLMode:  "disable", // 生产环境建议使用 "require" 或 "verify-full"
+}, connector.WithLogger(logger))
+defer conn.Close()
+
+conn.Connect(ctx)
+
+db := conn.GetClient()
+// 使用 GORM 操作数据库
+```
+
+也支持直接传入 DSN：
+
+```go
+conn, err := connector.NewPostgreSQL(&connector.PostgreSQLConfig{
+    DSN: "host=localhost port=5432 user=postgres password=password dbname=mydb sslmode=disable",
+})
+```
+
 ### SQLite 连接器
 
 SQLite 是嵌入式数据库，无需外部服务，适合快速开发和测试：
@@ -285,7 +315,37 @@ client.Produce(ctx, &kgo.Record{
 })
 ```
 
-## 10. 最佳实践
+## 10. 测试
+
+Connector 使用 [testcontainers](https://golang.testcontainers.org/) 进行集成测试，确保与真实服务的兼容性。
+
+### 运行测试
+
+```bash
+# 运行所有测试（包括集成测试）
+go test ./connector/... -v
+
+# 跳过集成测试（快速模式）
+go test ./connector/... -short -v
+
+# 只运行特定连接器的测试
+go test ./connector/... -v -run TestRedis
+go test ./connector/... -v -run TestPostgreSQL
+```
+
+### 测试覆盖范围
+
+- **Redis**：连接、健康检查、基本命令
+- **MySQL**：完整生命周期、GORM CRUD 操作
+- **PostgreSQL**：完整生命周期、GORM CRUD 操作、JSONB 类型
+- **SQLite**：内存数据库、文件数据库、自动迁移
+- **Etcd**：键值存储、事务操作
+- **NATS**：发布订阅、连接状态
+- **Kafka**：连接、健康检查
+
+> **注意**：集成测试需要 Docker 环境，测试会自动启动和销毁容器。
+
+## 11. 最佳实践
 
 1. **分离创建与连接**：在应用启动阶段先调用 `New*` 验证配置（Fail-fast），然后在系统就绪后再调用 `Connect`
 2. **必须 Close**：始终使用 `defer conn.Close()` 释放连接资源

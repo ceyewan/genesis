@@ -170,6 +170,118 @@ func TestMySQLConfigValidation(t *testing.T) {
 	}
 }
 
+// TestPostgreSQLConfigValidation 测试 PostgreSQL 配置验证
+func TestPostgreSQLConfigValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *PostgreSQLConfig
+		wantErr bool
+		isErr   error
+	}{
+		{
+			name: "valid config",
+			cfg: &PostgreSQLConfig{
+				Host:     "localhost",
+				Port:     5432,
+				Username: "postgres",
+				Password: "password",
+				Database: "testdb",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid config with DSN",
+			cfg: &PostgreSQLConfig{
+				DSN: "host=localhost port=5432 user=postgres password=password dbname=testdb sslmode=disable",
+			},
+			wantErr: false,
+		},
+		{
+			name: "empty host should fail",
+			cfg: &PostgreSQLConfig{
+				Host:     "",
+				Port:     5432,
+				Username: "postgres",
+				Database: "testdb",
+			},
+			wantErr: true,
+			isErr:   ErrConfig,
+		},
+		{
+			name: "negative port should fail",
+			cfg: &PostgreSQLConfig{
+				Host:     "localhost",
+				Port:     -1,
+				Username: "postgres",
+				Database: "testdb",
+			},
+			wantErr: true,
+			isErr:   ErrConfig,
+		},
+		{
+			name: "empty username should fail",
+			cfg: &PostgreSQLConfig{
+				Host:     "localhost",
+				Port:     5432,
+				Username: "",
+				Database: "testdb",
+			},
+			wantErr: true,
+			isErr:   ErrConfig,
+		},
+		{
+			name: "empty database should fail",
+			cfg: &PostgreSQLConfig{
+				Host:     "localhost",
+				Port:     5432,
+				Username: "postgres",
+				Database: "",
+			},
+			wantErr: true,
+			isErr:   ErrConfig,
+		},
+		{
+			name: "zero port gets default value",
+			cfg: &PostgreSQLConfig{
+				Host:     "localhost",
+				Port:     0,
+				Username: "postgres",
+				Database: "testdb",
+			},
+			wantErr: false, // Port 0 will be set to 5432 by setDefaults()
+		},
+		{
+			name: "default values applied",
+			cfg: &PostgreSQLConfig{
+				Host:     "localhost",
+				Port:     5432,
+				Username: "postgres",
+				Database: "testdb",
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.validate()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tt.isErr)
+			} else {
+				require.NoError(t, err)
+				// 验证默认值
+				if tt.cfg.Port == 0 {
+					assert.Equal(t, 5432, tt.cfg.Port)
+				}
+				if tt.cfg.Name == "" {
+					assert.Equal(t, "default", tt.cfg.Name)
+				}
+			}
+		})
+	}
+}
+
 // TestEtcdConfigValidation 测试 Etcd 配置验证
 func TestEtcdConfigValidation(t *testing.T) {
 	tests := []struct {

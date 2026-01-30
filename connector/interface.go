@@ -140,6 +140,14 @@ type MySQLConnector interface {
 	TypedConnector[*gorm.DB]
 }
 
+// PostgreSQLConnector PostgreSQL 连接器接口。
+//
+// 提供对 PostgreSQL 数据库的连接管理，基于 GORM ORM 框架。
+// 支持高级数据类型（JSONB、ARRAY、GIS）、复杂查询、全文搜索等企业级特性。
+type PostgreSQLConnector interface {
+	TypedConnector[*gorm.DB]
+}
+
 // SQLiteConnector SQLite 连接器接口。
 //
 // 提供对 SQLite 数据库的连接管理，基于 GORM ORM 框架。

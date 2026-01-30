@@ -19,6 +19,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/kafka"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
 	"github.com/testcontainers/testcontainers-go/modules/nats"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/modules/redis"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"gorm.io/gorm"
@@ -245,6 +246,147 @@ func TestMySQLConnectorIntegration(t *testing.T) {
 		err = db.Raw("SELECT name FROM test_users WHERE id = 1").Scan(&name).Error
 		require.NoError(t, err)
 		assert.Equal(t, "test-name", name)
+	})
+}
+
+// =============================================================================
+// PostgreSQL 集成测试
+// =============================================================================
+
+func setupPostgreSQLContainer(t *testing.T) (*postgres.PostgresContainer, *PostgreSQLConfig) {
+	ctx := context.Background()
+
+	container, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
+		postgres.WithDatabase("genesis_db"),
+		postgres.WithUsername("genesis_user"),
+		postgres.WithPassword("genesis_password"),
+	)
+	require.NoError(t, err, "Failed to start PostgreSQL container")
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	mappedPort, err := container.MappedPort(ctx, "5432")
+	require.NoError(t, err)
+
+	port, err := strconv.Atoi(mappedPort.Port())
+	require.NoError(t, err)
+
+	cfg := &PostgreSQLConfig{
+		Name:     "test-postgresql",
+		Host:     host,
+		Port:     port,
+		Username: "genesis_user",
+		Password: "genesis_password",
+		Database: "genesis_db",
+		SSLMode:  "disable",
+	}
+
+	return container, cfg
+}
+
+func TestPostgreSQLConnectorIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	t.Run("完整生命周期", func(t *testing.T) {
+		container, cfg := setupPostgreSQLContainer(t)
+		defer container.Terminate(context.Background())
+
+		// PostgreSQL 需要额外时间来初始化
+		time.Sleep(5 * time.Second)
+
+		conn, err := NewPostgreSQL(cfg, WithLogger(getTestLogger()))
+		require.NoError(t, err)
+
+		assert.Equal(t, cfg.Name, conn.Name())
+		assert.False(t, conn.IsHealthy())
+
+		ctx := context.Background()
+
+		err = conn.Connect(ctx)
+		require.NoError(t, err)
+		assert.True(t, conn.IsHealthy())
+
+		db := conn.GetClient()
+		require.NotNil(t, db)
+
+		var result string
+		err = db.Raw("SELECT 1 as val").Scan(&result).Error
+		require.NoError(t, err)
+		assert.Equal(t, "1", result)
+
+		err = conn.HealthCheck(ctx)
+		require.NoError(t, err)
+
+		err = conn.Close()
+		require.NoError(t, err)
+		assert.False(t, conn.IsHealthy())
+	})
+
+	t.Run("GORM 基本操作", func(t *testing.T) {
+		container, cfg := setupPostgreSQLContainer(t)
+		defer container.Terminate(context.Background())
+
+		// PostgreSQL 需要额外时间来初始化
+		time.Sleep(5 * time.Second)
+
+		conn, err := NewPostgreSQL(cfg, WithLogger(getTestLogger()))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		err = conn.Connect(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		db := conn.GetClient()
+
+		// 创建测试表
+		err = db.Exec("CREATE TABLE test_users (id SERIAL PRIMARY KEY, name VARCHAR(255))").Error
+		require.NoError(t, err)
+
+		// 插入数据
+		err = db.Exec("INSERT INTO test_users (name) VALUES ($1)", "test-name").Error
+		require.NoError(t, err)
+
+		// 查询数据
+		var name string
+		err = db.Raw("SELECT name FROM test_users WHERE id = 1").Scan(&name).Error
+		require.NoError(t, err)
+		assert.Equal(t, "test-name", name)
+	})
+
+	t.Run("PostgreSQL 特性测试", func(t *testing.T) {
+		container, cfg := setupPostgreSQLContainer(t)
+		defer container.Terminate(context.Background())
+
+		// PostgreSQL 需要额外时间来初始化
+		time.Sleep(5 * time.Second)
+
+		conn, err := NewPostgreSQL(cfg, WithLogger(getTestLogger()))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		err = conn.Connect(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		db := conn.GetClient()
+
+		// 测试 JSONB 类型
+		err = db.Exec("CREATE TABLE test_documents (id SERIAL PRIMARY KEY, data JSONB)").Error
+		require.NoError(t, err)
+
+		// 插入 JSONB 数据
+		err = db.Exec("INSERT INTO test_documents (data) VALUES ($1)", `{"key": "value", "count": 42}`).Error
+		require.NoError(t, err)
+
+		// 查询 JSONB 字段
+		var jsonData string
+		err = db.Raw("SELECT data->>'key' FROM test_documents WHERE id = 1").Scan(&jsonData).Error
+		require.NoError(t, err)
+		assert.Equal(t, "value", jsonData)
 	})
 }
 

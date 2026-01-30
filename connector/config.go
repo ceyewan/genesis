@@ -281,3 +281,75 @@ func (c *SQLiteConfig) validate() error {
 	}
 	return nil
 }
+
+// PostgreSQLConfig PostgreSQL连接配置
+type PostgreSQLConfig struct {
+	// 基础配置
+	Name string `mapstructure:"name"` // 连接器名称 (默认: "default")
+
+	// 核心配置
+	DSN      string `mapstructure:"dsn"`      // 完整 DSN (可选，若提供则忽略 Host/Port 等，优先级最高)
+	Host     string `mapstructure:"host"`     // 主机地址 (DSN 未设置时必填)
+	Port     int    `mapstructure:"port"`     // 端口 (默认: 5432)
+	Username string `mapstructure:"username"` // 用户名 (DSN 未设置时必填)
+	Password string `mapstructure:"password"` // 密码
+	Database string `mapstructure:"database"` // 数据库名 (DSN 未设置时必填)
+
+	// 高级配置
+	SSLMode         string        `mapstructure:"sslmode"`           // SSL 模式 (默认: "disable")
+	MaxIdleConns    int           `mapstructure:"max_idle_conns"`     // 最大空闲连接数 (默认: 10)
+	MaxOpenConns    int           `mapstructure:"max_open_conns"`     // 最大打开连接数 (默认: 100)
+	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`  // 连接最大生命周期 (默认: 1h)
+	ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`    // 连接超时 (默认: 5s)
+	Timezone        string        `mapstructure:"timezone"`          // 时区 (默认: "UTC")
+}
+
+// setDefaults 设置默认值
+func (c *PostgreSQLConfig) setDefaults() {
+	if c.Name == "" {
+		c.Name = "default"
+	}
+	if c.Port == 0 {
+		c.Port = 5432
+	}
+	if c.SSLMode == "" {
+		c.SSLMode = "disable"
+	}
+	if c.MaxIdleConns == 0 {
+		c.MaxIdleConns = 10
+	}
+	if c.MaxOpenConns == 0 {
+		c.MaxOpenConns = 100
+	}
+	if c.ConnMaxLifetime == 0 {
+		c.ConnMaxLifetime = time.Hour
+	}
+	if c.ConnectTimeout == 0 {
+		c.ConnectTimeout = 5 * time.Second
+	}
+	if c.Timezone == "" {
+		c.Timezone = "UTC"
+	}
+}
+
+// validate 验证配置
+func (c *PostgreSQLConfig) validate() error {
+	c.setDefaults()
+	// 如果提供了 DSN，则跳过其他字段的校验
+	if c.DSN != "" {
+		return nil
+	}
+	if c.Host == "" {
+		return ErrConfig
+	}
+	if c.Port <= 0 {
+		return ErrConfig
+	}
+	if c.Username == "" {
+		return ErrConfig
+	}
+	if c.Database == "" {
+		return ErrConfig
+	}
+	return nil
+}
