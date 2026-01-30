@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	tcetcd "github.com/testcontainers/testcontainers-go/modules/etcd"
+	"github.com/testcontainers/testcontainers-go/modules/kafka"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
 	"github.com/testcontainers/testcontainers-go/modules/nats"
 	"github.com/testcontainers/testcontainers-go/modules/redis"
@@ -464,6 +465,80 @@ func TestNATSConnectorIntegration(t *testing.T) {
 
 		nc := conn.GetClient()
 		assert.Equal(t, natsgo.CONNECTED, nc.Status())
+
+		// 健康检查应该通过
+		err = conn.HealthCheck(ctx)
+		require.NoError(t, err)
+		assert.True(t, conn.IsHealthy())
+	})
+}
+
+// =============================================================================
+// Kafka 集成测试
+// =============================================================================
+
+func setupKafkaContainer(t *testing.T) (*kafka.KafkaContainer, *KafkaConfig) {
+	ctx := context.Background()
+
+	container, err := kafka.Run(ctx, "confluentinc/confluent-local:7.5.0")
+	require.NoError(t, err, "Failed to start Kafka container")
+
+	brokers, err := container.Brokers(ctx)
+	require.NoError(t, err)
+	require.Len(t, brokers, 1, "Expected exactly one broker")
+
+	cfg := &KafkaConfig{
+		Name:           "test-kafka",
+		Seed:           brokers,
+		ConnectTimeout: 10 * time.Second,
+		RequestTimeout: 5 * time.Second,
+	}
+
+	return container, cfg
+}
+
+func TestKafkaConnectorIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	t.Run("完整生命周期", func(t *testing.T) {
+		container, cfg := setupKafkaContainer(t)
+		defer container.Terminate(context.Background())
+
+		conn, err := NewKafka(cfg, WithLogger(getTestLogger()))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+
+		err = conn.Connect(ctx)
+		require.NoError(t, err)
+		assert.True(t, conn.IsHealthy())
+
+		client := conn.GetClient()
+		require.NotNil(t, client)
+
+		// Ping 测试
+		err = conn.HealthCheck(ctx)
+		require.NoError(t, err)
+		assert.True(t, conn.IsHealthy())
+
+		err = conn.Close()
+		require.NoError(t, err)
+		assert.False(t, conn.IsHealthy())
+	})
+
+	t.Run("Kafka 连接状态检查", func(t *testing.T) {
+		container, cfg := setupKafkaContainer(t)
+		defer container.Terminate(context.Background())
+
+		conn, err := NewKafka(cfg, WithLogger(getTestLogger()))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		err = conn.Connect(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
 
 		// 健康检查应该通过
 		err = conn.HealthCheck(ctx)

@@ -83,8 +83,8 @@ func initEtcd(ctx context.Context, logger clog.Logger) (dlock.Locker, func(), er
 	endpoints := strings.Split(getEnvOrDefault("ETCD_ENDPOINTS", "127.0.0.1:2379"), ",")
 
 	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{
-		Endpoints: endpoints,
-		Timeout:   5 * time.Second,
+		Endpoints:   endpoints,
+		DialTimeout: 5 * time.Second,
 	}, connector.WithLogger(logger))
 	if err != nil {
 		return nil, nil, err

@@ -43,7 +43,7 @@ func main() {
 	runMySQLExample(ctx, logger, meter)
 	runSQLiteExample(ctx, logger, meter)
 	runEtcdExample(ctx, logger, meter)
-	runNATSExample(ctx, logger, meter)
+	runNATSExample(ctx, logger,)
 	runKafkaExample(ctx, logger, meter)
 
 	logger.Info("=== 示例演示完成 ===")
@@ -162,13 +162,13 @@ func runEtcdExample(ctx context.Context, logger clog.Logger, meter metrics.Meter
 }
 
 // runNATSExample 演示 NATS 连接器的标准用法
-func runNATSExample(ctx context.Context, logger clog.Logger, meter metrics.Meter) {
+func runNATSExample(ctx context.Context, logger clog.Logger) {
 	logger.Info("--- [NATS] 示例开始 ---")
 
 	cfg := &connector.NATSConfig{
-		Name:    "nats-demo",
-		URL:     getEnvOrDefault("NATS_URL", "nats://localhost:4222"),
-		Timeout: 5 * time.Second,
+		Name:           "nats-demo",
+		URL:            getEnvOrDefault("NATS_URL", "nats://localhost:4222"),
+		ConnectTimeout: 5 * time.Second,
 	}
 
 	conn, err := connector.NewNATS(cfg, connector.WithLogger(logger))
