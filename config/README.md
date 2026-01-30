@@ -8,7 +8,7 @@
 
 - **多源配置**：YAML/JSON 文件、环境变量、.env 文件
 - **配置优先级**：环境变量 > .env > 环境特定配置 > 基础配置
-- **热更新**：文件变化自动重载
+- **热更新**：文件变化自动重载（支持基础配置和环境特定配置）
 - **多环境**：支持 `config.{env}.yaml`
 
 ## 快速开始
@@ -33,6 +33,8 @@ loader.Unmarshal(&cfg)
 2. **.env 文件**
 3. **环境特定配置** (`config.prod.yaml` 合并到 `config.yaml`)
 4. **基础配置** (`config.yaml`)
+
+> **注意**：`.env` 文件会覆盖同名环境变量（godotenv 默认行为），但 Viper 的 `AutomaticEnv` 会在 `Get()` 时优先读取运行时环境变量，因此最终效果仍是"运行时环境变量优先"。
 
 ## API
 
@@ -69,6 +71,28 @@ var (
 func New(cfg *Config) (Loader, error)
 ```
 
+## 热更新 (Watch)
+
+监听配置变化，当文件修改时自动通知：
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+ch, _ := loader.Watch(ctx, "mysql.host")
+for event := range ch {
+    fmt.Printf("配置变化: %s = %v\n", event.Key, event.Value)
+}
+```
+
+**实现细节：**
+
+- 无论调用多少次 `Watch`，内部只启动一个文件监听 goroutine
+- 返回的 channel 缓冲区大小为 10，若消费者处理过慢可能丢失事件
+- 监听基础配置文件和环境特定配置文件（如 `config.yaml` 和 `config.dev.yaml`）
+- `.env` 文件变更不会触发通知
+- 热更新时若配置文件读取失败，不会推送变更事件（静默忽略以避免中断服务）
+
 ## 环境特定配置
 
 ```text
@@ -82,11 +106,11 @@ config/
 
 ## 环境变量映射
 
-| YAML 键          | 环境变量              |
-|-----------------|---------------------|
-| mysql.host      | GENESIS_MYSQL_HOST  |
-| redis.addr      | GENESIS_REDIS_ADDR  |
-| app.debug       | GENESIS_APP_DEBUG   |
+| YAML 键    | 环境变量           |
+| ---------- | ------------------ |
+| mysql.host | GENESIS_MYSQL_HOST |
+| redis.addr | GENESIS_REDIS_ADDR |
+| app.debug  | GENESIS_APP_DEBUG  |
 
 规则：`{PREFIX}_{SECTION}_{KEY}`（全大写，`.` 替换为 `_`）
 
@@ -104,13 +128,13 @@ if errors.Is(err, config.ErrNotFound) {
 ```yaml
 # config.yaml
 app:
-  name: "Genesis 应用"
-  debug: false
+    name: "Genesis 应用"
+    debug: false
 
 mysql:
-  host: "localhost"
-  port: 3306
+    host: "localhost"
+    port: 3306
 
 redis:
-  addr: "localhost:6379"
+    addr: "localhost:6379"
 ```

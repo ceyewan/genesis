@@ -67,9 +67,9 @@ GENESIS_CLOG_FORMAT=json
 
 	ctx := context.Background()
 	loader, err := New(&Config{
-		Name:     "config",
-		Paths:    []string{tmpDir},
-		FileType: "yaml",
+		Name:      "config",
+		Paths:     []string{tmpDir},
+		FileType:  "yaml",
 		EnvPrefix: "GENESIS",
 	})
 	if err != nil {
@@ -141,8 +141,9 @@ func TestLoaderValidate(t *testing.T) {
 			name: "empty config",
 			setupLoader: func() (Loader, error) {
 				return New(&Config{
-					Name:  "nonexistent",
-					Paths: []string{"/nonexistent"},
+					Name:      "nonexistent",
+					Paths:     []string{"/nonexistent"},
+					EnvPrefix: "GENESIS_TEST_EMPTY_CONFIG",
 				})
 			},
 			wantErr: true,
@@ -421,9 +422,9 @@ func TestLoaderEnvLoading(t *testing.T) {
 		t.Fatalf("Failed to create loader: %v", err)
 	}
 
-	// 由于环境变量不存在，这个测试会失败，跳过验证
-	// 环境变量需要在运行时设置，测试环境中无法可靠模拟
-	_ = loader.Load(ctx) // 忽略错误
+	if err := loader.Load(ctx); err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
 
 	// 验证环境变量被正确加载（通过公共接口）
 	if appName := loader.Get("app.name"); appName != "env-test-app" {

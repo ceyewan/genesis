@@ -1,5 +1,7 @@
 package config
 
+import "strings"
+
 // Config 配置结构
 type Config struct {
 	Name      string   // 配置文件名称（不含扩展名）
@@ -23,6 +25,7 @@ func (c *Config) validate() error {
 	if c.EnvPrefix == "" {
 		c.EnvPrefix = "GENESIS"
 	}
+	c.EnvPrefix = strings.ToUpper(c.EnvPrefix)
 	return nil
 }
 
