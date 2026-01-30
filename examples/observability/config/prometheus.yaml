@@ -1,13 +1,21 @@
 global:
   scrape_interval: 15s
 
-scrape_configs:
-  - job_name: 'observability-demo'
-    scrape_interval: 5s
-    static_configs:
-      - targets: ['gateway:9101', 'logic:9102', 'task:9103']
+# Remote Write 配置（接收 OTel Collector 转发的 Metrics）
+# 注意：应用 Metrics 现在通过 Collector → Remote Write 发送到 Prometheus
+remote_write:
+  - url: http://prometheus:9090/api/v1/write
+    # 本配置用于内部网络，实际由 otel-collector 使用
 
+# Scrape 配置（保留用于 cAdvisor 和 Prometheus 自身的监控）
+scrape_configs:
+  # cAdvisor 容器监控（仍然使用拉取模式）
   - job_name: 'cadvisor'
     scrape_interval: 5s
     static_configs:
       - targets: ['cadvisor:8080']
+
+  # Prometheus 自身监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

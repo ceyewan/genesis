@@ -1,0 +1,124 @@
+# OTel Collector 配置
+# 统一收集 Logs、Traces、Metrics，作为可观测性数据的唯一入口
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  # =================================================================
+  # 1. OTLP Receiver: 接收应用上报的 Traces/Metrics/Logs
+  # =================================================================
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # =================================================================
+  # 2. Filelog Receiver: 收集容器 stdout 日志 (替代 Promtail)
+  # =================================================================
+  filelog/containers:
+    include:
+      # 读取 Docker 容器日志文件
+      - /var/lib/docker/containers/*/*.log
+    include_file_name: false
+    include_file_path: true
+    start_at: beginning
+
+    # 解析 Docker JSON 日志格式
+    operators:
+      # Docker 日志格式: {"log":"...","stream":"stdout|stderr","time":"..."}
+      - type: json_parser
+        parse_from: body
+        timestamp:
+          parse_from: attributes.time
+          layout: '%Y-%m-%dT%H:%M:%S.%L%z'
+
+      # 提取容器信息作为标签
+      - type: regex_parser
+        regex: '^.*?attributes\.stream="([^"]+)".*?attributes\.com\.docker\.compose_service="([^"]+)".*$'
+        labels:
+          stream: $1
+          service_name: $2
+
+      # 清理不需要的属性
+      - type: move
+        from: attributes.log
+        to: body
+
+processors:
+  # 批量处理，减少网络请求
+  batch:
+
+  # 添加统一的资源属性
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: demo
+        action: upsert
+
+  # Memory Limiter: 防止 OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+exporters:
+  # =================================================================
+  # 1. OTLP Trace Exporter: 转发 Traces 到 Tempo
+  # =================================================================
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  # =================================================================
+  # 2. Prometheus Remote Write: 转发 Metrics 到 Prometheus
+  # =================================================================
+  prometheusremotewrite:
+    endpoint: http://prometheus:9090/api/v1/write
+    tls:
+      insecure: true
+
+  # =================================================================
+  # 3. Loki Exporter: 发送 Logs 到 Loki
+  # =================================================================
+  loki:
+    endpoint: http://loki:3100/otlp
+    default_labels_enabled:
+      exporter: false
+      job: true
+      processor: false
+      service: true
+    tls:
+      insecure: true
+
+service:
+  extensions: [health_check]
+
+  pipelines:
+    # -----------------------------------------------------------------
+    # Traces Pipeline: 应用 → Collector → Tempo
+    # -----------------------------------------------------------------
+    traces:
+      receivers: [otlp]
+      processors: [batch, memory_limiter, resource]
+      exporters: [otlp/tempo]
+
+    # -----------------------------------------------------------------
+    # Metrics Pipeline: 应用 → Collector → Prometheus
+    # -----------------------------------------------------------------
+    metrics:
+      receivers: [otlp]
+      processors: [batch, memory_limiter, resource]
+      exporters: [prometheusremotewrite]
+
+    # -----------------------------------------------------------------
+    # Logs Pipeline: 容器日志文件 → Collector → Loki
+    # -----------------------------------------------------------------
+    logs:
+      receivers: [filelog/containers]
+      processors: [batch, memory_limiter, resource]
+      exporters: [loki]

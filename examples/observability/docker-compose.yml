@@ -10,15 +10,12 @@ services:
     ports:
       - "8080:8080"   # HTTP (user -> gateway)
       - "9091:9091"   # gRPC (task -> gateway)
-      - "9101:9101"   # Prometheus Metrics
     environment:
-      - OTLP_ENDPOINT=tempo:4317
+      - OTLP_ENDPOINT=otel-collector:4317
       - LOGIC_GRPC_TARGET=logic:9090
       - GATEWAY_CALLBACK_GRPC_ADDR=:9091
     depends_on:
-      - tempo
-      - prometheus
-      - loki
+      - otel-collector
       - nats
     restart: unless-stopped
     networks:
@@ -32,18 +29,15 @@ services:
     command: ["./logic"]
     ports:
       - "9092:9090"   # gRPC (host 9092 -> container 9090)
-      - "9102:9102"   # Prometheus Metrics
     environment:
-      - OTLP_ENDPOINT=tempo:4317
+      - OTLP_ENDPOINT=otel-collector:4317
       - NATS_URL=nats://nats:4222
       - LOGIC_GRPC_ADDR=:9090
       - SQLITE_PATH=/data/logic.sqlite
     volumes:
       - logic-data:/data
     depends_on:
-      - tempo
-      - prometheus
-      - loki
+      - otel-collector
       - nats
     restart: unless-stopped
     networks:
@@ -55,16 +49,12 @@ services:
       dockerfile: examples/observability/Dockerfile
     container_name: demo-task
     command: ["./task"]
-    ports:
-      - "9103:9103"   # Prometheus Metrics
     environment:
-      - OTLP_ENDPOINT=tempo:4317
+      - OTLP_ENDPOINT=otel-collector:4317
       - NATS_URL=nats://nats:4222
       - GATEWAY_CALLBACK_TARGET=gateway:9091
     depends_on:
-      - tempo
-      - prometheus
-      - loki
+      - otel-collector
       - nats
     restart: unless-stopped
     networks:
@@ -96,23 +86,28 @@ services:
       - demo-network
 
   # ============================================================================
-  # 1.1 Logs: Promtail (采集)
+  # 1.1 OTel Collector: 统一可观测性数据入口 (Logs/Traces/Metrics)
   # ============================================================================
-  promtail:
-    image: grafana/promtail:latest
-    container_name: demo-promtail
-    command: -config.file=/etc/promtail/promtail.yaml
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    container_name: demo-otel-collector
+    command: [--config=/etc/otel-collector-config.yaml]
     volumes:
-      - ./config/promtail.yaml:/etc/promtail/promtail.yaml
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config/otel-collector.yaml:/etc/otel-collector-config.yaml
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    ports:
+      - "13133:13133" # health_check extension
+      - "4317:4317"   # OTLP gRPC (接收应用上报的 Trace/Metric)
+      - "4318:4318"   # OTLP HTTP
     depends_on:
       - loki
+      - tempo
+      - prometheus
     networks:
       - demo-network
 
   # ============================================================================
-  # 2. Traces: Tempo (存储) - 使用 --target=all 运行所有组件
+  # 2. Traces: Tempo (存储) - 接收 Collector 转发的 Trace
   # ============================================================================
   tempo:
     image: grafana/tempo:2.8.3
@@ -122,9 +117,7 @@ services:
       - ./config/tempo.yaml:/etc/tempo.yaml:ro
       - tempo-data:/var/tempo
     ports:
-      - "3200:3200"   # Tempo HTTP
-      - "4317:4317"   # OTLP gRPC (Receiver)
-      - "4318:4318"   # OTLP HTTP
+      - "3200:3200"   # Tempo HTTP UI (查询用)
     restart: unless-stopped
     networks:
       - demo-network
