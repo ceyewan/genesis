@@ -3,81 +3,16 @@ package cache
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"testing"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/testkit"
 )
 
-// getEnvOrDefault 获取环境变量，如果不存在则返回默认值
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// getEnvIntOrDefault 获取环境变量并转换为 int，如果不存在或转换失败则返回默认值
-func getEnvIntOrDefault(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
-}
-
-// setupRedisConn 设置 Redis 连接
-func setupRedisConn(t *testing.T) connector.RedisConnector {
-	logger, err := clog.New(&clog.Config{
-		Level:  "info",
-		Format: "json",
-		Output: "stdout",
-	})
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
-	}
-
-	redisConn, err := connector.NewRedis(&connector.RedisConfig{
-		Addr:         getEnvOrDefault("REDIS_ADDR", "127.0.0.1:6379"),
-		Password:     getEnvOrDefault("REDIS_PASSWORD", ""),
-		DB:           getEnvIntOrDefault("REDIS_DB", 2), // 使用 DB 1 进行测试
-		DialTimeout:  2 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-		PoolSize:     10,
-	}, connector.WithLogger(logger))
-	if err != nil {
-		t.Skipf("Redis not available, skipping tests: %v", err)
-		return nil
-	}
-
-	// 测试连接
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := redisConn.Connect(ctx); err != nil {
-		t.Skipf("Failed to connect to Redis, skipping tests: %v", err)
-		redisConn.Close()
-		return nil
-	}
-
-	t.Cleanup(func() {
-		redisConn.Close()
-	})
-
-	return redisConn
-}
-
-// setupCache 设置 Cache 实例
+// setupCache 设置 Cache 实例（使用 testkit 的 Redis 容器）
 func setupCache(t *testing.T, prefix string) Cache {
-	redisConn := setupRedisConn(t)
-	if redisConn == nil {
-		t.Skip("Redis not available")
-		return nil
-	}
+	redisConn := testkit.NewRedisContainerConnector(t)
 
 	// 清理测试前缀的数据，防止历史残留
 	ctx := context.Background()
@@ -111,15 +46,14 @@ func setupCache(t *testing.T, prefix string) Cache {
 	return cache
 }
 
-func TestNew(t *testing.T) {
-	logger, err := clog.New(&clog.Config{
+// TestNew_Integration 集成测试：测试通过 Redis 连接器创建缓存实例
+func TestNew_Integration(t *testing.T) {
+	redisConn := testkit.NewRedisContainerConnector(t)
+	logger, _ := clog.New(&clog.Config{
 		Level:  "info",
 		Format: "json",
 		Output: "stdout",
 	})
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
-	}
 
 	tests := []struct {
 		name        string
@@ -128,17 +62,12 @@ func TestNew(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name:        "nil config",
-			cfg:         nil,
-			expectError: true,
-		},
-		{
 			name: "valid config without logger",
 			cfg: &Config{
 				Prefix:     "test:",
 				Serializer: "json",
 			},
-			opts:        []Option{WithRedisConnector(setupRedisConn(t))},
+			opts:        []Option{WithRedisConnector(redisConn)},
 			expectError: false,
 		},
 		{
@@ -147,14 +76,16 @@ func TestNew(t *testing.T) {
 				Prefix:     "test:",
 				Serializer: "json",
 			},
-			opts:        []Option{WithRedisConnector(setupRedisConn(t)), WithLogger(logger)},
+			opts:        []Option{WithRedisConnector(redisConn), WithLogger(logger)},
 			expectError: false,
 		},
 		{
-			name: "standalone mode",
+			name: "config with custom prefix",
 			cfg: &Config{
-				Driver: DriverMemory,
+				Prefix:     "custom:prefix:",
+				Serializer: "json",
 			},
+			opts:        []Option{WithRedisConnector(redisConn)},
 			expectError: false,
 		},
 	}
@@ -175,22 +106,21 @@ func TestNew(t *testing.T) {
 			if cache == nil {
 				t.Error("Expected cache but got nil")
 			}
+			if cache != nil {
+				cache.Close()
+			}
 		})
 	}
 }
 
-func TestCache_KeyValue(t *testing.T) {
+// TestCache_KeyValue_Integration 集成测试：测试 Redis Key-Value 操作
+func TestCache_KeyValue_Integration(t *testing.T) {
 	cache := setupCache(t, "test:kv:")
-	if cache == nil {
-		t.Skip("Redis not available")
-		return
-	}
-
 	ctx := context.Background()
 
 	t.Run("Set and Get", func(t *testing.T) {
 		key := "user:123"
-		value := map[string]interface{}{
+		value := map[string]any{
 			"id":   123,
 			"name": "Alice",
 		}
@@ -202,7 +132,7 @@ func TestCache_KeyValue(t *testing.T) {
 		}
 
 		// Get
-		var result map[string]interface{}
+		var result map[string]any
 		err = cache.Get(ctx, key, &result)
 		if err != nil {
 			t.Fatalf("Failed to get value: %v", err)
@@ -310,13 +240,9 @@ func TestCache_KeyValue(t *testing.T) {
 	})
 }
 
-func TestCache_Hash(t *testing.T) {
+// TestCache_Hash_Integration 集成测试：测试 Redis Hash 操作
+func TestCache_Hash_Integration(t *testing.T) {
 	cache := setupCache(t, "test:hash:")
-	if cache == nil {
-		t.Skip("Redis not available")
-		return
-	}
-
 	ctx := context.Background()
 	key := "user:123"
 
@@ -435,13 +361,9 @@ func TestCache_Hash(t *testing.T) {
 	})
 }
 
-func TestCache_SortedSet(t *testing.T) {
+// TestCache_SortedSet_Integration 集成测试：测试 Redis Sorted Set 操作
+func TestCache_SortedSet_Integration(t *testing.T) {
 	cache := setupCache(t, "test:zset:")
-	if cache == nil {
-		t.Skip("Redis not available")
-		return
-	}
-
 	ctx := context.Background()
 	key := "leaderboard"
 
@@ -544,13 +466,9 @@ func TestCache_SortedSet(t *testing.T) {
 	})
 }
 
-func TestCache_List(t *testing.T) {
+// TestCache_List_Integration 集成测试：测试 Redis List 操作
+func TestCache_List_Integration(t *testing.T) {
 	cache := setupCache(t, "test:list:")
-	if cache == nil {
-		t.Skip("Redis not available")
-		return
-	}
-
 	ctx := context.Background()
 	key := "messages"
 
@@ -711,13 +629,9 @@ func TestCache_List(t *testing.T) {
 	})
 }
 
-func TestCache_Serializer(t *testing.T) {
-	redisConn := setupRedisConn(t)
-	if redisConn == nil {
-		t.Skip("Redis not available")
-		return
-	}
-
+// TestCache_Serializer_Integration 集成测试：测试序列化器配置
+func TestCache_Serializer_Integration(t *testing.T) {
+	redisConn := testkit.NewRedisContainerConnector(t)
 	logger, err := clog.New(&clog.Config{
 		Level:  "info",
 		Format: "json",
@@ -760,7 +674,7 @@ func TestCache_Serializer(t *testing.T) {
 
 			ctx := context.Background()
 			key := "test_key"
-			value := map[string]interface{}{
+			value := map[string]any{
 				"string": "hello",
 				"number": 42,
 				"bool":   true,
@@ -773,7 +687,7 @@ func TestCache_Serializer(t *testing.T) {
 				return
 			}
 
-			var result map[string]interface{}
+			var result map[string]any
 			err = cache.Get(ctx, key, &result)
 			if err != nil {
 				t.Errorf("Failed to get value with %s: %v", tt.serializer, err)
@@ -787,145 +701,101 @@ func TestCache_Serializer(t *testing.T) {
 	}
 }
 
-func TestCache_Standalone(t *testing.T) {
-	logger, _ := clog.New(&clog.Config{Level: "info", Output: "stdout"})
-
-	cache, err := New(&Config{
-		Driver:     DriverMemory,
-		Standalone: &StandaloneConfig{Capacity: 100},
-	}, WithLogger(logger))
-
-	if err != nil {
-		t.Fatalf("Failed to create standalone cache: %v", err)
-	}
-	defer cache.Close()
-
+// TestCache_BatchOperations_Integration 集成测试：测试批量操作
+func TestCache_BatchOperations_Integration(t *testing.T) {
+	cache := setupCache(t, "test:batch:")
 	ctx := context.Background()
 
-	t.Run("Basic Key-Value", func(t *testing.T) {
-		key := "local:kv"
-		value := "local_value"
+	t.Run("MSet and MGet", func(t *testing.T) {
+		items := map[string]any{
+			"user:1": "Alice",
+			"user:2": "Bob",
+			"user:3": "Charlie",
+		}
 
-		// Set
-		err := cache.Set(ctx, key, value, time.Minute)
+		// MSet
+		err := cache.MSet(ctx, items, time.Hour)
 		if err != nil {
-			t.Fatalf("Failed to set: %v", err)
+			t.Fatalf("Failed to MSet: %v", err)
 		}
 
-		// Has
-		exists, err := cache.Has(ctx, key)
-		if err != nil || !exists {
-			t.Errorf("Expected key to exist, err: %v", err)
-		}
-
-		// Get
-		var result string
-		err = cache.Get(ctx, key, &result)
+		// MGet
+		keys := []string{"user:1", "user:2", "user:3", "user:nonexistent"}
+		var results []string
+		err = cache.MGet(ctx, keys, &results)
 		if err != nil {
-			t.Fatalf("Failed to get: %v", err)
-		}
-		if result != value {
-			t.Errorf("Expected %s, got %s", value, result)
+			t.Fatalf("Failed to MGet: %v", err)
 		}
 
-		// Delete
-		err = cache.Delete(ctx, key)
-		if err != nil {
-			t.Fatalf("Failed to delete: %v", err)
+		if len(results) != 4 {
+			t.Errorf("Expected 4 results, got %d", len(results))
 		}
-
-		// Has (should be false)
-		exists, err = cache.Has(ctx, key)
-		if err != nil || exists {
-			t.Errorf("Expected key to not exist")
+		if results[0] != "Alice" {
+			t.Errorf("Expected Alice, got %v", results[0])
+		}
+		if results[1] != "Bob" {
+			t.Errorf("Expected Bob, got %v", results[1])
+		}
+		if results[2] != "Charlie" {
+			t.Errorf("Expected Charlie, got %v", results[2])
+		}
+		// Non-existent key should be empty string (zero value)
+		if results[3] != "" {
+			t.Errorf("Expected empty string for non-existent key, got %v", results[3])
 		}
 	})
 
-	t.Run("Complex Types (Pointer)", func(t *testing.T) {
-		type User struct {
-			Name string
-			Age  int
-		}
-
-		key := "local:struct"
-		user := &User{Name: "Bob", Age: 30}
-
-		err := cache.Set(ctx, key, user, time.Minute)
+	t.Run("MGet with empty keys", func(t *testing.T) {
+		var results []string
+		err := cache.MGet(ctx, []string{}, &results)
 		if err != nil {
-			t.Fatalf("Failed to set struct: %v", err)
+			t.Errorf("MGet with empty keys should not fail: %v", err)
 		}
-
-		var result *User
-		err = cache.Get(ctx, key, &result)
-		if err != nil {
-			t.Fatalf("Failed to get struct: %v", err)
-		}
-
-		if result.Name != "Bob" || result.Age != 30 {
-			t.Errorf("Struct mismatch: got %v", result)
+		if len(results) != 0 {
+			t.Errorf("Expected empty results, got %d items", len(results))
 		}
 	})
 
-	t.Run("Unsupported Operations", func(t *testing.T) {
-		key := "local:unsupported"
-
-		// HSet
-		err := cache.HSet(ctx, key, "field", "value")
-		if err == nil || err.Error() != "operation not supported in standalone mode" {
-			t.Errorf("Expected unsupported error for HSet, got %v", err)
-		}
-
-		// ZAdd
-		err = cache.ZAdd(ctx, key, 1.0, "member")
-		if err == nil {
-			t.Error("Expected error for ZAdd")
-		}
-
-		// LPush
-		err = cache.LPush(ctx, key, "item")
-		if err == nil {
-			t.Error("Expected error for LPush")
-		}
-	})
-
-	t.Run("Expire", func(t *testing.T) {
-		key := "local:expire"
-		value := "value"
-
-		// Set with long TTL
-		cache.Set(ctx, key, value, time.Hour)
-
-		// Update TTL to short (500ms)
-		err := cache.Expire(ctx, key, 500*time.Millisecond)
+	t.Run("MSet with empty items", func(t *testing.T) {
+		err := cache.MSet(ctx, map[string]any{}, time.Minute)
 		if err != nil {
-			t.Fatalf("Failed to expire: %v", err)
-		}
-
-		// Wait enough time (1s)
-		time.Sleep(1000 * time.Millisecond)
-
-		// 使用 Get 来验证过期
-		var res string
-		err = cache.Get(ctx, key, &res)
-		if err == nil {
-			t.Error("Key should have expired (Get should fail)")
+			t.Errorf("MSet with empty items should not fail: %v", err)
 		}
 	})
+}
 
-	t.Run("Get Interface", func(t *testing.T) {
-		key := "local:interface"
-		value := "string_value"
-
-		cache.Set(ctx, key, value, time.Minute)
-
-		var result interface{}
-		err := cache.Get(ctx, key, &result)
-		if err != nil {
-			t.Fatalf("Failed to get interface: %v", err)
-		}
-
-		if str, ok := result.(string); !ok || str != value {
-			t.Errorf("Interface mismatch: got %v", result)
-		}
+// TestCache_Prefix_Integration 集成测试：测试前缀功能
+func TestCache_Prefix_Integration(t *testing.T) {
+	redisConn := testkit.NewRedisContainerConnector(t)
+	logger, _ := clog.New(&clog.Config{
+		Level:  "info",
+		Format: "json",
+		Output: "stdout",
 	})
+
+	prefix := "custom:app:"
+	cache1, err := New(&Config{
+		Prefix:     prefix,
+		Serializer: "json",
+	}, WithRedisConnector(redisConn), WithLogger(logger))
+	if err != nil {
+		t.Fatalf("Failed to create cache: %v", err)
+	}
+	defer cache1.Close()
+
+	ctx := context.Background()
+	key := "test:key"
+	value := "test_value"
+
+	err = cache1.Set(ctx, key, value, time.Hour)
+	if err != nil {
+		t.Fatalf("Failed to set: %v", err)
+	}
+
+	// 验证通过原始 Redis 客户端可以找到带前缀的 key
+	client := redisConn.GetClient()
+	exists := client.Exists(ctx, prefix+key)
+	if exists.Val() != 1 {
+		t.Errorf("Expected key %s to exist with prefix", prefix+key)
+	}
 }

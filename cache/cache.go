@@ -65,6 +65,18 @@ type Cache interface {
 	LRange(ctx context.Context, key string, start, stop int64, destSlice any) error
 	LPushCapped(ctx context.Context, key string, limit int64, values ...any) error
 
+	// --- Batch Operations ---
+	// MGet 批量获取多个 key 的值，destSlice 必须是指向切片的指针
+	// 返回的切片顺序与 keys 顺序一致，不存在的 key 对应位置为零值
+	MGet(ctx context.Context, keys []string, destSlice any) error
+	// MSet 批量设置多个 key-value 对
+	MSet(ctx context.Context, items map[string]any, ttl time.Duration) error
+
+	// --- Advanced ---
+	// Client 返回底层 Redis 客户端，用于执行 Pipeline、Lua 脚本等高级操作
+	// Memory 驱动返回 nil
+	Client() any
+
 	// --- Utility ---
 	Close() error
 }

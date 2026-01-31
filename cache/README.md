@@ -1,35 +1,48 @@
-# cache - Genesis 缓存组件
+# cache - 缓存组件
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/cache.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/cache)
 
-`cache` 提供基于 Redis 的缓存操作，支持 String、Hash、Sorted Set、List 等数据结构。
+统一的缓存抽象层，支持 Redis 和 Memory 两种驱动。
 
 ## 特性
 
-- 支持 Redis / Memory 驱动
-- 自动序列化（JSON）
-- Key 前缀管理
-- L2 (Business) 层组件
+| 特性 | Redis 驱动 | Memory 驱动 |
+|------|-----------|-------------|
+| Key-Value | ✅ | ✅ |
+| Hash | ✅ | ❌ |
+| Sorted Set | ✅ | ❌ |
+| List | ✅ | ❌ |
+| MSet/MGet | ✅ | ❌ |
 
 ## 快速开始
+
+### Redis 驱动
 
 ```go
 redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
 defer redisConn.Close()
 
-cacheClient, _ := cache.New(&cache.Config{
-    Driver:     cache.DriverRedis,
+cache, _ := cache.New(&cache.Config{
     Prefix:     "myapp:",
     Serializer: "json",
 }, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
 
-cacheClient.Set(ctx, "user:1001", user, time.Hour)
-cacheClient.Get(ctx, "user:1001", &cachedUser)
+cache.Set(ctx, "user:1001", user, time.Hour)
+cache.Get(ctx, "user:1001", &cachedUser)
 ```
 
-## 核心接口
+### Memory 驱动
 
-### Cache
+```go
+cache, _ := cache.New(&cache.Config{
+    Driver:     cache.DriverMemory,
+    Standalone: &cache.StandaloneConfig{Capacity: 10000},
+})
+
+cache.Set(ctx, "key", "value", time.Minute)
+```
+
+## 核心 API
 
 ```go
 type Cache interface {
@@ -40,29 +53,24 @@ type Cache interface {
     Has(ctx, key) (bool, error)
     Expire(ctx, key, ttl) error
 
-    // Hash
-    HSet(ctx, key, field, value) error
-    HGet(ctx, key, field, dest) error
-    HGetAll(ctx, key, destMap) error
-    HDel(ctx, key, fields...) error
-    HIncrBy(ctx, key, field, incr) (int64, error)
+    // Hash (仅 Redis)
+    HSet/HGet/HGetAll/HDel/HIncrBy(ctx, key, ...) error
 
-    // Sorted Set
-    ZAdd(ctx, key, score, member) error
-    ZRem(ctx, key, members...) error
-    ZScore(ctx, key, member) (float64, error)
-    ZRange/ZRevRange/ZRangeByScore(ctx, key, start, stop, dest) error
+    // Sorted Set (仅 Redis)
+    ZAdd/ZRem/ZScore/ZRange/ZRevRange/ZRangeByScore(ctx, key, ...) error
 
-    // List
+    // List (仅 Redis)
     LPush/RPush/LPop/RPop/LRange/LPushCapped(ctx, key, ...) error
+
+    // Batch (仅 Redis)
+    MGet(ctx, keys, dest) error
+    MSet(ctx, items, ttl) error
 
     Close() error
 }
 ```
 
 ## 配置
-
-### Config
 
 ```go
 type Config struct {
@@ -71,37 +79,22 @@ type Config struct {
     Serializer string            // json | msgpack
     Standalone *StandaloneConfig // memory 驱动配置
 }
+
+type StandaloneConfig struct {
+    Capacity int // 最大条目数，默认 10000
+}
 ```
 
-### Memory 驱动
+## 测试
 
-```go
-cacheClient, _ := cache.New(&cache.Config{
-    Driver: cache.DriverMemory,
-    Standalone: &cache.StandaloneConfig{
-        Capacity: 10000,
-    },
-})
+```bash
+# 单元测试（无外部依赖）
+go test -v ./cache -run Unit
+
+# 集成测试（需要 Docker）
+go test -v ./cache -run Integration
 ```
 
-## 使用示例
-
-```go
-// Key-Value
-cacheClient.Set(ctx, "user:1001", user, time.Hour)
-cacheClient.Get(ctx, "user:1001", &user)
-
-// Hash
-cacheClient.HSet(ctx, "user:1001:profile", "name", "Alice")
-cacheClient.HGet(ctx, "user:1001:profile", "name", &name)
-
-// Sorted Set
-cacheClient.ZAdd(ctx, "leaderboard", 95.5, "user:1001")
-cacheClient.ZRevRange(ctx, "leaderboard", 0, 9, &topUsers)
-
-// List
-cacheClient.LPushCapped(ctx, "logs", 100, entry)
-cacheClient.LRange(ctx, "logs", 0, 19, &logs)
-```
+## 示例
 
 参考 [examples/cache/main.go](../examples/cache/main.go)。

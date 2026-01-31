@@ -12,6 +12,7 @@ import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 type redisCache struct {
@@ -25,10 +26,10 @@ type redisCache struct {
 // newRedis 创建 Redis 缓存实例
 func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger, meter metrics.Meter) (Cache, error) {
 	if conn == nil {
-		return nil, fmt.Errorf("redis 连接器为 nil")
+		return nil, xerrors.New("redis connector is nil")
 	}
 	if cfg == nil {
-		return nil, fmt.Errorf("配置为 nil")
+		return nil, xerrors.New("config is nil")
 	}
 
 	// 设置默认序列化器
@@ -123,7 +124,7 @@ func (c *redisCache) HGetAll(ctx context.Context, key string, destMap any) error
 
 	v := reflect.ValueOf(destMap)
 	if v.Kind() != reflect.Ptr {
-		return fmt.Errorf("destMap must be a pointer")
+		return xerrors.New("destMap must be a pointer")
 	}
 	v = v.Elem()
 
@@ -148,10 +149,10 @@ func (c *redisCache) HGetAll(ctx context.Context, key string, destMap any) error
 		// 更健壮的实现应使用 struct tag 来映射字段名与键名。
 		// 目前为保证安全和简单性，优先支持 map（示例使用 map[string]string），
 		// 若要完整支持 struct 需要更复杂的映射逻辑，因此这里返回错误。
-		return fmt.Errorf("HGetAll currently only supports pointer to map")
+		return xerrors.New("HGetAll currently only supports pointer to map")
 	}
 
-	return fmt.Errorf("destMap must be a pointer to a map")
+	return xerrors.New("destMap must be a pointer to a map")
 }
 
 func (c *redisCache) HDel(ctx context.Context, key string, fields ...string) error {
@@ -286,6 +287,94 @@ func (c *redisCache) LPushCapped(ctx context.Context, key string, limit int64, v
 	return err
 }
 
+// --- 批量操作（Batch Operations） ---
+
+func (c *redisCache) MGet(ctx context.Context, keys []string, destSlice any) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	// 验证 destSlice 必须是指向切片的指针
+	v := reflect.ValueOf(destSlice)
+	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Slice {
+		return xerrors.New("destSlice must be a pointer to slice")
+	}
+
+	// 添加前缀
+	prefixedKeys := make([]string, len(keys))
+	for i, k := range keys {
+		prefixedKeys[i] = c.getKey(k)
+	}
+
+	// 执行 MGET
+	results, err := c.client.MGet(ctx, prefixedKeys...).Result()
+	if err != nil {
+		return err
+	}
+
+	// 反序列化结果
+	sliceVal := v.Elem()
+	elemType := sliceVal.Type().Elem()
+	newSlice := reflect.MakeSlice(sliceVal.Type(), len(results), len(results))
+
+	for i, result := range results {
+		elem := newSlice.Index(i)
+		if result == nil {
+			// key 不存在，保留零值
+			continue
+		}
+
+		// result 是 string 类型
+		data, ok := result.(string)
+		if !ok {
+			return xerrors.New("unexpected result type from MGET")
+		}
+
+		var target any
+		if elemType.Kind() == reflect.Ptr {
+			val := reflect.New(elemType.Elem())
+			target = val.Interface()
+			if err := c.unmarshal([]byte(data), target); err != nil {
+				return err
+			}
+			elem.Set(val)
+		} else {
+			target = elem.Addr().Interface()
+			if err := c.unmarshal([]byte(data), target); err != nil {
+				return err
+			}
+		}
+	}
+
+	sliceVal.Set(newSlice)
+	return nil
+}
+
+func (c *redisCache) MSet(ctx context.Context, items map[string]any, ttl time.Duration) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	pipe := c.client.Pipeline()
+	for k, v := range items {
+		data, err := c.marshal(v)
+		if err != nil {
+			return err
+		}
+		pipe.Set(ctx, c.getKey(k), data, ttl)
+	}
+
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// --- 高级操作（Advanced） ---
+
+// Client 返回底层 Redis 客户端，用于执行 Pipeline、Lua 脚本等高级操作
+func (c *redisCache) Client() any {
+	return c.client
+}
+
 // --- 工具与辅助函数 ---
 
 func (c *redisCache) Close() error {
@@ -298,7 +387,7 @@ func (c *redisCache) Close() error {
 func (c *redisCache) unmarshalSlice(data []string, destSlice any) error {
 	v := reflect.ValueOf(destSlice)
 	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Slice {
-		return fmt.Errorf("destSlice 必须是指针到切片")
+		return xerrors.New("destSlice must be a pointer to slice")
 	}
 	sliceVal := v.Elem()
 	elemType := sliceVal.Type().Elem()

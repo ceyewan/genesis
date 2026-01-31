@@ -176,6 +176,23 @@ func (c *standaloneCache) LPushCapped(ctx context.Context, key string, limit int
 	return errNotSupported
 }
 
+// --- 批量操作（Batch Operations） ---
+
+func (c *standaloneCache) MGet(ctx context.Context, keys []string, destSlice any) error {
+	return errNotSupported
+}
+
+func (c *standaloneCache) MSet(ctx context.Context, items map[string]any, ttl time.Duration) error {
+	return errNotSupported
+}
+
+// --- 高级操作（Advanced） ---
+
+// Client 返回 nil，因为 Memory 驱动不使用 Redis 客户端
+func (c *standaloneCache) Client() any {
+	return nil
+}
+
 // --- 工具与辅助函数 ---
 
 func (c *standaloneCache) Close() error {
