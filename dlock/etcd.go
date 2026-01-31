@@ -2,15 +2,14 @@ package dlock
 
 import (
 	"context"
-	"fmt"
 	"sync"
-	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 type etcdLocker struct {
@@ -31,10 +30,10 @@ type etcdLockEntry struct {
 // newEtcd 创建 Etcd Locker 实例
 func newEtcd(conn connector.EtcdConnector, cfg *Config, logger clog.Logger) (Locker, error) {
 	if conn == nil {
-		return nil, fmt.Errorf("etcd connector is nil")
+		return nil, ErrConnectorNil
 	}
 	if cfg == nil {
-		return nil, fmt.Errorf("config is nil")
+		return nil, ErrConfigNil
 	}
 
 	client := conn.GetClient()
@@ -42,7 +41,7 @@ func newEtcd(conn connector.EtcdConnector, cfg *Config, logger clog.Logger) (Loc
 	// 注意：concurrency.Session 默认 TTL 是 60s，会自动续期
 	session, err := concurrency.NewSession(client, concurrency.WithTTL(int(cfg.DefaultTTL.Seconds())))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create etcd session: %w", err)
+		return nil, xerrors.Wrap(err, "failed to create etcd session")
 	}
 
 	return &etcdLocker{
@@ -70,10 +69,11 @@ func (l *etcdLocker) TryLock(ctx context.Context, key string, opts ...LockOption
 }
 
 func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...LockOption) error {
+	// 检查本地是否已持有锁（防止同一 locker 重复获取同一把锁）
 	l.mu.RLock()
 	if _, exists := l.locks[key]; exists {
 		l.mu.RUnlock()
-		return fmt.Errorf("lock already held locally: %s", key)
+		return xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
 	l.mu.RUnlock()
 
@@ -92,7 +92,7 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 	if options.TTL > 0 && options.TTL != l.cfg.DefaultTTL {
 		session, err = concurrency.NewSession(l.client, concurrency.WithTTL(int(options.TTL.Seconds())))
 		if err != nil {
-			return fmt.Errorf("failed to create etcd session: %w", err)
+			return xerrors.Wrap(err, "failed to create etcd session")
 		}
 	} else {
 		session = l.session
@@ -103,19 +103,21 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 	// 执行加锁
 	var lockErr error
 	if try {
-		// TryLock 的情况下，使用一个很小的超时来实现非阻塞
-		tryCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		lockErr = mutex.Lock(tryCtx)
-		cancel()
+		// 使用官方 TryLock API 而不是超时 hack
+		lockErr = mutex.TryLock(ctx)
 	} else {
 		lockErr = mutex.Lock(ctx)
 	}
 
 	if lockErr != nil {
+		// 如果是新创建的 session 且加锁失败，需要关闭
+		if options.TTL > 0 && options.TTL != l.cfg.DefaultTTL && session != nil {
+			_ = session.Close()
+		}
 		if lockErr == concurrency.ErrLocked {
 			return concurrency.ErrLocked
 		}
-		return fmt.Errorf("failed to lock: %w", lockErr)
+		return xerrors.Wrap(lockErr, "failed to lock")
 	}
 
 	entry := &etcdLockEntry{
@@ -139,14 +141,14 @@ func (l *etcdLocker) Unlock(ctx context.Context, key string) error {
 	entry, exists := l.locks[key]
 	if !exists {
 		l.mu.Unlock()
-		return fmt.Errorf("lock not held: %s", key)
+		return xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
 	}
 	delete(l.locks, key)
 	l.mu.Unlock()
 
 	// 释放 Mutex
 	if err := entry.mutex.Unlock(ctx); err != nil {
-		return fmt.Errorf("failed to unlock: %w", err)
+		return xerrors.Wrap(err, "failed to unlock")
 	}
 
 	// 如果是 TTL session，需要关闭它

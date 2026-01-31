@@ -80,4 +80,8 @@ type Locker interface {
 	// Unlock 释放锁
 	// 只有锁的持有者才能成功释放
 	Unlock(ctx context.Context, key string) error
+
+	// Close 关闭 Locker，释放底层资源
+	// 对于 Etcd 会关闭 session，对于 Redis 是 no-op
+	Close() error
 }

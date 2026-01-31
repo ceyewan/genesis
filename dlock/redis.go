@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"sync"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 type redisLocker struct {
@@ -33,10 +33,10 @@ type redisLockEntry struct {
 // newRedisLocker 创建 Redis Locker 实例
 func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger) (Locker, error) {
 	if conn == nil {
-		return nil, fmt.Errorf("redis connector is nil")
+		return nil, ErrConnectorNil
 	}
 	if cfg == nil {
-		return nil, fmt.Errorf("config is nil")
+		return nil, ErrConfigNil
 	}
 
 	return &redisLocker{
@@ -67,7 +67,7 @@ func (l *redisLocker) Unlock(ctx context.Context, key string) error {
 	entry, exists := l.locks[key]
 	if !exists {
 		l.mu.Unlock()
-		return fmt.Errorf("lock not held: %s", key)
+		return xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
 	}
 	delete(l.locks, key)
 	l.mu.Unlock()
@@ -89,11 +89,11 @@ func (l *redisLocker) Unlock(ctx context.Context, key string) error {
 	redisKey := l.getRedisKey(key)
 	result, err := l.client.Eval(ctx, script, []string{redisKey}, entry.token).Result()
 	if err != nil {
-		return fmt.Errorf("failed to release lock: %w", err)
+		return xerrors.Wrap(err, "failed to release lock")
 	}
 
 	if result.(int64) == 0 {
-		return fmt.Errorf("failed to release lock (ownership lost): %s", key)
+		return xerrors.Wrapf(ErrOwnershipLost, "key: %s", key)
 	}
 
 	if l.logger != nil {
@@ -131,13 +131,6 @@ func (l *redisLocker) lockWithRetry(ctx context.Context, key string, tryOnce boo
 }
 
 func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockOption) (*redisLockEntry, error) {
-	l.mu.RLock()
-	if _, exists := l.locks[key]; exists {
-		l.mu.RUnlock()
-		return nil, fmt.Errorf("lock already held locally: %s", key)
-	}
-	l.mu.RUnlock()
-
 	options := &lockOptions{
 		TTL: l.cfg.DefaultTTL,
 	}
@@ -148,21 +141,46 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 		options.TTL = 10 * time.Second
 	}
 
+	// 先检查本地是否已持有锁
+	l.mu.Lock()
+	if _, exists := l.locks[key]; exists {
+		l.mu.Unlock()
+		return nil, xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
+	}
+	l.mu.Unlock()
+
 	// 生成随机 token
 	randBytes := make([]byte, 16)
 	if _, err := rand.Read(randBytes); err != nil {
-		return nil, fmt.Errorf("failed to generate random token: %w", err)
+		return nil, xerrors.Wrap(err, "failed to generate random token")
 	}
 	token := hex.EncodeToString(randBytes)
 	redisKey := l.getRedisKey(key)
 
 	success, err := l.client.SetNX(ctx, redisKey, token, options.TTL).Result()
 	if err != nil {
-		return nil, fmt.Errorf("failed to acquire lock: %w", err)
+		return nil, xerrors.Wrap(err, "failed to acquire lock")
 	}
 
 	if !success {
 		return nil, nil
+	}
+
+	// 获取 Redis 锁成功后，再次检查本地状态并添加
+	// 使用双重检查避免竞态条件
+	l.mu.Lock()
+	if _, exists := l.locks[key]; exists {
+		l.mu.Unlock()
+		// 本地已存在（竞态情况），释放刚获取的 Redis 锁
+		delScript := `
+			if redis.call("GET", KEYS[1]) == ARGV[1] then
+				return redis.call("DEL", KEYS[1])
+			else
+				return 0
+			end
+		`
+		_, _ = l.client.Eval(ctx, delScript, []string{redisKey}, token).Result()
+		return nil, xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
 
 	entry := &redisLockEntry{
@@ -173,11 +191,10 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 		renewDone:  make(chan struct{}),
 	}
 
-	go l.watchdog(entry, redisKey)
-
-	l.mu.Lock()
 	l.locks[key] = entry
 	l.mu.Unlock()
+
+	go l.watchdog(entry, redisKey)
 
 	if l.logger != nil {
 		l.logger.InfoContext(ctx, "lock acquired", clog.String("key", key), clog.String("token", token))
@@ -232,4 +249,10 @@ func (l *redisLocker) getRedisKey(key string) string {
 		return l.cfg.Prefix + key
 	}
 	return key
+}
+
+// Close 关闭 Redis Locker
+// Redis Locker 不拥有底层连接，因此是 no-op
+func (l *redisLocker) Close() error {
+	return nil
 }
