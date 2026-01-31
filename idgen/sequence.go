@@ -6,6 +6,7 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -15,9 +16,10 @@ import (
 
 // redisSequencer Redis 实现的序列号生成器
 type redisSequencer struct {
-	redis  connector.RedisConnector
-	cfg    *SequencerConfig
-	logger clog.Logger
+	redis      connector.RedisConnector
+	cfg        *SequencerConfig
+	logger     clog.Logger
+	seqCounter metrics.Counter
 }
 
 // NewSequencer 创建序列号生成器（配置驱动，目前仅支持 Redis）
@@ -49,27 +51,34 @@ func NewSequencer(cfg *SequencerConfig, opts ...Option) (Sequencer, error) {
 		o(&opt)
 	}
 
+	meter := opt.Meter
+	if meter == nil {
+		meter = metrics.Discard()
+	}
+	seqCounter, _ := meter.Counter(MetricSequenceGenerated, "序列号生成总数")
+
 	// 目前仅支持 Redis
 	switch cfg.Driver {
 	case "redis":
 		if opt.RedisConnector == nil {
 			return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required")
 		}
-		return newRedisSequencer(cfg, opt.RedisConnector, opt.Logger)
+		return newRedisSequencer(cfg, opt.RedisConnector, opt.Logger, seqCounter)
 	default:
 		return nil, xerrors.WithCode(ErrInvalidInput, "unsupported_driver")
 	}
 }
 
-func newRedisSequencer(cfg *SequencerConfig, redis connector.RedisConnector, logger clog.Logger) (Sequencer, error) {
+func newRedisSequencer(cfg *SequencerConfig, redis connector.RedisConnector, logger clog.Logger, seqCounter metrics.Counter) (Sequencer, error) {
 	if logger != nil {
 		logger = logger.With(clog.String("component", "sequencer"))
 	}
 
 	return &redisSequencer{
-		redis:  redis,
-		cfg:    cfg,
-		logger: logger,
+		redis:      redis,
+		cfg:        cfg,
+		logger:     logger,
+		seqCounter: seqCounter,
 	}, nil
 }
 
@@ -133,6 +142,8 @@ func (r *redisSequencer) Next(ctx context.Context, key string) (int64, error) {
 			clog.Int64("seq", seq),
 		)
 	}
+
+	r.seqCounter.Inc(ctx)
 
 	return seq, nil
 }
@@ -204,6 +215,8 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 			clog.Int64("end_seq", seqs[len(seqs)-1]),
 		)
 	}
+
+	r.seqCounter.Add(ctx, float64(count))
 
 	return seqs, nil
 }

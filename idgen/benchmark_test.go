@@ -2,13 +2,13 @@ package idgen
 
 import (
 	"context"
-	"os"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
 // ========================================
@@ -57,60 +57,67 @@ func BenchmarkUUID_Parallel(b *testing.B) {
 // Sequencer Benchmark (需要 Redis)
 // ========================================
 
+// setupRedisForBench 创建 Redis 连接用于基准测试
+// 注意：使用 testcontainers 会为每个 benchmark 创建新容器，开销较大
+// 如需更高性能的 benchmark，建议使用本地 Redis
 func setupRedisForBench(b *testing.B) connector.RedisConnector {
+	ctx := context.Background()
+
+	container, err := rediscontainer.Run(ctx, "redis:7.2-alpine")
+	if err != nil {
+		b.Fatal("Failed to start Redis container:", err)
+	}
+
+	host, err := container.Host(ctx)
+	if err != nil {
+		b.Fatal("Failed to get container host:", err)
+	}
+
+	mappedPort, err := container.MappedPort(ctx, "6379")
+	if err != nil {
+		b.Fatal("Failed to get container port:", err)
+	}
+
+	// 注册 cleanup
+	b.Cleanup(func() {
+		_ = container.Terminate(ctx)
+	})
+
+	cfg := &connector.RedisConfig{
+		Name:         "bench-redis",
+		Addr:         host + ":" + mappedPort.Port(),
+		DB:           0,
+		PoolSize:     10,
+		MinIdleConns: 2,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+	}
+
 	logger, _ := clog.New(&clog.Config{
 		Level:  "warn",
 		Format: "json",
 		Output: "stderr",
 	})
 
-	redisConn, err := connector.NewRedis(&connector.RedisConfig{
-		Addr:         getEnvOrDefaultBench("REDIS_ADDR", "127.0.0.1:6379"),
-		Password:     os.Getenv("REDIS_PASSWORD"),
-		DB:           getEnvIntOrDefaultBench("REDIS_DB", 2),
-		DialTimeout:  2 * time.Second,
-		ReadTimeout:  1 * time.Second,
-		WriteTimeout: 1 * time.Second,
-		PoolSize:     10,
-	}, connector.WithLogger(logger))
+	conn, err := connector.NewRedis(cfg, connector.WithLogger(logger))
 	if err != nil {
-		b.Skip("Redis not available")
-		return nil
+		b.Fatal("Failed to create redis connector:", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := redisConn.Connect(ctx); err != nil {
-		b.Skip("Redis connection failed")
-		redisConn.Close()
-		return nil
+	if err := conn.Connect(ctx); err != nil {
+		b.Fatal("Failed to connect to redis:", err)
 	}
 
-	b.Cleanup(func() { redisConn.Close() })
-	return redisConn
-}
+	b.Cleanup(func() {
+		_ = conn.Close()
+	})
 
-func getEnvOrDefaultBench(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-func getEnvIntOrDefaultBench(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
+	return conn
 }
 
 func BenchmarkSequencer_Next_Single(b *testing.B) {
 	redis := setupRedisForBench(b)
-	if redis == nil {
-		return
-	}
 
 	ctx := context.Background()
 	seq, _ := NewSequencer(&SequencerConfig{
@@ -127,9 +134,6 @@ func BenchmarkSequencer_Next_Single(b *testing.B) {
 
 func BenchmarkSequencer_Next_Parallel(b *testing.B) {
 	redis := setupRedisForBench(b)
-	if redis == nil {
-		return
-	}
 
 	ctx := context.Background()
 	seq, _ := NewSequencer(&SequencerConfig{
@@ -150,9 +154,6 @@ func BenchmarkSequencer_Next_Parallel(b *testing.B) {
 
 func BenchmarkSequencer_Next_DifferentKeys(b *testing.B) {
 	redis := setupRedisForBench(b)
-	if redis == nil {
-		return
-	}
 
 	ctx := context.Background()
 	seq, _ := NewSequencer(&SequencerConfig{
@@ -170,9 +171,6 @@ func BenchmarkSequencer_Next_DifferentKeys(b *testing.B) {
 
 func BenchmarkSequencer_NextBatch(b *testing.B) {
 	redis := setupRedisForBench(b)
-	if redis == nil {
-		return
-	}
 
 	ctx := context.Background()
 	seq, _ := NewSequencer(&SequencerConfig{
@@ -189,9 +187,6 @@ func BenchmarkSequencer_NextBatch(b *testing.B) {
 
 func BenchmarkSequencer_NextBatch_Parallel(b *testing.B) {
 	redis := setupRedisForBench(b)
-	if redis == nil {
-		return
-	}
 
 	ctx := context.Background()
 	seq, _ := NewSequencer(&SequencerConfig{
@@ -209,4 +204,3 @@ func BenchmarkSequencer_NextBatch_Parallel(b *testing.B) {
 		}
 	})
 }
-

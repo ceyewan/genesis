@@ -1,11 +1,13 @@
 package idgen
 
 import (
+	"context"
 	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -25,10 +27,11 @@ const (
 type snowflake struct {
 	// state 包含 48bit lastTime 和 12bit sequence
 	// 使用 atomic 操作保证并发安全
-	state    atomic.Uint64
-	workerID int64
-	dcID     int64
-	logger   clog.Logger
+	state      atomic.Uint64
+	workerID   int64
+	dcID       int64
+	logger     clog.Logger
+	genCounter metrics.Counter
 }
 
 // NewGenerator 创建 ID 生成器 (Snowflake 实现)
@@ -58,10 +61,18 @@ func NewGenerator(cfg *GeneratorConfig, opts ...Option) (Generator, error) {
 		logger = clog.Discard()
 	}
 
+	meter := opt.Meter
+	if meter == nil {
+		meter = metrics.Discard()
+	}
+
+	genCounter, _ := meter.Counter(MetricSnowflakeGenerated, "雪花算法 ID 生成总数")
+
 	sf := &snowflake{
-		workerID: cfg.WorkerID,
-		dcID:     cfg.DatacenterID,
-		logger:   logger.With(clog.String("component", "generator")),
+		workerID:   cfg.WorkerID,
+		dcID:       cfg.DatacenterID,
+		logger:     logger.With(clog.String("component", "generator")),
+		genCounter: genCounter,
 	}
 
 	sf.logger.Info("generator created",
@@ -131,6 +142,7 @@ func (s *snowflake) Next() int64 {
 	if err != nil {
 		return -1
 	}
+	s.genCounter.Inc(context.Background())
 	return id
 }
 

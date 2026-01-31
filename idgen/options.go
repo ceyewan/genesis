@@ -3,6 +3,7 @@ package idgen
 import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/metrics"
 )
 
 // Option 组件初始化选项函数
@@ -11,6 +12,7 @@ type Option func(*options)
 // options 组件初始化选项配置（内部使用）
 type options struct {
 	Logger         clog.Logger
+	Meter          metrics.Meter
 	RedisConnector connector.RedisConnector
 	EtcdConnector  connector.EtcdConnector
 }
@@ -42,6 +44,15 @@ func WithEtcdConnector(conn connector.EtcdConnector) Option {
 	return func(o *options) {
 		if conn != nil {
 			o.EtcdConnector = conn
+		}
+	}
+}
+
+// WithMeter 注入指标 Meter（默认使用 metrics.Discard）
+func WithMeter(m metrics.Meter) Option {
+	return func(o *options) {
+		if m != nil {
+			o.Meter = m
 		}
 	}
 }
