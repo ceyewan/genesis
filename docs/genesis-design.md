@@ -31,7 +31,7 @@ Genesis 的设计遵循 Go 语言的核心哲学：
     - **Component (组件):** 基于连接器封装业务通用能力（如分布式锁、缓存），提供面向业务的 API。
 
 5. **接口驱动 (Interface Driven):**
-    - 对外暴露接口 (`pkg/`), 隐藏实现细节。
+    - 对外暴露接口，隐藏实现细节。
     - 便于测试（Mock）和未来替换底层实现。
 
 ## 3. 总体架构 (Architecture)
@@ -81,6 +81,7 @@ graph TD
             Cache[cache 缓存]
             MQ[mq 消息队列]
             IDGen[idgen ID生成]
+            Idem[idem 幂等性]
         end
 
         subgraph "Level 3: Governance (扁平化)"
@@ -100,7 +101,7 @@ graph TD
 
 ### 4.1. Level 0: 基础能力 (Base)
 
-Genesis 所有组件统一使用 L0 基础组件，确保一致的可观测性和错误处理。L0 组件采用**扁平化设计**，所有公开 API 直接在 `pkg/` 根目录：
+Genesis 所有组件统一使用 L0 基础组件，确保一致的可观测性和错误处理。L0 组件采用**扁平化设计**，所有公开 API 直接在组件根目录：
 
 - **clog (Context Logger):** 基于 `slog` 的结构化日志库，支持 Context 字段自动提取、命名空间派生。所有组件通过 `WithLogger` 注入。
 
@@ -112,7 +113,7 @@ Genesis 所有组件统一使用 L0 基础组件，确保一致的可观测性�
 
 ### 4.2. Level 1: 连接器 (Connectors)
 
-位于 `pkg/connector`，提供统一的连接管理接口：
+位于根目录 `connector/`，提供统一的连接管理接口：
 
 - **MySQL:** 基于 GORM 的连接管理，**拥有**连接池资源。
 - **Redis:** 基于 go-redis 的连接管理，**拥有**连接池资源。
@@ -123,14 +124,14 @@ Genesis 所有组件统一使用 L0 基础组件，确保一致的可观测性�
 
 ### 4.3. Level 2: 业务组件 (Components)
 
-位于 `pkg/` 下的独立包，**借用** Connector 的连接：
+位于根目录下的独立包，**借用** Connector 的连接：
 
 - **db:** 集成 `gorm` 和 `sharding` 插件，支持分库分表。
 - **dlock:** 统一接口的分布式锁，支持 Redis 和 Etcd 后端。
-- **cache:** Redis 缓存封装。
-- **mq:** 统一接口的消息队列。
-- **idgen:** 分布式 ID 生成器。
-- **idem:** 幂等性控制。
+- **cache:** 缓存封装，支持 Redis / Memory 驱动。
+- **mq:** 统一接口的消息队列，支持 NATS (Core/JetStream) / Redis Stream。
+- **idgen:** 分布式 ID 生成器，支持 UUID/Snowflake/Sequencer。
+- **idem:** 幂等性控制，支持手动调用、Gin、gRPC。
 
 **资源所有权**：组件只借用 Connector 的 client，其 `Close()` 方法通常是 no-op。
 
@@ -250,40 +251,41 @@ func main() {
 
 ## 7. 目录结构规范
 
-采用扁平化结构，L2/L3 组件逐步消除 `types/` 子包：
+采用**完全扁平化**结构，所有组件直接放在根目录：
 
 ```text
 genesis/
-├── pkg/                      # 公开 API 和接口定义
-│   ├── auth/                 # 认证组件 (L3) - 扁平化
-│   ├── clog/                 # 日志组件 (L0) - 扁平化
-│   ├── config/               # 配置组件 (L0) - 扁平化
-│   ├── metrics/              # 指标组件 (L0) - 扁平化
-│   ├── xerrors/              # 错误处理 (L0) - 扁平化
-│   ├── connector/            # 连接器 (L1)
-│   ├── db/                   # 数据库组件 (L1)
-│   ├── dlock/                # 分布式锁 (L2) - 扁平化
-│   ├── cache/                # 缓存 (L2) - 扁平化
-│   ├── idgen/                # ID 生成 (L2) - 扁平化
-│   ├── mq/                   # 消息队列 (L2) - 扁平化
-│   ├── ratelimit/            # 限流 (L3) - 扁平化
-│   ├── breaker/              # 熔断 (L3) - 扁平化
-│   └── registry/             # 服务注册 (L3) - 扁平化
-│
-├── internal/                 # 内部实现逻辑
-│   ├── breaker/
-│   ├── clog/
-│   └── ...
-│
+├── auth/                     # 认证组件 (L3) - 扁平化
+├── breaker/                  # 熔断器 (L3) - 扁平化
+├── clog/                     # 日志组件 (L0) - 扁平化
+├── config/                   # 配置组件 (L0) - 扁平化
+├── connector/                # 连接器 (L1) - 扁平化
+├── db/                       # 数据库组件 (L1) - 扁平化
+├── dlock/                    # 分布式锁 (L2) - 扁平化
+├── cache/                    # 缓存 (L2) - 扁平化
+├── idgen/                    # ID 生成 (L2) - 扁平化
+├── idem/                     # 幂等性 (L2) - 扁平化
+├── mq/                       # 消息队列 (L2) - 扁平化
+├── metrics/                  # 指标组件 (L0) - 扁平化
+├── ratelimit/                # 限流 (L3) - 扁平化
+├── registry/                 # 服务注册 (L3) - 扁平化
+├── testkit/                  # 测试工具包
+├── trace/                    # 链路追踪工具
+├── xerrors/                  # 错误处理 (L0) - 扁平化
 ├── docs/                     # 设计文档
-└── examples/                 # 使用示例
+├── examples/                 # 使用示例
+├── go.mod
+├── go.sum
+├── Makefile
+├── CLAUDE.md                 # AI 助手约束
+└── README.md                 # 项目说明
 ```
 
 **关键说明**：
 
-- L0 组件（clog、config、metrics、xerrors）采用扁平化设计，所有公开 API 在 pkg 根目录。
-- L2/L3 组件正在重构为扁平化结构，接口和实现在同一包中，减少 `types/` 依赖。
-- 复杂实现细节放在 `internal/` 下。
+- 所有组件采用**完全扁平化设计**，接口和实现在同一目录下，无 `pkg/` 或 `internal/` 分层
+- 组件内部实现细节（如需要）可通过私有文件或子目录封装
+- 每个组件都是独立的 Go 包，通过 `github.com/ceyewan/genesis/<component>` 引用
 
 ## 8. 组件开发规范 (Component Specification)
 
@@ -322,7 +324,7 @@ func WithLogger(l clog.Logger) Option {
 使用 `xerrors` 定义和包装错误：
 
 ```go
-// pkg/dlock/errors.go
+// dlock/errors.go
 var (
     ErrLockNotHeld   = xerrors.New("dlock: lock not held")
 )

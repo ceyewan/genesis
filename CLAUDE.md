@@ -26,9 +26,9 @@
 - **ORM**: `GORM` (数据库操作)
 - **配置**: `Viper` (多源配置加载)
 - **指标**: `OpenTelemetry` (可观测性)
-- **缓存**: 支持 Redis
+- **缓存**: 支持 Redis / Memory
 - **锁**: 支持 Redis/Etcd
-- **消息队列**: 支持 NATS
+- **消息队列**: 支持 NATS (Core/JetStream) / Redis Stream
 - **数据库**: MySQL (支持分库分表)
 
 ## 常用开发命令
@@ -174,7 +174,7 @@ cache, err := cache.New(redisConn, cfg,
 
 - Level 0: clog, config, metrics, xerrors (✅)
 - Level 1: connector, db (✅)
-- Level 2: dlock, cache, idgen, mq (✅)
+- Level 2: dlock, cache, idgen, idem, mq (✅)
 - Level 3: auth, ratelimit, breaker, registry (✅)
 
 ## 文档查阅指南

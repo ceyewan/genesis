@@ -95,11 +95,11 @@ func main() {
 
 ### Level 2 - 业务组件
 
-- **[cache](./cache)** - 统一缓存接口，支持 Redis
+- **[cache](./cache)** - 统一缓存接口，支持 Redis / Memory
 - **[dlock](./dlock)** - 分布式锁，支持 Redis/Etcd，内置自动续期
-- **[idgen](./idgen)** - ID 生成器，支持 Snowflake/UUID/Sequence
+- **[idgen](./idgen)** - ID 生成器，支持 UUID/Snowflake/Sequencer
 - **[idem](./idem)** - 幂等性组件，支持手动调用、Gin、gRPC
-- **[mq](./mq)** - 消息队列组件，支持 NATS
+- **[mq](./mq)** - 消息队列组件，支持 NATS (Core/JetStream) / Redis Stream
 
 ### Level 3 - 流量治理
 
