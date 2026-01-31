@@ -1,102 +1,65 @@
-// Package mq 提供消息队列组件，支持 NATS Core, JetStream, Redis Stream 等多种模式。
+// Package mq 提供消息队列组件，支持 NATS Core, JetStream, Redis Stream 等多种后端。
 //
-// MQ 组件是 Genesis 微服务组件库的消息中间件抽象层，提供了统一的发布-订阅语义，
-// 并支持消息头元数据透传（不做自动注入/提取）。
+// MQ 组件是 Genesis 微服务组件库的消息中间件抽象层，提供统一的发布-订阅语义。
+// 设计原则：
+//   - 简单优于复杂：核心接口精简，通过 Option 扩展能力
+//   - 显式优于隐式：不做自动注入，用户完全掌控消息流
+//   - 可扩展性：Transport 接口设计兼顾未来 Kafka 等重量级 MQ
 package mq
 
 import (
 	"context"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
-// Headers 消息元数据（键值对）。
-// 不支持多值 Header；底层若存在多值，仅保留首个值。
-type Headers map[string]string
-
-// Message 消息接口
-// 封装了底层消息的细节，提供统一的数据访问和确认机制
-type Message interface {
-	// Subject 获取消息主题
-	Subject() string
-
-	// Data 获取消息内容
-	Data() []byte
-
-	// Headers 获取消息头 (键值对)，返回副本
-	// MQ 不做自动注入/提取，业务可自行对接 trace 等上下文。
-	Headers() Headers
-
-	// Context 获取与消息处理关联的上下文
-	// Subscribe 回调参数与 msg.Context() 保持一致，SubscribeChan 场景可直接使用 msg.Context()。
-	Context() context.Context
-
-	// Ack 确认消息处理成功
-	// - NATS Core: 空操作
-	// - JetStream: 发送 Ack
-	// - Redis Stream: 仅在 Consumer Group 模式下有效
-	Ack() error
-
-	// Nak 否认消息，请求重投
-	// - JetStream: 发送 Nak
-	// - Redis Stream: 无原生 Nak，默认空操作
-	// - NATS Core: 空操作
-	Nak() error
-}
-
-// Handler 消息处理函数
-type Handler func(ctx context.Context, msg Message) error
-
-// Subscription 订阅句柄
-// 用于管理订阅的生命周期（如取消订阅）
-type Subscription interface {
-	// Unsubscribe 取消订阅
-	// 说明：该操作尽力停止后续消息投递，不保证等待当前 Handler 完成，具体行为依赖驱动实现。
-	Unsubscribe() error
-
-	// IsValid 检查订阅是否有效
-	IsValid() bool
-}
-
-// Client 定义了 MQ 组件的核心能力
-type Client interface {
-	// Publish 发布消息
-	Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error
-
-	// Subscribe 订阅消息
-	// 支持普通订阅和队列订阅（通过 WithQueueGroup 选项）
-	Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error)
-
-	// SubscribeChan Channel 模式订阅
-	// 返回一个只读 Channel，用户可以通过 range 遍历消息
-	// 必须调用 Subscription.Unsubscribe 来关闭 Channel 和释放资源
+// MQ 消息队列核心接口
+//
+// 提供统一的发布订阅能力，屏蔽底层实现差异。
+// 支持的后端：NATS Core、NATS JetStream、Redis Stream
+type MQ interface {
+	// Publish 发布消息到指定主题
 	//
-	// 注意：当 Channel 缓冲区满时会丢弃消息并返回错误给内部 handler。
-	// 若需要手动 Ack/Nak（尤其是 SubscribeChan 模式），请显式设置 WithManualAck，
-	// 并在消费端处理成功后调用 msg.Ack()，以获得“至少一次投递”的语义。
-	// SubscribeChan 场景下可使用 msg.Context() 获取订阅上下文（如取消/超时）。
-	SubscribeChan(ctx context.Context, subject string, opts ...SubscribeOption) (<-chan Message, Subscription, error)
+	// 参数：
+	//   - ctx: 上下文，用于超时控制和取消
+	//   - topic: 消息主题（NATS subject / Redis stream key）
+	//   - data: 消息体
+	//   - opts: 发布选项（Headers 等）
+	Publish(ctx context.Context, topic string, data []byte, opts ...PublishOption) error
 
-	// Close 关闭客户端
+	// Subscribe 订阅主题并处理消息
+	//
+	// Handler 签名：func(msg Message) error
+	// 通过 msg.Context() 获取上下文，避免参数冗余。
+	//
+	// 参数：
+	//   - ctx: 订阅生命周期上下文，取消时自动停止订阅
+	//   - topic: 订阅主题
+	//   - handler: 消息处理函数
+	//   - opts: 订阅选项（QueueGroup、AutoAck 等）
+	Subscribe(ctx context.Context, topic string, handler Handler, opts ...SubscribeOption) (Subscription, error)
+
+	// Close 关闭 MQ 客户端
+	// 注意：底层连接由 Connector 管理，此方法仅释放 MQ 内部资源
 	Close() error
 }
 
-// New 创建 MQ 客户端（配置驱动）
+// New 创建 MQ 实例
 //
-// 通过 cfg.Driver 选择底层驱动，依赖通过 Option 注入。
-// 必需的依赖：
-//   - DriverNatsCore / DriverNatsJetStream: WithNATSConnector
-//   - DriverRedis: WithRedisConnector
+// 根据 Config.Driver 选择底层 Transport 实现。
+// 必需依赖通过 Option 注入：
+//   - NATS 系列: WithNATSConnector
+//   - Redis Stream: WithRedisConnector
 //
-// 若缺失对应依赖，将返回错误。
-// 使用示例:
+// 示例：
 //
-//	client, _ := mq.New(&mq.Config{
-//	    Driver: mq.DriverNatsCore,
+//	mq, err := mq.New(&mq.Config{
+//	    Driver: mq.DriverNATSJetStream,
 //	}, mq.WithNATSConnector(natsConn), mq.WithLogger(logger))
-func New(cfg *Config, opts ...Option) (Client, error) {
+func New(cfg *Config, opts ...Option) (MQ, error) {
 	if cfg == nil {
 		return nil, xerrors.New("config is nil")
 	}
@@ -106,62 +69,105 @@ func New(cfg *Config, opts ...Option) (Client, error) {
 		return nil, err
 	}
 
-	opt, err := applyOptions(opts...)
+	o := applyOptions(opts...)
+
+	// 创建 Transport
+	transport, err := newTransport(cfg, o)
 	if err != nil {
 		return nil, err
 	}
 
-	var driver driver
-	switch cfg.Driver {
-	case DriverNatsCore:
-		if opt.NATSConnector == nil {
-			return nil, xerrors.New("nats connector is required, use WithNATSConnector")
-		}
-		driver = newNatsCoreDriver(opt.NATSConnector, opt.Logger)
-	case DriverNatsJetStream:
-		if opt.NATSConnector == nil {
-			return nil, xerrors.New("nats connector is required, use WithNATSConnector")
-		}
-		jsDriver, err := newNatsJetStreamDriver(opt.NATSConnector, cfg.JetStream, opt.Logger)
-		if err != nil {
-			return nil, xerrors.Wrap(err, "failed to create nats jetstream driver")
-		}
-		driver = jsDriver
-	case DriverRedis:
-		if opt.RedisConnector == nil {
-			return nil, xerrors.New("redis connector is required, use WithRedisConnector")
-		}
-		driver = newRedisDriver(opt.RedisConnector, opt.Logger)
-	default:
-		return nil, xerrors.New("unsupported driver: " + string(cfg.Driver))
-	}
-
-	return newClient(driver, opt.Logger, opt.Meter), nil
+	return &mq{
+		transport: transport,
+		logger:    o.logger,
+		meter:     o.meter,
+	}, nil
 }
 
-func applyOptions(opts ...Option) (options, error) {
-	// 应用选项
-	opt := options{}
-	for _, o := range opts {
-		o(&opt)
-	}
-
-	// 如果没有提供 Logger，创建默认实例
-	if opt.Logger == nil {
-		logger, err := clog.New(&clog.Config{
-			Level:  "info",
-			Format: "json",
-			Output: "stdout",
-		})
-		if err != nil {
-			return opt, xerrors.Wrapf(err, "failed to create default logger")
+// newTransport 根据配置创建对应的 Transport 实现
+func newTransport(cfg *Config, o *options) (Transport, error) {
+	switch cfg.Driver {
+	case DriverNATSCore:
+		if o.natsConnector == nil {
+			return nil, xerrors.New("NATS connector required, use WithNATSConnector")
 		}
-		opt.Logger = logger
+		return newNATSCoreTransport(o.natsConnector, o.logger), nil
+
+	case DriverNATSJetStream:
+		if o.natsConnector == nil {
+			return nil, xerrors.New("NATS connector required, use WithNATSConnector")
+		}
+		return newNATSJetStreamTransport(o.natsConnector, cfg.JetStream, o.logger)
+
+	case DriverRedisStream:
+		if o.redisConnector == nil {
+			return nil, xerrors.New("Redis connector required, use WithRedisConnector")
+		}
+		return newRedisStreamTransport(o.redisConnector, o.logger), nil
+
+	default:
+		return nil, xerrors.WithCode(xerrors.New("unsupported driver"), string(cfg.Driver))
+	}
+}
+
+// applyOptions 应用选项并设置默认值
+func applyOptions(opts ...Option) *options {
+	o := &options{}
+	for _, opt := range opts {
+		opt(o)
 	}
 
-	if opt.Meter == nil {
-		opt.Meter = metrics.Discard()
+	// 设置默认 Logger
+	if o.logger == nil {
+		o.logger = clog.Discard()
 	}
 
-	return opt, nil
+	// 设置默认 Meter
+	if o.meter == nil {
+		o.meter = metrics.Discard()
+	}
+
+	return o
+}
+
+// Option MQ 配置选项
+type Option func(*options)
+
+type options struct {
+	logger         clog.Logger
+	meter          metrics.Meter
+	natsConnector  connector.NATSConnector
+	redisConnector connector.RedisConnector
+}
+
+// WithLogger 注入日志记录器
+func WithLogger(l clog.Logger) Option {
+	return func(o *options) {
+		if l != nil {
+			o.logger = l.WithNamespace("mq")
+		}
+	}
+}
+
+// WithMeter 注入指标收集器
+func WithMeter(m metrics.Meter) Option {
+	return func(o *options) {
+		if m != nil {
+			o.meter = m
+		}
+	}
+}
+
+// WithNATSConnector 注入 NATS 连接器（用于 NATS Core / JetStream）
+func WithNATSConnector(conn connector.NATSConnector) Option {
+	return func(o *options) {
+		o.natsConnector = conn
+	}
+}
+
+// WithRedisConnector 注入 Redis 连接器（用于 Redis Stream）
+func WithRedisConnector(conn connector.RedisConnector) Option {
+	return func(o *options) {
+		o.redisConnector = conn
+	}
 }

@@ -1,18 +1,28 @@
 package mq
 
-// MQ 指标命名常量，便于外部对接监控系统。
+// 指标名称常量
 const (
-	// MetricPublishTotal 发布成功的消息总数
+	// MetricPublishTotal 发布消息总数
 	MetricPublishTotal = "mq.publish.total"
 
-	// MetricConsumeTotal 消费处理的消息总数
+	// MetricPublishDuration 发布延迟（秒）
+	MetricPublishDuration = "mq.publish.duration"
+
+	// MetricConsumeTotal 消费消息总数
 	MetricConsumeTotal = "mq.consume.total"
 
-	// MetricHandleDuration 单条消息处理耗时（单位：秒）
+	// MetricHandleDuration 消息处理耗时（秒）
 	MetricHandleDuration = "mq.handle.duration"
 )
 
-// 指标标签名
+// 标签名称常量
 const (
-	MetricLabelSubject = "subject"
+	// LabelTopic 主题标签
+	LabelTopic = "topic"
+
+	// LabelStatus 状态标签（success/error）
+	LabelStatus = "status"
+
+	// LabelDriver 驱动标签
+	LabelDriver = "driver"
 )

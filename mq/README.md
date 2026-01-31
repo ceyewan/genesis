@@ -1,166 +1,206 @@
-# mq - Genesis 消息队列组件
+# mq - Genesis 消息队列组件 (v2)
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/mq.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/mq)
 
-`mq` 是 Genesis 业务层的核心组件，提供统一的消息队列抽象。它通过 Driver 模式支持多种底层实现（NATS, Redis），并提供统一的发布订阅 API。
+`mq` 是 Genesis 业务层的消息队列抽象组件，提供统一的发布订阅 API，支持多种后端实现。
+
+## 设计理念
+
+- **简单优于复杂**：核心接口精简，通过 Option 扩展能力
+- **显式优于隐式**：不做自动注入，用户完全掌控消息流
+- **可扩展性**：Transport 接口设计兼顾未来 Kafka 等重量级 MQ
 
 ## 特性
 
-- **所属层级**：L2 (Business)
-- **多驱动支持**：
-    - **NATS**: 支持 Core (高性能) 和 JetStream (持久化)
-    - **Redis**: 支持 Redis Stream (持久化队列)
-- **统一抽象**：屏蔽底层差异，提供一致的 `Publish/Subscribe` 接口
-- **增强功能**：
-    - **Channel 模式**：支持 Go Channel 风格的消息消费 (`SubscribeChan`)
-    - **重试机制**：内置指数退避重试中间件 (`WithRetry`)
-    - **Options 模式**：灵活配置队列组、缓冲区、自动确认等
-- **Header 透传**：支持消息头元数据透传（不做自动注入/提取）
-- **可观测性**：集成 clog 和 metrics
+| 特性 | NATS Core | JetStream | Redis Stream | Kafka (预留) |
+|------|-----------|-----------|--------------|--------------|
+| 持久化 | ❌ | ✅ | ✅ | ✅ |
+| 消息确认 | ❌ | ✅ | ✅ | ✅ |
+| 消息拒绝 (Nak) | ❌ | ✅ | ❌ | ❌ |
+| 队列组 | ✅ | ✅ | ✅ | ✅ |
+| 顺序保证 | ❌ | ✅* | ✅ | ✅* |
+| 批量消费 | ❌ | ✅ | ✅ | ✅ |
+| 死信队列 | ❌ | 预留 | 预留 | 预留 |
 
-## 目录结构
-
-```text
-mq/
-├── mq.go                  # Client 接口定义
-├── client.go              # Client 通用实现
-├── driver.go              # 驱动内部接口定义
-├── driver_nats.go         # NATS 驱动
-├── driver_redis.go        # Redis 驱动
-├── options.go             # 订阅选项
-├── retry.go               # 重试中间件
-├── types.go               # 类型与配置定义
-└── README.md              # 本文档
-```
+*单消费者/单分区时保证顺序
 
 ## 快速开始
 
-### 1. NATS (JetStream)
+### 安装
 
-```go
-// 创建 Connector
-natsConn, _ := connector.NewNATS(&cfg.NATS, connector.WithLogger(logger))
-natsConn.Connect(ctx)
-
-// 创建 Client
-client, _ := mq.New(&mq.Config{
-    Driver: mq.DriverNatsJetStream,
-    JetStream: &mq.JetStreamConfig{
-        AutoCreateStream: true,
-    },
-}, mq.WithNATSConnector(natsConn), mq.WithLogger(logger))
-
-// 订阅 (Queue Group 负载均衡)
-client.Subscribe(ctx, "orders.created", handler, mq.WithQueueGroup("order_workers"))
+```bash
+go get github.com/ceyewan/genesis/mq
 ```
 
-### 2. Redis Stream
+### NATS JetStream 示例
 
 ```go
-// 创建 Connector
-redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
-redisConn.Connect(ctx)
+package main
 
-// 创建 Client
-client, _ := mq.New(&mq.Config{
-    Driver: mq.DriverRedis,
-}, mq.WithRedisConnector(redisConn), mq.WithLogger(logger))
+import (
+    "context"
+    "log"
 
-// 订阅
-client.Subscribe(ctx, "orders.created", handler, mq.WithQueueGroup("order_workers"))
-```
+    "github.com/ceyewan/genesis/connector"
+    "github.com/ceyewan/genesis/mq"
+)
 
-## 高级功能
+func main() {
+    ctx := context.Background()
 
-### Channel 模式
+    // 1. 创建 NATS 连接
+    natsConn, _ := connector.NewNATS(&connector.NATSConfig{
+        URLs: []string{"nats://localhost:4222"},
+    })
+    _ = natsConn.Connect(ctx)
+    defer natsConn.Close()
 
-适合高吞吐处理或习惯 Go Channel 的场景：
+    // 2. 创建 MQ 实例
+    mq, _ := mq.New(&mq.Config{
+        Driver: mq.DriverNATSJetStream,
+        JetStream: &mq.JetStreamConfig{
+            AutoCreateStream: true,
+        },
+    }, mq.WithNATSConnector(natsConn))
+    defer mq.Close()
 
-```go
-ch, sub, err := client.SubscribeChan(ctx, "events", mq.WithBufferSize(100))
-defer sub.Unsubscribe()
+    // 3. 订阅消息
+    sub, _ := mq.Subscribe(ctx, "orders.created", func(msg mq.Message) error {
+        log.Printf("Received: %s", msg.Data())
+        return nil // 返回 nil 自动 Ack
+    }, mq.WithQueueGroup("order-workers"))
 
-for msg := range ch {
-    // 如需上下文，可使用 msg.Context()
-    process(msg)
-    msg.Ack() // 手动确认
+    // 4. 发布消息
+    _ = mq.Publish(ctx, "orders.created", []byte(`{"id": 123}`),
+        mq.WithHeader("trace-id", "abc123"))
+
+    // 5. 清理
+    <-sub.Done()
 }
 ```
 
-### 重试中间件
-
-为 Handler 增加自动重试能力：
+### Redis Stream 示例
 
 ```go
-handler := func(ctx context.Context, msg mq.Message) error {
-    // 业务逻辑...
-    return err // 返回错误触发重试
-}
-
-// 包装 Handler：最大重试 3 次
-client.Subscribe(ctx, "topic", mq.WithRetry(mq.DefaultRetryConfig, logger)(handler))
-```
-
-### 消息头透传（Trace/Metadata）
-
-`mq` 不自动注入/提取 tracing 信息，仅透传消息头，业务自行对接：
-
-```go
-headers := mq.Headers{
-    "traceparent": "00-00000000000000000000000000000000-0000000000000000-01",
-}
-client.Publish(ctx, "topic", []byte("hello"), mq.WithHeaders(headers))
-
-client.Subscribe(ctx, "topic", func(ctx context.Context, msg mq.Message) error {
-    // 业务自行解析 msg.Headers() 并注入到 ctx
-    _ = msg.Headers()
-    return nil
+// 创建 Redis 连接
+redisConn, _ := connector.NewRedis(&connector.RedisConfig{
+    Addr: "localhost:6379",
 })
+_ = redisConn.Connect(ctx)
+
+// 创建 MQ 实例
+mq, _ := mq.New(&mq.Config{
+    Driver: mq.DriverRedisStream,
+}, mq.WithRedisConnector(redisConn))
+
+// 订阅（Consumer Group 模式）
+mq.Subscribe(ctx, "events", handler, 
+    mq.WithQueueGroup("event-processors"),
+    mq.WithDurable("worker-1"))
 ```
 
-### 订阅选项
+## Handler 设计
+
+`Handler` 只接收 `Message` 参数，通过 `msg.Context()` 获取上下文：
 
 ```go
-client.Subscribe(ctx, "topic", handler,
-    mq.WithQueueGroup("group1"), // 负载均衡组
-    mq.WithManualAck(),          // 关闭自动 Ack
-    mq.WithDurable("durable1"),  // 持久化订阅名 (JetStream/Redis)
-    mq.WithBatchSize(50),        // 批量拉取大小 (Redis)
-    mq.WithMaxInflight(100),     // 最大在途消息数 (JetStream)
-    mq.WithAsyncAck(),           // 开启异步确认 (提升吞吐)
-    mq.WithDeadLetter(3, "dlq"), // 设置死信队列 (3次失败后转发到 dlq)
+handler := func(msg mq.Message) error {
+    ctx := msg.Context() // 获取上下文
+    
+    // 业务逻辑
+    return processOrder(ctx, msg.Data())
+}
+```
+
+**为什么这样设计？**
+
+旧版 API `func(ctx, msg)` 存在困惑：ctx 和 msg.Context() 哪个才是"对的"？
+新版统一从 msg.Context() 获取，语义清晰。
+
+## 订阅选项
+
+```go
+mq.Subscribe(ctx, "topic", handler,
+    // 队列组（负载均衡）
+    mq.WithQueueGroup("workers"),
+    
+    // 关闭自动确认，手动调用 msg.Ack()
+    mq.WithManualAck(),
+    
+    // 持久化订阅名（JetStream/Redis）
+    mq.WithDurable("durable-1"),
+    
+    // 批量拉取大小
+    mq.WithBatchSize(50),
+    
+    // 最大在途消息数（JetStream）
+    mq.WithMaxInflight(100),
+    
+    // 死信队列（预留，暂未实现）
+    mq.WithDeadLetter(3, "dead-letter-topic"),
 )
 ```
 
-## 指标说明
+## 中间件
 
-`mq` 默认使用 `metrics.Discard()` 兜底，不需要判空。
-
-已暴露的指标名（可直接使用常量）：
-
-- `mq.MetricPublishTotal`：发布成功的消息数（label: `subject`）
-- `mq.MetricConsumeTotal`：消费处理的消息数（label: `subject`）
-- `mq.MetricHandleDuration`：处理耗时（单位秒，label: `subject`）
-
-## 接口设计
-
-### 工厂入口
+mq 提供中间件机制增强 Handler：
 
 ```go
-client, _ := mq.New(&mq.Config{
-    Driver: mq.DriverNatsCore,
-}, mq.WithNATSConnector(natsConn))
+// 重试中间件
+retryHandler := mq.WithRetry(mq.DefaultRetryConfig, logger)(handler)
+
+// 日志中间件
+loggedHandler := mq.WithLogging(logger)(handler)
+
+// Panic 恢复
+safeHandler := mq.WithRecover(logger)(handler)
+
+// 串联多个中间件
+handler = mq.Chain(
+    mq.WithRecover(logger),
+    mq.WithLogging(logger),
+    mq.WithRetry(mq.DefaultRetryConfig, logger),
+)(handler)
 ```
 
-### Client 接口
+## 能力检查
 
-对外暴露的统一 API：
+不同后端能力差异较大，可通过 `Capabilities` 运行时检查：
 
 ```go
-type Client interface {
-    Publish(ctx context.Context, subject string, data []byte, opts ...PublishOption) error
-    Subscribe(ctx context.Context, subject string, handler Handler, opts ...SubscribeOption) (Subscription, error)
-    SubscribeChan(ctx context.Context, subject string, opts ...SubscribeOption) (<-chan Message, Subscription, error)
-    Close() error
+// 获取 Transport 能力（需要类型断言访问内部方法）
+// 或通过配置时的 Driver 判断
+
+if cfg.Driver == mq.DriverNATSCore {
+    // NATS Core 不支持持久化，不要用于关键业务
 }
 ```
+
+## 指标
+
+| 指标名 | 类型 | 描述 |
+|--------|------|------|
+| `mq.publish.total` | Counter | 发布消息总数 |
+| `mq.publish.duration` | Histogram | 发布延迟 (秒) |
+| `mq.consume.total` | Counter | 消费消息总数 |
+| `mq.handle.duration` | Histogram | 处理耗时 (秒) |
+
+标签：`topic`, `status`
+
+## 迁移指南 (v1 → v2)
+
+| v1 | v2 | 说明 |
+|----|-----|------|
+| `mq.Client` | `mq.MQ` | 接口重命名 |
+| `Handler(ctx, msg)` | `Handler(msg)` | 去掉冗余 ctx 参数 |
+| `msg.Subject()` | `msg.Topic()` | 统一术语 |
+| `DriverNatsJetStream` | `DriverNATSJetStream` | 命名规范化 |
+| `DriverRedis` | `DriverRedisStream` | 明确是 Stream |
+| `SubscribeChan` | 已移除 | 使用 Handler 模式 |
+
+## 未来规划
+
+- [ ] Kafka 支持
+- [ ] 死信队列实现
+- [ ] 延迟消息支持
+- [ ] 事务消息（Kafka）

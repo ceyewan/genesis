@@ -1,4 +1,4 @@
-package mqv2
+package mq
 
 import (
 	"time"
@@ -18,7 +18,7 @@ type Middleware func(Handler) Handler
 //
 // 示例：
 //
-//	handler = mqv2.Chain(logging, retry, tracing)(handler)
+//	handler = mq.Chain(logging, retry, tracing)(handler)
 //	// 执行顺序：logging -> retry -> tracing -> handler
 func Chain(middlewares ...Middleware) Middleware {
 	return func(next Handler) Handler {
@@ -63,7 +63,7 @@ var DefaultRetryConfig = RetryConfig{
 //
 // 示例：
 //
-//	handler := mqv2.WithRetry(mqv2.DefaultRetryConfig, logger)(myHandler)
+//	handler := mq.WithRetry(mq.DefaultRetryConfig, logger)(myHandler)
 func WithRetry(cfg RetryConfig, logger clog.Logger) Middleware {
 	if cfg.Multiplier <= 1.0 {
 		cfg.Multiplier = 2.0

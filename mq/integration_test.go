@@ -1,4 +1,4 @@
-package mqv2
+package mq
 
 import (
 	"fmt"
