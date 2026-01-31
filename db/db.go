@@ -6,7 +6,7 @@
 // - 分库分表能力（基于 gorm.io/sharding）
 // - 与 L0 基础组件（日志、链路追踪、错误）的深度集成
 //
-// ## 基本使用
+// ## 基本使用（MySQL）
 //
 //	mysqlConn, _ := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
 //	defer mysqlConn.Close()
@@ -26,6 +26,18 @@
 //		db.WithLogger(logger),
 //		db.WithTracer(otel.GetTracerProvider()),
 //		db.WithMySQLConnector(mysqlConn),
+//	)
+//
+// ## 使用 PostgreSQL
+//
+//	pgConn, _ := connector.NewPostgreSQL(&cfg.PostgreSQL, connector.WithLogger(logger))
+//	defer pgConn.Close()
+//	pgConn.Connect(ctx)
+//
+//	database, _ := db.New(&db.Config{Driver: "postgresql"},
+//		db.WithLogger(logger),
+//		db.WithTracer(otel.GetTracerProvider()),
+//		db.WithPostgreSQLConnector(pgConn),
 //	)
 //
 //	// 使用 GORM 进行数据库操作
@@ -51,7 +63,7 @@
 // ## 设计原则
 //
 // - **借用模型**：db 组件借用连接器的连接，不负责连接的生命周期
-// - **配置驱动**：通过 Config.Driver 字段控制底层实现（mysql/sqlite）
+// - **配置驱动**：通过 Config.Driver 字段控制底层实现（mysql/postgresql/sqlite）
 // - **显式依赖**：通过构造函数显式注入连接器和选项
 // - **简单设计**：使用 Go 原生模式，避免复杂的抽象
 // - **可观测性**：集成 clog 和 OpenTelemetry trace，提供完整的日志和链路追踪能力
@@ -109,6 +121,11 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 			return nil, ErrMySQLConnectorRequired
 		}
 		gormDB = opt.mysqlConnector.GetClient()
+	case "postgresql":
+		if opt.postgresqlConnector == nil {
+			return nil, ErrPostgreSQLConnectorRequired
+		}
+		gormDB = opt.postgresqlConnector.GetClient()
 	case "sqlite":
 		if opt.sqliteConnector == nil {
 			return nil, ErrSQLiteConnectorRequired
@@ -119,7 +136,7 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 	}
 
 	// 配置 GORM logger
-	gormDB = gormDB.Session(&gorm.Session{Logger: newGormLogger(opt.logger)})
+	gormDB = gormDB.Session(&gorm.Session{Logger: newGormLogger(opt.logger, opt.silentMode)})
 
 	// 添加 OpenTelemetry trace 插件
 	if opt.tracer != nil {

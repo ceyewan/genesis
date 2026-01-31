@@ -7,30 +7,47 @@ import (
 
 	"github.com/ceyewan/genesis/connector"
 	"github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/require"
+	natscontainer "github.com/testcontainers/testcontainers-go/modules/nats"
 )
 
-// GetNATSConfig 返回 NATS 测试配置
-// 默认连接 nats://localhost:4222
-func GetNATSConfig() *connector.NATSConfig {
+// NewNATSContainerConfig 使用 testcontainers 创建 NATS 容器并返回配置
+// 生命周期由 t.Cleanup 管理
+func NewNATSContainerConfig(t *testing.T) *connector.NATSConfig {
+	ctx := context.Background()
+
+	container, err := natscontainer.Run(ctx, "nats:2.10-alpine")
+	require.NoError(t, err, "failed to start NATS container")
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	mappedPort, err := container.MappedPort(ctx, "4222")
+	require.NoError(t, err)
+
+	// 注册 cleanup
+	t.Cleanup(func() {
+		_ = container.Terminate(ctx)
+	})
+
 	return &connector.NATSConfig{
-		Name:          "test-nats",
-		URL:           "nats://localhost:4222",
+		Name:          "testcontainer-nats",
+		URL:           "nats://" + host + ":" + mappedPort.Port(),
 		MaxReconnects: 10,
 		ReconnectWait: 100 * time.Millisecond,
 	}
 }
 
-// GetNATSConnector 获取 NATS 连接器
-func GetNATSConnector(t *testing.T) connector.NATSConnector {
-	cfg := GetNATSConfig()
-	conn, err := connector.NewNATS(cfg, connector.WithLogger(NewLogger()))
-	if err != nil {
-		t.Fatalf("failed to create nats connector: %v", err)
-	}
+// NewNATSContainerConnector 使用 testcontainers 创建并连接 NATS 连接器
+// 生命周期由 t.Cleanup 管理
+func NewNATSContainerConnector(t *testing.T) connector.NATSConnector {
+	cfg := NewNATSContainerConfig(t)
 
-	if err := conn.Connect(context.Background()); err != nil {
-		t.Fatalf("failed to connect to nats: %v", err)
-	}
+	conn, err := connector.NewNATS(cfg, connector.WithLogger(NewLogger()))
+	require.NoError(t, err, "failed to create nats connector")
+
+	err = conn.Connect(context.Background())
+	require.NoError(t, err, "failed to connect to nats")
 
 	t.Cleanup(func() {
 		_ = conn.Close()
@@ -39,7 +56,8 @@ func GetNATSConnector(t *testing.T) connector.NATSConnector {
 	return conn
 }
 
-// GetNATSConn 获取原生 NATS 连接
-func GetNATSConn(t *testing.T) *nats.Conn {
-	return GetNATSConnector(t).GetClient()
+// NewNATSContainerConn 使用 testcontainers 创建并返回原生 NATS 连接
+// 生命周期由 t.Cleanup 管理
+func NewNATSContainerConn(t *testing.T) *nats.Conn {
+	return NewNATSContainerConnector(t).GetClient()
 }

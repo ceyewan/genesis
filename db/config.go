@@ -23,7 +23,7 @@ func (c *Config) setDefaults() {
 }
 
 func (c *Config) validate() error {
-	if c.Driver != "mysql" && c.Driver != "sqlite" {
+	if c.Driver != "mysql" && c.Driver != "postgresql" && c.Driver != "sqlite" {
 		return xerrors.Wrapf(ErrInvalidConfig, "unsupported driver: %s", c.Driver)
 	}
 

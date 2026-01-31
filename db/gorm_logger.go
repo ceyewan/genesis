@@ -16,10 +16,15 @@ type gormLogger struct {
 }
 
 // newGormLogger 创建 GORM logger 适配器
-func newGormLogger(log clog.Logger) logger.Interface {
+// silent 参数控制是否禁用日志输出
+func newGormLogger(log clog.Logger, silent bool) logger.Interface {
+	level := logger.Info
+	if silent {
+		level = logger.Silent
+	}
 	return &gormLogger{
 		logger: log,
-		level:  logger.Info,
+		level:  level,
 	}
 }
 

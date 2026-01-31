@@ -7,15 +7,33 @@ import (
 
 	"github.com/ceyewan/genesis/connector"
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/require"
+	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
-// GetRedisConfig 返回 Redis 测试配置
-// 默认连接 localhost:6379，可通过 GENESIS_TEST_REDIS_ADDR 环境变量覆盖
-func GetRedisConfig() *connector.RedisConfig {
+// NewRedisContainerConfig 使用 testcontainers 创建 Redis 容器并返回配置
+// 生命周期由 t.Cleanup 管理
+func NewRedisContainerConfig(t *testing.T) *connector.RedisConfig {
+	ctx := context.Background()
+
+	container, err := rediscontainer.Run(ctx, "redis:7.2-alpine")
+	require.NoError(t, err, "failed to start Redis container")
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	mappedPort, err := container.MappedPort(ctx, "6379")
+	require.NoError(t, err)
+
+	// 注册 cleanup
+	t.Cleanup(func() {
+		_ = container.Terminate(ctx)
+	})
+
 	return &connector.RedisConfig{
-		Name:         "test-redis",
-		Addr:         "localhost:6379",
-		DB:           1, // 使用 DB 1 避免与默认的 DB 0 冲突
+		Name:         "testcontainer-redis",
+		Addr:         host + ":" + mappedPort.Port(),
+		DB:           0,
 		PoolSize:     10,
 		MinIdleConns: 2,
 		DialTimeout:  5 * time.Second,
@@ -24,18 +42,17 @@ func GetRedisConfig() *connector.RedisConfig {
 	}
 }
 
-// GetRedisConnector 获取 Redis 连接器
-func GetRedisConnector(t *testing.T) connector.RedisConnector {
-	cfg := GetRedisConfig()
-	conn, err := connector.NewRedis(cfg, connector.WithLogger(NewLogger()))
-	if err != nil {
-		t.Fatalf("failed to create redis connector: %v", err)
-	}
+// NewRedisContainerConnector 使用 testcontainers 创建并连接 Redis 连接器
+// 生命周期由 t.Cleanup 管理
+func NewRedisContainerConnector(t *testing.T) connector.RedisConnector {
+	cfg := NewRedisContainerConfig(t)
 
-	if err := conn.Connect(context.Background()); err != nil {
-		t.Fatalf("failed to connect to redis: %v", err)
-	}
-	// 注册清理函数
+	conn, err := connector.NewRedis(cfg, connector.WithLogger(NewLogger()))
+	require.NoError(t, err, "failed to create redis connector")
+
+	err = conn.Connect(context.Background())
+	require.NoError(t, err, "failed to connect to redis")
+
 	t.Cleanup(func() {
 		_ = conn.Close()
 	})
@@ -43,14 +60,8 @@ func GetRedisConnector(t *testing.T) connector.RedisConnector {
 	return conn
 }
 
-// GetRedisClient 获取原生 Redis 客户端
-func GetRedisClient(t *testing.T) *redis.Client {
-	return GetRedisConnector(t).GetClient()
-}
-
-// FlushRedis 清空 Redis 数据库（慎用！）
-func FlushRedis(t *testing.T, client *redis.Client) {
-	if err := client.FlushDB(context.Background()).Err(); err != nil {
-		t.Fatalf("failed to flush redis: %v", err)
-	}
+// NewRedisContainerClient 使用 testcontainers 创建并返回原生 Redis 客户端
+// 生命周期由 t.Cleanup 管理
+func NewRedisContainerClient(t *testing.T) *redis.Client {
+	return NewRedisContainerConnector(t).GetClient()
 }

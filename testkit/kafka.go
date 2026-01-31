@@ -6,31 +6,47 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/connector"
+	"github.com/stretchr/testify/require"
+	kafkacontainer "github.com/testcontainers/testcontainers-go/modules/kafka"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// GetKafkaConfig 返回 Kafka 测试配置
-// 默认连接 localhost:9092
-func GetKafkaConfig() *connector.KafkaConfig {
+// NewKafkaContainerConfig 使用 testcontainers 创建 Kafka 容器并返回配置
+// 生命周期由 t.Cleanup 管理
+func NewKafkaContainerConfig(t *testing.T) *connector.KafkaConfig {
+	ctx := context.Background()
+
+	kafkaContainer, err := kafkacontainer.Run(ctx, "confluentinc/confluent-local:7.5.0",
+		kafkacontainer.WithClusterID("test-kafka-cluster"),
+	)
+	require.NoError(t, err, "failed to start Kafka container")
+
+	brokers, err := kafkaContainer.Brokers(ctx)
+	require.NoError(t, err)
+
+	// 注册 cleanup
+	t.Cleanup(func() {
+		_ = kafkaContainer.Terminate(ctx)
+	})
+
 	return &connector.KafkaConfig{
-		Name:           "test-kafka",
-		Seed:           []string{"localhost:9092"},
+		Name:           "testcontainer-kafka",
+		Seed:           brokers,
 		ConnectTimeout: 10 * time.Second,
 		RequestTimeout: 5 * time.Second,
 	}
 }
 
-// GetKafkaConnector 获取 Kafka 连接器
-func GetKafkaConnector(t *testing.T) connector.KafkaConnector {
-	cfg := GetKafkaConfig()
-	conn, err := connector.NewKafka(cfg, connector.WithLogger(NewLogger()))
-	if err != nil {
-		t.Fatalf("failed to create kafka connector: %v", err)
-	}
+// NewKafkaContainerConnector 使用 testcontainers 创建并连接 Kafka 连接器
+// 生命周期由 t.Cleanup 管理
+func NewKafkaContainerConnector(t *testing.T) connector.KafkaConnector {
+	cfg := NewKafkaContainerConfig(t)
 
-	if err := conn.Connect(context.Background()); err != nil {
-		t.Fatalf("failed to connect to kafka: %v", err)
-	}
+	conn, err := connector.NewKafka(cfg, connector.WithLogger(NewLogger()))
+	require.NoError(t, err, "failed to create kafka connector")
+
+	err = conn.Connect(context.Background())
+	require.NoError(t, err, "failed to connect to kafka")
 
 	t.Cleanup(func() {
 		_ = conn.Close()
@@ -39,7 +55,8 @@ func GetKafkaConnector(t *testing.T) connector.KafkaConnector {
 	return conn
 }
 
-// GetKafkaClient 获取原生 Kafka 客户端
-func GetKafkaClient(t *testing.T) *kgo.Client {
-	return GetKafkaConnector(t).GetClient()
+// NewKafkaContainerClient 使用 testcontainers 创建并返回原生 Kafka 客户端
+// 生命周期由 t.Cleanup 管理
+func NewKafkaContainerClient(t *testing.T) *kgo.Client {
+	return NewKafkaContainerConnector(t).GetClient()
 }
