@@ -11,10 +11,11 @@
 - **设计原则**：
     - **借用模型**：借用 Etcd 连接器的连接，不负责连接的生命周期
     - **gRPC 原生支持**：实现 gRPC resolver.Builder 接口，支持 `etcd://<service_name>` 解析
-    - **实时监听**：通过 Etcd Watch 机制实时感知服务变化
-    - **自动续约**：Lease 机制确保服务可用性，自动处理续租
-    - **优雅下线**：Close() 方法自动撤销租约，停止监听器
-    - **可观测性**：集成 clog 和 metrics，提供完整的日志和指标能力
+- **实时监听**：通过 Etcd Watch 机制实时感知服务变化
+- **自动续约**：Lease 机制确保服务可用性，自动处理续租
+- **优雅下线**：Close() 方法自动撤销租约，停止监听器（Close 后实例不可再使用）
+- **单实例约束**：进程内仅允许一个 active registry（用于 gRPC resolver）
+- **可观测性**：集成 clog 和 metrics，提供完整的日志和指标能力
 
 ## 目录结构（完全扁平化设计）
 
@@ -25,7 +26,7 @@ registry/                  # 公开 API + 实现（完全扁平化）
 ├── interface.go           # Registry 接口定义
 ├── config.go              # 配置结构：Config
 ├── service.go             # 服务模型：ServiceInstance、ServiceEvent
-├── options.go             # 函数式选项：Option、WithLogger/WithMeter
+├── options.go             # 函数式选项：Option、WithLogger
 ├── errors.go              # 错误定义
 ├── resolver.go            # gRPC Resolver 实现
 └── *_test.go              # 测试文件
@@ -125,7 +126,7 @@ type Config struct {
 }
 ```
 
-说明：gRPC resolver 的 scheme 固定为 `etcd`，无需额外配置。
+说明：`DefaultTTL` 需为 `>= 1s`（或为 0 使用默认值）；gRPC resolver 的 scheme 固定为 `etcd`，无需额外配置；进程内仅允许一个 active registry，如需切换请先 Close。
 
 ## 使用模式
 
@@ -251,14 +252,6 @@ go func() {
 ```go
 // WithLogger 注入日志记录器
 reg, err := registry.New(etcdConn, cfg, registry.WithLogger(logger))
-
-// WithMeter 注入指标收集器
-reg, err := registry.New(etcdConn, cfg, registry.WithMeter(meter))
-
-// 组合使用
-reg, err := registry.New(etcdConn, cfg,
-    registry.WithLogger(logger),
-    registry.WithMeter(meter))
 ```
 
 ## Etcd 存储结构
@@ -364,35 +357,10 @@ func main() {
 }
 ```
 
-### 6. StreamManager（每实例一条流）
-
-当需要为每个实例维护一条双向流时，使用 StreamManager 自动管理连接、流和实例上下线：
-
-```go
-manager, err := registry.NewStreamManager(reg, registry.StreamManagerConfig{
-    ServiceName: "stream-service",
-    DialOptions: []grpc.DialOption{
-        grpc.WithTransportCredentials(insecure.NewCredentials()),
-    },
-    Factory: func(ctx context.Context, conn *grpc.ClientConn, instance *registry.ServiceInstance) (grpc.ClientStream, error) {
-        client := pb.NewTestServiceClient(conn)
-        return client.StreamCall(ctx)
-    },
-})
-if err != nil {
-    logger.Error("failed to create stream manager", clog.Error(err))
-    return
-}
-defer manager.Stop(ctx)
-
-if err := manager.Start(ctx); err != nil {
-    logger.Error("failed to start stream manager", clog.Error(err))
-    return
-}
-
-// 获取当前流快照（instanceID -> stream）
-streams := manager.Streams()
-```
+**语义说明**：
+- Watch 基于 Etcd Revision 增量监听，进程内自动重连。
+- 当发生 compaction（历史 revision 被清理）时，会触发一次全量拉取并从最新 revision 继续监听。
+- compaction 期间可能出现事件丢失，需保证业务侧具备幂等或容错处理能力。
 
 ## 最佳实践
 
@@ -402,7 +370,7 @@ streams := manager.Streams()
 4. **元数据**：在 Metadata 中存储 region、zone、version 等有用信息
 5. **错误处理**：使用 `xerrors.Wrapf()` 包装错误，保留错误链
 6. **优雅下线**：确保在应用退出时调用 `Deregister` 或依赖 `Close()` 自动处理
-7. **监控**：通过 `WithLogger` 和 `WithMeter` 注入可观测性组件
+7. **监控**：通过 `WithLogger` 注入日志组件
 
 ## 完整示例
 

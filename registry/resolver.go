@@ -13,6 +13,14 @@ import (
 
 const resolverScheme = "etcd"
 
+// defaultRegistry 全局默认 Registry 实例
+//
+// 设计说明：
+// - 用于支持 gRPC 原生 Dial 方式（如 grpc.NewClient("etcd:///service")）
+// - gRPC resolver.Builder 接口无法传入自定义参数，只能通过全局变量获取 registry
+//
+// 约束：
+// - 进程内只允许一个 active registry 实例
 var (
 	defaultRegistryMu sync.RWMutex
 	defaultRegistry   *etcdRegistry
@@ -22,19 +30,35 @@ func init() {
 	resolver.Register(&etcdResolverBuilder{})
 }
 
-func setDefaultRegistry(registry *etcdRegistry) {
+// setDefaultRegistry 设置全局默认 registry（仅首次有效）
+func setDefaultRegistry(registry *etcdRegistry) error {
 	if registry == nil {
-		return
+		return nil
 	}
 	defaultRegistryMu.Lock()
+	defer defaultRegistryMu.Unlock()
+	if defaultRegistry != nil && !defaultRegistry.isClosed() {
+		return ErrRegistryAlreadyInitialized
+	}
 	defaultRegistry = registry
-	defaultRegistryMu.Unlock()
+	return nil
 }
 
 func getDefaultRegistry() *etcdRegistry {
 	defaultRegistryMu.RLock()
 	defer defaultRegistryMu.RUnlock()
 	return defaultRegistry
+}
+
+func clearDefaultRegistry(registry *etcdRegistry) {
+	if registry == nil {
+		return
+	}
+	defaultRegistryMu.Lock()
+	defer defaultRegistryMu.Unlock()
+	if defaultRegistry == registry {
+		defaultRegistry = nil
+	}
 }
 
 // etcdResolverBuilder 实现 gRPC resolver.Builder 接口

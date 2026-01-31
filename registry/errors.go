@@ -12,6 +12,15 @@ var (
 	// ErrInvalidServiceInstance 无效的服务实例
 	ErrInvalidServiceInstance = xerrors.New("invalid service instance")
 
+	// ErrRegistryAlreadyInitialized registry 已初始化
+	ErrRegistryAlreadyInitialized = xerrors.New("registry already initialized")
+
+	// ErrRegistryClosed registry 已关闭
+	ErrRegistryClosed = xerrors.New("registry is closed")
+
+	// ErrInvalidTTL 无效的 TTL
+	ErrInvalidTTL = xerrors.New("invalid ttl")
+
 	// ErrLeaseExpired 租约已过期
 	ErrLeaseExpired = xerrors.New("lease expired")
 

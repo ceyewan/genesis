@@ -78,9 +78,9 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -108,8 +108,13 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 		cfg = &Config{} // 使用默认配置
 	}
 
+	// 验证配置
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
 	// 应用选项
-	opt := defaultOptions()
+	opt := &options{}
 	for _, o := range opts {
 		o(opt)
 	}
@@ -142,14 +147,14 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 		client:     client,
 		cfg:        cfg,
 		logger:     opt.logger,
-		meter:      opt.meter,
-		leases:     make(map[string]clientv3.LeaseID),
 		keepAlives: make(map[string]*leaseKeepAlive),
 		watchers:   make(map[uint64]context.CancelFunc),
 		stopChan:   make(chan struct{}),
 	}
 
-	setDefaultRegistry(r)
+	if err := setDefaultRegistry(r); err != nil {
+		return nil, err
+	}
 
 	return r, nil
 }
@@ -169,26 +174,45 @@ type etcdRegistry struct {
 	client *clientv3.Client
 	cfg    *Config
 	logger clog.Logger
-	meter  metrics.Meter
 
 	// 后台任务管理
-	leases     map[string]clientv3.LeaseID   // serviceID -> leaseID (废弃，保留用于兼容)
 	keepAlives map[string]*leaseKeepAlive    // serviceID -> keepAlive info
 	watchers   map[uint64]context.CancelFunc // watchID -> cancel
 	watchSeq   uint64
 	stopChan   chan struct{}
-	wg          sync.WaitGroup
-	mu          sync.RWMutex
+	wg         sync.WaitGroup
+	mu         sync.RWMutex
+	closed     uint32
+}
+
+func (r *etcdRegistry) isClosed() bool {
+	return atomic.LoadUint32(&r.closed) == 1
+}
+
+func (r *etcdRegistry) ensureOpen() error {
+	if r.isClosed() {
+		return ErrRegistryClosed
+	}
+	return nil
 }
 
 // Register 注册服务实例
 func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, ttl time.Duration) error {
+	if err := r.ensureOpen(); err != nil {
+		return err
+	}
 	if service == nil || service.ID == "" || service.Name == "" {
 		return ErrInvalidServiceInstance
+	}
+	if ttl < 0 {
+		return ErrInvalidTTL
 	}
 
 	if ttl == 0 {
 		ttl = r.cfg.DefaultTTL
+	}
+	if ttl > 0 && ttl < time.Second {
+		return ErrInvalidTTL
 	}
 
 	r.mu.Lock()
@@ -258,8 +282,6 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 		serviceName: service.Name,
 	}
 	r.keepAlives[service.ID] = ka
-	// 兼容旧代码，同时更新 leases map
-	r.leases[service.ID] = lease.ID
 
 	// 启动 KeepAlive 监控协程
 	r.wg.Add(1)
@@ -275,6 +297,9 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 
 // Deregister 注销服务实例
 func (r *etcdRegistry) Deregister(ctx context.Context, serviceID string) error {
+	if err := r.ensureOpen(); err != nil {
+		return err
+	}
 	if serviceID == "" {
 		return ErrInvalidServiceInstance
 	}
@@ -290,7 +315,6 @@ func (r *etcdRegistry) Deregister(ctx context.Context, serviceID string) error {
 	atomic.StoreUint32(&ka.closed, 1)
 	ka.cancel()
 	delete(r.keepAlives, serviceID)
-	delete(r.leases, serviceID)
 	r.mu.Unlock()
 
 	// 撤销租约（会自动删除关联的 key）
@@ -309,6 +333,9 @@ func (r *etcdRegistry) Deregister(ctx context.Context, serviceID string) error {
 
 // GetService 获取服务实例列表
 func (r *etcdRegistry) GetService(ctx context.Context, serviceName string) ([]*ServiceInstance, error) {
+	if err := r.ensureOpen(); err != nil {
+		return nil, err
+	}
 	if serviceName == "" {
 		return nil, ErrInvalidServiceInstance
 	}
@@ -342,6 +369,9 @@ func (r *etcdRegistry) GetService(ctx context.Context, serviceName string) ([]*S
 // 支持自动重连：当 watch channel 关闭或发生错误时，会自动重连
 // 使用 WithRev 从上次处理的位置继续监听，避免事件丢失
 func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan ServiceEvent, error) {
+	if err := r.ensureOpen(); err != nil {
+		return nil, err
+	}
 	if serviceName == "" {
 		return nil, ErrInvalidServiceInstance
 	}
@@ -392,6 +422,7 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 				clog.Int64("from_revision", lastRev+1))
 
 			// 内层循环：处理 watch 事件
+		innerLoop:
 			for watchCh != nil {
 				select {
 				case <-watchCtx.Done():
@@ -406,20 +437,33 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 							clog.String("service_name", serviceName),
 							clog.Duration("retry_after", retryInterval))
 						watchCh = nil
-						// 继续外层循环进行重连
-						goto reconnect
+						break innerLoop
 					}
 
 					if wresp.Err() != nil {
+						if xerrors.Is(wresp.Err(), rpctypes.ErrCompacted) {
+							r.logger.Warn("watch revision compacted, resyncing",
+								clog.String("service_name", serviceName),
+								clog.Duration("retry_after", retryInterval))
+							resp, err := r.client.Get(watchCtx, prefix, clientv3.WithPrefix())
+							if err != nil {
+								r.logger.Error("failed to resync after compaction",
+									clog.String("service_name", serviceName),
+									clog.Error(err),
+									clog.Duration("retry_after", retryInterval))
+							} else {
+								lastRev = resp.Header.Revision
+							}
+							watchCh = nil
+							break innerLoop
+						}
 						r.logger.Error("watch error, will retry",
 							clog.String("service_name", serviceName),
 							clog.Error(wresp.Err()),
 							clog.Duration("retry_after", retryInterval))
 						watchCh = nil
-						// 继续外层循环进行重连
-						goto reconnect
+						break innerLoop
 					}
-
 					// 处理事件
 					for _, ev := range wresp.Events {
 						// 更新最后处理的 revision
@@ -467,14 +511,13 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 				}
 			}
 
-		reconnect:
 			// 检查是否应该退出
 			select {
 			case <-watchCtx.Done():
 				return
 			default:
-				// 等待后重连（指数退避）
-				r.logger.Info("retrying watch",
+				// 等待后重连
+				r.logger.Warn("retrying watch",
 					clog.String("service_name", serviceName),
 					clog.Duration("after", retryInterval))
 				time.Sleep(retryInterval)
@@ -491,6 +534,12 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 //
 // 注意：必须传入 grpc.WithTransportCredentials() 或其他凭证选项。
 func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	if err := r.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if serviceName == "" {
+		return nil, ErrInvalidServiceInstance
+	}
 	if len(opts) == 0 {
 		return nil, xerrors.New("dial options required, e.g., grpc.WithTransportCredentials()")
 	}
@@ -505,12 +554,10 @@ func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, op
 		return nil, xerrors.Wrap(err, "dial failed")
 	}
 
-	if ctx != nil {
-		if _, hasDeadline := ctx.Deadline(); hasDeadline {
-			if err := waitForReady(ctx, conn); err != nil {
-				_ = conn.Close()
-				return nil, err
-			}
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		if err := waitForReady(ctx, conn); err != nil {
+			_ = conn.Close()
+			return nil, err
 		}
 	}
 
@@ -540,23 +587,17 @@ func waitForReady(ctx context.Context, conn *grpc.ClientConn) error {
 // Close 停止后台任务并清理资源（撤销租约、停止监听）
 // 此方法是幂等的，可以安全地多次调用
 func (r *etcdRegistry) Close() error {
+	if !atomic.CompareAndSwapUint32(&r.closed, 0, 1) {
+		return nil
+	}
+	clearDefaultRegistry(r)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// 使用 sync.Once 确保 stopChan 只关闭一次
 	r.mu.Lock()
-	select {
-	case <-r.stopChan:
-		// 已经关闭过，直接返回
-		r.mu.Unlock()
-		return nil
-	default:
-		// 第一次关闭，继续执行
-	}
 	close(r.stopChan)
 	r.mu.Unlock()
-
-	var leaseSnapshot map[string]clientv3.LeaseID
 
 	// 取消所有 watchers
 	r.mu.Lock()
@@ -565,18 +606,14 @@ func (r *etcdRegistry) Close() error {
 	}
 	r.watchers = make(map[uint64]context.CancelFunc)
 
-	// 取消所有 KeepAlive 协程
+	// 取消所有 KeepAlive 协程并收集租约
+	leaseSnapshot := make(map[string]clientv3.LeaseID, len(r.keepAlives))
 	for serviceID, ka := range r.keepAlives {
+		leaseSnapshot[serviceID] = ka.leaseID
 		atomic.StoreUint32(&ka.closed, 1)
 		ka.cancel()
 		delete(r.keepAlives, serviceID)
 	}
-
-	leaseSnapshot = make(map[string]clientv3.LeaseID, len(r.leases))
-	for serviceID, leaseID := range r.leases {
-		leaseSnapshot[serviceID] = leaseID
-	}
-	r.leases = make(map[string]clientv3.LeaseID)
 	r.mu.Unlock()
 
 	// 撤销所有租约
@@ -640,7 +677,6 @@ func (r *etcdRegistry) monitorKeepAlive(ka *leaseKeepAlive) {
 				// 从 keepAlives map 中移除
 				r.mu.Lock()
 				delete(r.keepAlives, serviceID)
-				delete(r.leases, serviceID)
 				r.mu.Unlock()
 
 				// 注意：此处不尝试重新注册，因为：

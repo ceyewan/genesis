@@ -8,6 +8,9 @@ import (
 
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/testkit"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // setupEtcdConn 设置 Etcd 连接
@@ -93,6 +96,42 @@ func TestNew(t *testing.T) {
 	}
 }
 
+// TestNewSingleton 测试单实例约束
+func TestNewSingleton(t *testing.T) {
+	etcdConn := setupEtcdConn(t)
+	logger := testkit.NewLogger()
+
+	reg1, err := New(etcdConn, &Config{
+		Namespace: "/test/singleton1",
+	}, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("Failed to create registry1: %v", err)
+	}
+
+	reg2, err := New(etcdConn, &Config{
+		Namespace: "/test/singleton2",
+	}, WithLogger(logger))
+	if err != ErrRegistryAlreadyInitialized {
+		t.Errorf("Expected ErrRegistryAlreadyInitialized, got %v", err)
+	}
+	if reg2 != nil {
+		_ = reg2.Close()
+	}
+
+	err = reg1.Close()
+	if err != nil {
+		t.Fatalf("Failed to close registry1: %v", err)
+	}
+
+	reg3, err := New(etcdConn, &Config{
+		Namespace: "/test/singleton3",
+	}, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("Failed to create registry3 after close: %v", err)
+	}
+	_ = reg3.Close()
+}
+
 // TestRegister 测试服务注册
 func TestRegister(t *testing.T) {
 	reg := setupRegistry(t, "/test/register")
@@ -166,6 +205,30 @@ func TestRegister(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestRegisterInvalidTTL 测试 TTL 校验
+func TestRegisterInvalidTTL(t *testing.T) {
+	reg := setupRegistry(t, "/test/invalid-ttl")
+	ctx := context.Background()
+
+	service := &ServiceInstance{
+		ID:        "invalid-ttl-001",
+		Name:      "invalid-ttl-test",
+		Version:   "1.0.0",
+		Endpoints: []string{"grpc://127.0.0.1:16000"},
+	}
+
+	err := reg.Register(ctx, service, -1*time.Second)
+	if err != ErrInvalidTTL {
+		t.Errorf("Expected ErrInvalidTTL, got %v", err)
+	}
+
+	service.ID = "invalid-ttl-002"
+	err = reg.Register(ctx, service, 500*time.Millisecond)
+	if err != ErrInvalidTTL {
+		t.Errorf("Expected ErrInvalidTTL, got %v", err)
+	}
 }
 
 // TestDeregister 测试服务注销
@@ -511,6 +574,43 @@ func TestClose(t *testing.T) {
 	}
 }
 
+// TestRegistryClosed 测试 Close 后不可再用
+func TestRegistryClosed(t *testing.T) {
+	reg := setupRegistry(t, "/test/closed")
+	ctx := context.Background()
+
+	if err := reg.Close(); err != nil {
+		t.Fatalf("Failed to close registry: %v", err)
+	}
+
+	service := &ServiceInstance{
+		ID:        "closed-001",
+		Name:      "closed-test",
+		Version:   "1.0.0",
+		Endpoints: []string{"grpc://127.0.0.1:17000"},
+	}
+
+	if err := reg.Register(ctx, service, 10*time.Second); err != ErrRegistryClosed {
+		t.Errorf("Expected ErrRegistryClosed, got %v", err)
+	}
+
+	if err := reg.Deregister(ctx, service.ID); err != ErrRegistryClosed {
+		t.Errorf("Expected ErrRegistryClosed, got %v", err)
+	}
+
+	if _, err := reg.GetService(ctx, service.Name); err != ErrRegistryClosed {
+		t.Errorf("Expected ErrRegistryClosed, got %v", err)
+	}
+
+	if _, err := reg.Watch(ctx, service.Name); err != ErrRegistryClosed {
+		t.Errorf("Expected ErrRegistryClosed, got %v", err)
+	}
+
+	if _, err := reg.GetConnection(ctx, service.Name, grpc.WithTransportCredentials(insecure.NewCredentials())); err != ErrRegistryClosed {
+		t.Errorf("Expected ErrRegistryClosed, got %v", err)
+	}
+}
+
 // TestMultipleServices 测试多个服务
 func TestMultipleServices(t *testing.T) {
 	reg := setupRegistry(t, "/test/multiple")
@@ -609,14 +709,6 @@ func TestNamespaceIsolation(t *testing.T) {
 	}
 	defer reg1.Close()
 
-	reg2, err := New(etcdConn, &Config{
-		Namespace: "/test/ns2",
-	}, WithLogger(logger))
-	if err != nil {
-		t.Fatalf("Failed to create registry2: %v", err)
-	}
-	defer reg2.Close()
-
 	service := &ServiceInstance{
 		ID:        "ns-test-001",
 		Name:      "ns-test",
@@ -639,12 +731,12 @@ func TestNamespaceIsolation(t *testing.T) {
 		t.Errorf("Expected 1 instance in reg1, got %d", len(instances1))
 	}
 
-	// reg2 应该查不到（不同命名空间）
-	instances2, err := reg2.GetService(ctx, "ns-test")
+	// 直接验证 ns2 前缀下无数据（不同命名空间）
+	resp, err := etcdConn.GetClient().Get(ctx, "/test/ns2/ns-test/", clientv3.WithPrefix())
 	if err != nil {
-		t.Fatalf("Failed to get service from reg2: %v", err)
+		t.Fatalf("Failed to query ns2 prefix: %v", err)
 	}
-	if len(instances2) != 0 {
-		t.Errorf("Expected 0 instances in reg2 (different namespace), got %d", len(instances2))
+	if len(resp.Kvs) != 0 {
+		t.Errorf("Expected 0 instances in ns2 (different namespace), got %d", len(resp.Kvs))
 	}
 }
