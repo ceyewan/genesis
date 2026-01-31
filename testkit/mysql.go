@@ -8,7 +8,6 @@ import (
 
 	"github.com/ceyewan/genesis/connector"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
 	"gorm.io/gorm"
 )
@@ -18,8 +17,8 @@ import (
 func NewMySQLContainerConfig(t *testing.T) *connector.MySQLConfig {
 	ctx := context.Background()
 
-	container, err := mysql.RunContainer(ctx,
-		testcontainers.WithImage("mysql:8.0"),
+	container, err := mysql.Run(ctx,
+		"mysql:8.0",
 		mysql.WithDatabase("genesis_db"),
 		mysql.WithUsername("genesis_user"),
 		mysql.WithPassword("genesis_password"),

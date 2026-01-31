@@ -1,4 +1,4 @@
-// 运行测试需要: go test ./connector/... -tags=integration -v
+// 运行测试需要: go test ./connector/... -v
 package connector
 
 import (
@@ -14,7 +14,6 @@ import (
 	natsgo "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 	tcetcd "github.com/testcontainers/testcontainers-go/modules/etcd"
 	"github.com/testcontainers/testcontainers-go/modules/kafka"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
@@ -46,9 +45,7 @@ func newTestID() string {
 func setupRedisContainer(t *testing.T) (*redis.RedisContainer, *RedisConfig) {
 	ctx := context.Background()
 
-	container, err := redis.RunContainer(ctx,
-		testcontainers.WithImage("redis:7-alpine"),
-	)
+	container, err := redis.Run(ctx, "redis:7.2-alpine")
 	require.NoError(t, err, "Failed to start Redis container")
 
 	host, err := container.Host(ctx)
@@ -154,7 +151,8 @@ func TestRedisConnectorIntegration(t *testing.T) {
 func setupMySQLContainer(t *testing.T) (*mysql.MySQLContainer, *MySQLConfig) {
 	ctx := context.Background()
 
-	container, err := mysql.RunContainer(ctx,
+	container, err := mysql.Run(ctx,
+		"mysql:8.0",
 		mysql.WithDatabase("genesis_db"),
 		mysql.WithUsername("genesis_user"),
 		mysql.WithPassword("genesis_password"),
@@ -256,10 +254,11 @@ func TestMySQLConnectorIntegration(t *testing.T) {
 func setupPostgreSQLContainer(t *testing.T) (*postgres.PostgresContainer, *PostgreSQLConfig) {
 	ctx := context.Background()
 
-	container, err := postgres.Run(ctx, "docker.io/postgres:16-alpine",
+	container, err := postgres.Run(ctx, "postgres:17-alpine",
 		postgres.WithDatabase("genesis_db"),
 		postgres.WithUsername("genesis_user"),
 		postgres.WithPassword("genesis_password"),
+		postgres.BasicWaitStrategies(), // 使用内置的等待策略，等待 PostgreSQL 完全启动
 	)
 	require.NoError(t, err, "Failed to start PostgreSQL container")
 
@@ -294,9 +293,6 @@ func TestPostgreSQLConnectorIntegration(t *testing.T) {
 		container, cfg := setupPostgreSQLContainer(t)
 		defer container.Terminate(context.Background())
 
-		// PostgreSQL 需要额外时间来初始化
-		time.Sleep(5 * time.Second)
-
 		conn, err := NewPostgreSQL(cfg, WithLogger(getTestLogger()))
 		require.NoError(t, err)
 
@@ -329,9 +325,6 @@ func TestPostgreSQLConnectorIntegration(t *testing.T) {
 		container, cfg := setupPostgreSQLContainer(t)
 		defer container.Terminate(context.Background())
 
-		// PostgreSQL 需要额外时间来初始化
-		time.Sleep(5 * time.Second)
-
 		conn, err := NewPostgreSQL(cfg, WithLogger(getTestLogger()))
 		require.NoError(t, err)
 
@@ -360,9 +353,6 @@ func TestPostgreSQLConnectorIntegration(t *testing.T) {
 	t.Run("PostgreSQL 特性测试", func(t *testing.T) {
 		container, cfg := setupPostgreSQLContainer(t)
 		defer container.Terminate(context.Background())
-
-		// PostgreSQL 需要额外时间来初始化
-		time.Sleep(5 * time.Second)
 
 		conn, err := NewPostgreSQL(cfg, WithLogger(getTestLogger()))
 		require.NoError(t, err)
@@ -397,7 +387,7 @@ func TestPostgreSQLConnectorIntegration(t *testing.T) {
 func setupEtcdContainer(t *testing.T) (*tcetcd.EtcdContainer, *EtcdConfig) {
 	ctx := context.Background()
 
-	container, err := tcetcd.Run(ctx, "quay.io/coreos/etcd:v3.5.9")
+	container, err := tcetcd.Run(ctx, "quay.io/coreos/etcd:v3.5.12")
 	require.NoError(t, err, "Failed to start Etcd container")
 
 	host, err := container.Host(ctx)
@@ -496,9 +486,7 @@ func TestEtcdConnectorIntegration(t *testing.T) {
 func setupNATSContainer(t *testing.T) (*nats.NATSContainer, *NATSConfig) {
 	ctx := context.Background()
 
-	container, err := nats.RunContainer(ctx,
-		testcontainers.WithImage("nats:2.10-alpine"),
-	)
+	container, err := nats.Run(ctx, "nats:2.10-alpine")
 	require.NoError(t, err, "Failed to start NATS container")
 
 	host, err := container.Host(ctx)
