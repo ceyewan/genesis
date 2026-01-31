@@ -131,6 +131,11 @@ func WithQueueGroup(name string) SubscribeOption {
 //
 // 启用后需要在 Handler 中手动调用 msg.Ack() 或 msg.Nak()。
 // 适用于需要精确控制确认时机的场景。
+//
+// 重要说明（JetStream）：
+//   - 调用 msg.Nak() 会触发消息重新投递
+//   - 对于无法恢复的错误，应该 Ack() 而非 Nak()，避免无限循环
+//   - 建议配合 WithRetry 中间件在应用层重试
 func WithManualAck() SubscribeOption {
 	return func(o *subscribeOptions) {
 		o.AutoAck = false

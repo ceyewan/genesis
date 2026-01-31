@@ -12,7 +12,7 @@ import (
 
 // setupEtcdConn 设置 Etcd 连接
 func setupEtcdConn(t *testing.T) connector.EtcdConnector {
-	return testkit.GetEtcdConnector(t)
+	return testkit.NewEtcdContainerConnector(t)
 }
 
 // setupRegistry 设置 Registry 实例

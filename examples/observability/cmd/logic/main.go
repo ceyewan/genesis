@@ -51,7 +51,7 @@ type orderService struct {
 
 	logger clog.Logger
 	db     db.DB
-	mq     mq.Client
+	mq     mq.MQ
 }
 
 func (s *orderService) CreateOrder(ctx context.Context, req *proto.CreateOrderRequest) (*proto.CreateOrderResponse, error) {
@@ -147,7 +147,7 @@ func main() {
 		obs.Logger.Fatal("connect nats failed", clog.Error(err))
 	}
 
-	mqClient, err := mq.New(&mq.Config{Driver: mq.DriverNatsCore}, mq.WithNATSConnector(natsConn), mq.WithLogger(obs.Logger), mq.WithMeter(obs.Meter))
+	mqClient, err := mq.New(&mq.Config{Driver: mq.DriverNATSCore}, mq.WithNATSConnector(natsConn), mq.WithLogger(obs.Logger), mq.WithMeter(obs.Meter))
 	if err != nil {
 		obs.Logger.Fatal("new mq failed", clog.Error(err))
 	}

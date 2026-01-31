@@ -61,7 +61,7 @@ func main() {
 		obs.Logger.Fatal("connect nats failed", clog.Error(err))
 	}
 
-	mqClient, err := mq.New(&mq.Config{Driver: mq.DriverNatsCore}, mq.WithNATSConnector(natsConn), mq.WithLogger(obs.Logger), mq.WithMeter(obs.Meter))
+	mqClient, err := mq.New(&mq.Config{Driver: mq.DriverNATSCore}, mq.WithNATSConnector(natsConn), mq.WithLogger(obs.Logger), mq.WithMeter(obs.Meter))
 	if err != nil {
 		obs.Logger.Fatal("new mq failed", clog.Error(err))
 	}
@@ -80,7 +80,9 @@ func main() {
 
 	tracer := otel.Tracer("obs-task")
 
-	sub, err := mqClient.Subscribe(ctx, orderSubject, func(ctx context.Context, msg mq.Message) error {
+	sub, err := mqClient.Subscribe(ctx, orderSubject, func(msg mq.Message) error {
+		// 从 msg.Context() 获取订阅时的上下文（已注入 trace）
+		handlerCtx := msg.Context()
 		parentCtx := trace.Extract(context.Background(), msg.Headers())
 		remoteSC := oteltrace.SpanContextFromContext(parentCtx)
 		links := make([]oteltrace.Link, 0, 1)
@@ -89,7 +91,7 @@ func main() {
 		}
 
 		consumeCtx, consumeSpan := tracer.Start(
-			parentCtx,
+			handlerCtx,
 			"mq.consume orders.created",
 			oteltrace.WithSpanKind(oteltrace.SpanKindConsumer),
 			oteltrace.WithLinks(links...),

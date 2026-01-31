@@ -11,7 +11,7 @@ import (
 
 // TestExecuteSuccess 测试成功执行
 func TestExecuteSuccess(t *testing.T) {
-	redisConn := testkit.GetRedisConnector(t)
+	redisConn := testkit.NewRedisContainerConnector(t)
 
 	// 创建幂等性组件
 	prefix := "test:idem:" + testkit.NewID() + ":"
@@ -45,7 +45,7 @@ func TestExecuteSuccess(t *testing.T) {
 
 // TestCacheHit 测试缓存命中
 func TestCacheHit(t *testing.T) {
-	redisConn := testkit.GetRedisConnector(t)
+	redisConn := testkit.NewRedisContainerConnector(t)
 
 	prefix := "test:idem:" + testkit.NewID() + ":"
 	idem, err := New(&Config{
@@ -96,7 +96,7 @@ func TestCacheHit(t *testing.T) {
 
 // TestEmptyKey 测试空键
 func TestEmptyKey(t *testing.T) {
-	redisConn := testkit.GetRedisConnector(t)
+	redisConn := testkit.NewRedisContainerConnector(t)
 
 	prefix := "test:idem:" + testkit.NewID() + ":"
 	idem, err := New(&Config{

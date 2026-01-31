@@ -95,6 +95,14 @@ type Message interface {
 // 返回值：
 //   - nil: 处理成功，AutoAck 模式下自动确认
 //   - error: 处理失败，AutoAck 模式下自动 Nak（如后端支持）
+//
+// 重要提示（JetStream 用户必读）：
+//   - JetStream 的 Nak 会触发消息重新投递
+//   - 如果返回 error 是非暂时性的（如数据格式错误），消息会无限重投
+//   - 解决方案：
+//     1. 使用 WithManualAck 手动控制 Ack/Nak
+//     2. 对于不可恢复的错误，也调用 Ack() 并记录日志
+//     3. 结合 WithRetry 中间件在应用层重试，失败后仍 Ack
 type Handler func(msg Message) error
 
 // Subscription 订阅句柄
