@@ -65,8 +65,11 @@ type distributedLimiter struct {
 	client *redis.Client
 	prefix string
 	logger clog.Logger
-	meter  metrics.Meter
 	script *redis.Script
+
+	// 指标
+	allowedCounter metrics.Counter
+	deniedCounter  metrics.Counter
 }
 
 // newDistributed 创建分布式限流器（内部函数）
@@ -90,8 +93,13 @@ func newDistributed(
 		client: redisConn.GetClient(),
 		prefix: prefix,
 		logger: logger,
-		meter:  meter,
 		script: redis.NewScript(luaScript),
+	}
+
+	// 初始化指标
+	if meter != nil {
+		l.allowedCounter, _ = meter.Counter(MetricAllowed, "Number of allowed requests")
+		l.deniedCounter, _ = meter.Counter(MetricDenied, "Number of denied requests")
 	}
 
 	if logger != nil {
@@ -153,17 +161,30 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 		remaining = 0
 	}
 
+	isAllowed := allowed == 1
+
+	// 记录指标
+	if isAllowed {
+		if l.allowedCounter != nil {
+			l.allowedCounter.Inc(ctx, metrics.L(LabelMode, "distributed"))
+		}
+	} else {
+		if l.deniedCounter != nil {
+			l.deniedCounter.Inc(ctx, metrics.L(LabelMode, "distributed"))
+		}
+	}
+
 	if l.logger != nil {
 		l.logger.Debug("rate limit check",
 			clog.String("key", key),
-			clog.Bool("allowed", allowed == 1),
+			clog.Bool("allowed", isAllowed),
 			clog.Int64("remaining", remaining),
 			clog.Float64("rate", limit.Rate),
 			clog.Int("burst", limit.Burst),
 			clog.Int("requested", n))
 	}
 
-	return allowed == 1, nil
+	return isAllowed, nil
 }
 
 // Wait 阻塞等待直到获取 1 个令牌

@@ -23,9 +23,12 @@ type limiterWrapper struct {
 type standaloneLimiter struct {
 	cfg      *StandaloneConfig
 	logger   clog.Logger
-	meter    metrics.Meter
 	limiters sync.Map // map[string]*limiterWrapper
 	stopCh   chan struct{}
+
+	// 指标
+	allowedCounter metrics.Counter
+	deniedCounter  metrics.Counter
 }
 
 // newStandalone 创建单机限流器（内部函数）
@@ -42,8 +45,13 @@ func newStandalone(
 	l := &standaloneLimiter{
 		cfg:    cfg,
 		logger: logger,
-		meter:  meter,
 		stopCh: make(chan struct{}),
+	}
+
+	// 初始化指标
+	if meter != nil {
+		l.allowedCounter, _ = meter.Counter(MetricAllowed, "Number of allowed requests")
+		l.deniedCounter, _ = meter.Counter(MetricDenied, "Number of denied requests")
 	}
 
 	// 启动清理 goroutine
@@ -88,6 +96,17 @@ func (l *standaloneLimiter) AllowN(ctx context.Context, key string, limit Limit,
 	allowed := wrapper.limiter.AllowN(time.Now(), n)
 	wrapper.lastSeen = time.Now()
 	wrapper.mu.Unlock()
+
+	// 记录指标
+	if allowed {
+		if l.allowedCounter != nil {
+			l.allowedCounter.Inc(ctx, metrics.L(LabelMode, "standalone"))
+		}
+	} else {
+		if l.deniedCounter != nil {
+			l.deniedCounter.Inc(ctx, metrics.L(LabelMode, "standalone"))
+		}
+	}
 
 	if l.logger != nil {
 		l.logger.Debug("rate limit check",
@@ -187,6 +206,12 @@ func (l *standaloneLimiter) cleanup(interval, idleTimeout time.Duration) {
 
 // Close 关闭限流器
 func (l *standaloneLimiter) Close() error {
-	close(l.stopCh)
-	return nil
+	select {
+	case <-l.stopCh:
+		// 已经关闭过
+		return nil
+	default:
+		close(l.stopCh)
+		return nil
+	}
 }

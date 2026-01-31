@@ -19,10 +19,16 @@ ratelimit/
 ├── ratelimit.go          # 核心接口、配置与工厂函数
 ├── standalone.go         # 单机限流器实现
 ├── distributed.go        # 分布式限流器实现
+├── grpc.go               # gRPC 拦截器（Unary/Stream）
+├── middleware.go         # Gin HTTP 中间件
 ├── options.go            # 初始化选项函数
 ├── errors.go             # 错误定义（使用 xerrors）
 ├── metrics.go            # 指标常量定义
-├── middleware.go         # Gin 中间件
+├── ratelimit_test.go     # 配置和常量测试
+├── standalone_test.go    # 单机限流器单元测试
+├── distributed_test.go   # 分布式限流器集成测试
+├── grpc_test.go          # gRPC 拦截器测试
+├── middleware_test.go    # Gin 中间件测试
 └── README.md             # 本文件
 ```
 
@@ -356,7 +362,11 @@ server := grpc.NewServer(
 
 ### StreamServerInterceptor / StreamClientInterceptor
 
-流式默认按**每条消息**限流（服务端 RecvMsg / 客户端 SendMsg）。`keyFunc` 为空时使用 `fullMethod` 作为限流键。
+流式采用 **Per-Stream 限流**策略：仅在流建立时进行一次限流检查，避免流中途被限流中断导致不可预期的错误。
+
+- **服务端**：在 `StreamHandler` 调用前检查
+- **客户端**：在建立流前检查
+- `keyFunc` 为空时使用 `fullMethod` 作为限流键
 
 ```go
 server := grpc.NewServer(
