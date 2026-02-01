@@ -108,7 +108,7 @@ type Idempotency interface {
 	// 注意：
 	//   返回类型为 interface{} 是为了避免强依赖 gin 包，
 	//   实际返回的是 func(*gin.Context) 类型。
-	//   可以直接传给 gin 的 router 使用，不需要显式类型断言。
+	//   传给 gin 的 router 时需要显式类型断言为 gin.HandlerFunc。
 	GinMiddleware(opts ...MiddlewareOption) interface{}
 
 	// UnaryServerInterceptor 创建 gRPC 一元服务端拦截器

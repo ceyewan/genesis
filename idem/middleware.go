@@ -41,27 +41,38 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) any {
 			return
 		}
 
-		// 尝试获取缓存的响应
-		cachedResp, err := i.store.GetResult(c.Request.Context(), key)
-		if err == nil {
-			// 缓存命中，返回缓存的响应
+		cachedResp, token, locked, err := i.waitForResultOrLock(c.Request.Context(), key)
+		if err != nil {
+			if i.logger != nil {
+				i.logger.Error("failed to wait for HTTP idem result", clog.Error(err), clog.String("key", key))
+			}
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		if !locked {
 			if i.logger != nil {
 				i.logger.Debug("idem cache hit for HTTP request", clog.String("key", key))
 			}
-
-			// 解析缓存的响应
-			var resp map[string]any
-			if err := json.Unmarshal(cachedResp, &resp); err == nil {
-				if statusCode, ok := resp["status"].(float64); ok {
-					if body, ok := resp["body"].(string); ok {
-						c.Data(int(statusCode), "application/json", []byte(body))
-						return
-					}
-				}
+			if ok := writeCachedHTTPResponse(c, cachedResp, i.logger, key); ok {
+				c.Abort()
+				return
 			}
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
 		}
 
-		// 缓存未命中或解析失败，继续处理请求
+		lockReleased := false
+		defer func() {
+			if lockReleased {
+				return
+			}
+			if err := i.store.Unlock(c.Request.Context(), key, token); err != nil && i.logger != nil {
+				i.logger.Error("failed to unlock after HTTP execution failure", clog.Error(err), clog.String("key", key))
+			}
+		}()
+		stopRefresh := i.startLockRefresh(key, token)
+		defer stopRefresh()
+
 		// 使用 ResponseWriter 包装器捕获响应
 		writer := &responseWriter{
 			ResponseWriter: c.Writer,
@@ -74,22 +85,56 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) any {
 
 		// 如果请求成功，缓存响应
 		if c.Writer.Status() >= 200 && c.Writer.Status() < 300 {
-			// 构建响应对象
-			resp := map[string]any{
-				"status": c.Writer.Status(),
-				"body":   writer.body.String(),
+			resp := cachedHTTPResponse{
+				Status: c.Writer.Status(),
+				Header: cloneHeader(c.Writer.Header()),
+				Body:   append([]byte(nil), writer.body.Bytes()...),
 			}
+			resp.Header.Del("Content-Length")
 
-			// 序列化并缓存
 			if respBytes, err := json.Marshal(resp); err == nil {
-				if err := i.store.SetResult(c.Request.Context(), key, respBytes, i.cfg.DefaultTTL); err != nil {
+				if err := i.store.SetResult(c.Request.Context(), key, respBytes, i.cfg.DefaultTTL, token); err != nil {
 					if i.logger != nil {
 						i.logger.Error("failed to cache HTTP response", clog.Error(err), clog.String("key", key))
 					}
+				} else {
+					lockReleased = true
 				}
 			}
 		}
 	}
+}
+
+type cachedHTTPResponse struct {
+	Status int         `json:"status"`
+	Header http.Header `json:"header"`
+	Body   []byte      `json:"body"`
+}
+
+func writeCachedHTTPResponse(c *gin.Context, cachedResp []byte, logger clog.Logger, key string) bool {
+	var resp cachedHTTPResponse
+	if err := json.Unmarshal(cachedResp, &resp); err != nil {
+		if logger != nil {
+			logger.Error("failed to unmarshal cached HTTP response", clog.Error(err), clog.String("key", key))
+		}
+		return false
+	}
+	for name, values := range resp.Header {
+		for _, v := range values {
+			c.Writer.Header().Add(name, v)
+		}
+	}
+	c.Status(resp.Status)
+	_, _ = c.Writer.Write(resp.Body)
+	return true
+}
+
+func cloneHeader(header http.Header) http.Header {
+	dup := make(http.Header, len(header))
+	for k, v := range header {
+		dup[k] = append([]string(nil), v...)
+	}
+	return dup
 }
 
 // responseWriter 响应写入器包装器，用于捕获响应体

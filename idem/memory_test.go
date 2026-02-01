@@ -3,6 +3,8 @@ package idem
 import (
 	"context"
 	"encoding/json"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -87,5 +89,52 @@ func TestMemoryConsume(t *testing.T) {
 	}
 	if execCount != 1 {
 		t.Fatalf("expected execute count 1, got %d", execCount)
+	}
+}
+
+func TestMemoryExecuteConcurrent(t *testing.T) {
+	idem, err := New(&Config{
+		Driver:       DriverMemory,
+		Prefix:       "test:idem:concurrent:",
+		DefaultTTL:   1 * time.Minute,
+		LockTTL:      2 * time.Second,
+		WaitTimeout:  2 * time.Second,
+		WaitInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("failed to create idem: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var execCount int32
+	results := make([]interface{}, 2)
+	errs := make([]error, 2)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			res, err := idem.Execute(ctx, "execute:concurrent", func(ctx context.Context) (interface{}, error) {
+				atomic.AddInt32(&execCount, 1)
+				time.Sleep(100 * time.Millisecond)
+				return map[string]interface{}{"value": 42}, nil
+			})
+			results[idx] = res
+			errs[idx] = err
+		}(i)
+	}
+	wg.Wait()
+
+	if execCount != 1 {
+		t.Fatalf("expected execute count 1, got %d", execCount)
+	}
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("unexpected errors: %v, %v", errs[0], errs[1])
+	}
+	if results[0] == nil || results[1] == nil {
+		t.Fatalf("results should not be nil")
 	}
 }

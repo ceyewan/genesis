@@ -33,47 +33,18 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 		return nil, ErrKeyEmpty
 	}
 
-	// 尝试获取缓存结果
-	cachedResult, err := i.store.GetResult(ctx, key)
-	if err == nil {
-		// 缓存命中
+	cachedResult, token, locked, err := i.waitForResultOrLock(ctx, key)
+	if err != nil {
+		if i.logger != nil {
+			i.logger.Error("failed to wait for result or lock", clog.Error(err), clog.String("key", key))
+		}
+		return nil, err
+	}
+	if !locked {
 		if i.logger != nil {
 			i.logger.Debug("idem cache hit", clog.String("key", key))
 		}
-		// 反序列化结果
-		var result interface{}
-		if err := json.Unmarshal(cachedResult, &result); err != nil {
-			if i.logger != nil {
-				i.logger.Error("failed to unmarshal cached result", clog.Error(err), clog.String("key", key))
-			}
-			return nil, xerrors.Wrap(err, "failed to unmarshal cached result")
-		}
-		return result, nil
-	}
-
-	if err != ErrResultNotFound {
-		// 存储错误
-		if i.logger != nil {
-			i.logger.Error("failed to get cached result", clog.Error(err), clog.String("key", key))
-		}
-		return nil, err
-	}
-
-	// 缓存未命中，尝试获取锁
-	locked, err := i.store.Lock(ctx, key, i.cfg.LockTTL)
-	if err != nil {
-		if i.logger != nil {
-			i.logger.Error("failed to acquire lock", clog.Error(err), clog.String("key", key))
-		}
-		return nil, err
-	}
-
-	if !locked {
-		// 未获取到锁，说明有并发请求
-		if i.logger != nil {
-			i.logger.Debug("concurrent request detected", clog.String("key", key))
-		}
-		return nil, ErrConcurrentRequest
+		return decodeJSONResult(cachedResult, i.logger, key)
 	}
 
 	lockReleased := false
@@ -81,10 +52,12 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 		if lockReleased {
 			return
 		}
-		if err := i.store.Unlock(ctx, key); err != nil && i.logger != nil {
+		if err := i.store.Unlock(ctx, key, token); err != nil && i.logger != nil {
 			i.logger.Error("failed to unlock after execution failure", clog.Error(err), clog.String("key", key))
 		}
 	}()
+	stopRefresh := i.startLockRefresh(key, token)
+	defer stopRefresh()
 
 	// 执行业务逻辑
 	result, err := fn(ctx)
@@ -107,7 +80,7 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 	}
 
 	// 保存结果
-	if err := i.store.SetResult(ctx, key, resultBytes, i.cfg.DefaultTTL); err != nil {
+	if err := i.store.SetResult(ctx, key, resultBytes, i.cfg.DefaultTTL, token); err != nil {
 		if i.logger != nil {
 			i.logger.Error("failed to set result", clog.Error(err), clog.String("key", key))
 		}
@@ -146,7 +119,7 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 		return false, err
 	}
 
-	locked, err := i.store.Lock(ctx, key, i.cfg.LockTTL)
+	token, locked, err := i.store.Lock(ctx, key, i.cfg.LockTTL)
 	if err != nil {
 		if i.logger != nil {
 			i.logger.Error("failed to acquire consume lock", clog.Error(err), clog.String("key", key))
@@ -165,10 +138,12 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 		if lockReleased {
 			return
 		}
-		if err := i.store.Unlock(ctx, key); err != nil && i.logger != nil {
+		if err := i.store.Unlock(ctx, key, token); err != nil && i.logger != nil {
 			i.logger.Error("failed to unlock after consume failure", clog.Error(err), clog.String("key", key))
 		}
 	}()
+	stopRefresh := i.startLockRefresh(key, token)
+	defer stopRefresh()
 
 	if err := fn(ctx); err != nil {
 		if i.logger != nil {
@@ -177,7 +152,7 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 		return false, err
 	}
 
-	if err := i.store.SetResult(ctx, key, []byte(processedMarker), ttl); err != nil {
+	if err := i.store.SetResult(ctx, key, []byte(processedMarker), ttl, token); err != nil {
 		if i.logger != nil {
 			i.logger.Error("failed to set consume marker", clog.Error(err), clog.String("key", key))
 		}
@@ -190,4 +165,104 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 	}
 
 	return true, nil
+}
+
+func (i *idem) waitForResultOrLock(ctx context.Context, key string) ([]byte, LockToken, bool, error) {
+	waitCtx, cancel := i.withWaitTimeout(ctx)
+	defer cancel()
+
+	interval := i.cfg.WaitInterval
+	if interval <= 0 {
+		interval = 50 * time.Millisecond
+	}
+	maxInterval := 500 * time.Millisecond
+
+	for {
+		if err := waitCtx.Err(); err != nil {
+			return nil, "", false, err
+		}
+
+		cached, err := i.store.GetResult(waitCtx, key)
+		if err == nil {
+			return cached, "", false, nil
+		}
+		if err != ErrResultNotFound {
+			return nil, "", false, err
+		}
+
+		token, locked, err := i.store.Lock(waitCtx, key, i.cfg.LockTTL)
+		if err != nil {
+			return nil, "", false, err
+		}
+		if locked {
+			return nil, token, true, nil
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return nil, "", false, waitCtx.Err()
+		case <-timer.C:
+		}
+		if interval < maxInterval {
+			interval = interval * 2
+			if interval > maxInterval {
+				interval = maxInterval
+			}
+		}
+	}
+}
+
+func (i *idem) withWaitTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if i.cfg.WaitTimeout <= 0 {
+		return ctx, func() {}
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if time.Until(deadline) <= i.cfg.WaitTimeout {
+			return ctx, func() {}
+		}
+	}
+	return context.WithTimeout(ctx, i.cfg.WaitTimeout)
+}
+
+func (i *idem) startLockRefresh(key string, token LockToken) func() {
+	rs, ok := i.store.(RefreshableStore)
+	if !ok || i.cfg.LockTTL <= 0 || token == "" {
+		return func() {}
+	}
+
+	interval := i.cfg.LockTTL / 2
+	if interval < 500*time.Millisecond {
+		interval = 500 * time.Millisecond
+	}
+
+	stopCtx, cancel := context.WithCancel(context.Background())
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := rs.Refresh(stopCtx, key, token, i.cfg.LockTTL); err != nil && i.logger != nil {
+					i.logger.Warn("failed to refresh lock", clog.Error(err), clog.String("key", key))
+				}
+			case <-stopCtx.Done():
+				return
+			}
+		}
+	}()
+
+	return cancel
+}
+
+func decodeJSONResult(cached []byte, logger clog.Logger, key string) (interface{}, error) {
+	var result interface{}
+	if err := json.Unmarshal(cached, &result); err != nil {
+		if logger != nil {
+			logger.Error("failed to unmarshal cached result", clog.Error(err), clog.String("key", key))
+		}
+		return nil, xerrors.Wrap(err, "failed to unmarshal cached result")
+	}
+	return result, nil
 }

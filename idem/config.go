@@ -32,6 +32,13 @@ type Config struct {
 	// LockTTL 处理过程中的锁超时时间，默认 30s
 	// 防止业务逻辑崩溃导致死锁，超时后锁自动释放
 	LockTTL time.Duration `json:"lock_ttl" yaml:"lock_ttl"`
+
+	// WaitTimeout 等待结果的最长时间，默认 0（仅受 ctx 影响）
+	// 当未获取到锁时，将阻塞等待结果或锁可用
+	WaitTimeout time.Duration `json:"wait_timeout" yaml:"wait_timeout"`
+
+	// WaitInterval 等待结果的轮询间隔，默认 50ms
+	WaitInterval time.Duration `json:"wait_interval" yaml:"wait_interval"`
 }
 
 func (c *Config) setDefaults() {
@@ -49,6 +56,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.LockTTL <= 0 {
 		c.LockTTL = 30 * time.Second
+	}
+	if c.WaitInterval <= 0 {
+		c.WaitInterval = 50 * time.Millisecond
 	}
 }
 
