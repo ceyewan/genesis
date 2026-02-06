@@ -10,7 +10,6 @@ import (
 // 同时扩展了 Genesis 框架常用的业务字段。
 //
 // 字段说明：
-//   - Subject: 用户 ID (对应 sub)
 //   - Username: 用户名 (对应 uname)
 //   - Roles: 角色列表 (对应 roles)
 //   - Extra: 扩展字段 (对应 extra)

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -97,6 +98,18 @@ func (a *jwtAuth) validate() error {
 		return xerrors.Wrapf(ErrInvalidConfig, "secret_key must be at least 32 characters")
 	}
 
+	if a.config.SigningMethod != jwt.SigningMethodHS256.Alg() {
+		return xerrors.Wrapf(ErrInvalidConfig, "unsupported signing_method: %s", a.config.SigningMethod)
+	}
+
+	if a.config.AccessTokenTTL <= 0 {
+		return xerrors.Wrapf(ErrInvalidConfig, "access_token_ttl must be positive")
+	}
+
+	if a.config.RefreshTokenTTL <= 0 {
+		return xerrors.Wrapf(ErrInvalidConfig, "refresh_token_ttl must be positive")
+	}
+
 	return nil
 }
 
@@ -106,31 +119,35 @@ func (a *jwtAuth) GenerateToken(ctx context.Context, claims *Claims) (string, er
 		return "", ErrInvalidClaims
 	}
 
+	tokenClaims := cloneClaims(claims)
+
 	// 设置标准声明
-	if claims.ExpiresAt == nil {
-		claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(a.config.AccessTokenTTL))
+	if tokenClaims.ExpiresAt == nil {
+		tokenClaims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(a.config.AccessTokenTTL))
 	}
-	if claims.IssuedAt == nil {
-		claims.IssuedAt = jwt.NewNumericDate(time.Now())
+	if tokenClaims.IssuedAt == nil {
+		tokenClaims.IssuedAt = jwt.NewNumericDate(time.Now())
 	}
-	if claims.Issuer == "" && a.config.Issuer != "" {
-		claims.Issuer = a.config.Issuer
+	if tokenClaims.Issuer == "" && a.config.Issuer != "" {
+		tokenClaims.Issuer = a.config.Issuer
+	}
+	if len(tokenClaims.Audience) == 0 && len(a.config.Audience) > 0 {
+		tokenClaims.Audience = append(jwt.ClaimStrings(nil), a.config.Audience...)
 	}
 
 	// 选择签名方法
 	method := jwt.GetSigningMethod(a.config.SigningMethod)
-	if method == nil {
-		// 默认使用 HS256
-		method = jwt.SigningMethodHS256
+	if method == nil || method.Alg() != jwt.SigningMethodHS256.Alg() {
+		return "", ErrInvalidConfig
 	}
 
-	token := jwt.NewWithClaims(method, claims)
+	token := jwt.NewWithClaims(method, tokenClaims)
 	tokenString, err := token.SignedString([]byte(a.config.SecretKey))
 	if err != nil {
 		return "", xerrors.Wrap(err, "failed to sign token")
 	}
 
-	a.options.logger.Info("token generated", clog.String("user_id", claims.Subject))
+	a.options.logger.Info("token generated", clog.String("user_id", tokenClaims.Subject))
 
 	return tokenString, nil
 }
@@ -138,27 +155,14 @@ func (a *jwtAuth) GenerateToken(ctx context.Context, claims *Claims) (string, er
 // ValidateToken 验证 Token
 func (a *jwtAuth) ValidateToken(ctx context.Context, tokenString string) (*Claims, error) {
 	claims := &Claims{}
-	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-		// 验证签名算法
-		if token.Method.Alg() != a.config.SigningMethod {
-			// 如果配置中未指定或不匹配，尝试默认 HS256
-			if a.config.SigningMethod == "" {
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, ErrInvalidSignature
-				}
-			} else {
-				return nil, ErrInvalidSignature
-			}
-		}
-		return []byte(a.config.SecretKey), nil
-	})
+	token, err := jwt.ParseWithClaims(tokenString, claims, a.keyFunc(), a.validationParserOptions()...)
 
 	if err != nil {
 		var errType string
-		if errors.Is(err, jwt.ErrTokenExpired) {
+		if xerrors.Is(err, jwt.ErrTokenExpired) {
 			errType = "expired"
 			err = ErrExpiredToken
-		} else if errors.Is(err, jwt.ErrTokenSignatureInvalid) {
+		} else if xerrors.Is(err, jwt.ErrTokenSignatureInvalid) {
 			errType = "invalid_signature"
 			err = ErrInvalidSignature
 		} else {
@@ -186,11 +190,34 @@ func (a *jwtAuth) ValidateToken(ctx context.Context, tokenString string) (*Claim
 
 // RefreshToken 刷新 Token
 func (a *jwtAuth) RefreshToken(ctx context.Context, token string) (string, error) {
-	claims, err := a.ValidateToken(ctx, token)
+	claims, err := a.parseClaimsWithoutTimeValidation(token)
 	if err != nil {
-		// Metrics: 刷新失败（验证失败已经在 ValidateToken 中计数，这里只记录刷新失败）
 		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
 		return "", err
+	}
+
+	now := time.Now()
+	if a.config.Issuer != "" && claims.Issuer != a.config.Issuer {
+		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
+		return "", ErrInvalidToken
+	}
+	if len(a.config.Audience) > 0 && !hasAnyAudience(claims.Audience, a.config.Audience) {
+		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
+		return "", ErrInvalidToken
+	}
+	if claims.NotBefore != nil && now.Before(claims.NotBefore.Time) {
+		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
+		return "", ErrInvalidToken
+	}
+
+	if claims.IssuedAt == nil {
+		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
+		return "", ErrInvalidToken
+	}
+
+	if now.After(claims.IssuedAt.Time.Add(a.config.RefreshTokenTTL)) {
+		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
+		return "", ErrExpiredToken
 	}
 
 	// 更新过期时间和签发时间
@@ -287,3 +314,64 @@ func (a *jwtAuth) extractFromSource(r *http.Request, source, key string) (string
 }
 
 const ClaimsKey = "auth:claims"
+
+func (a *jwtAuth) validationParserOptions() []jwt.ParserOption {
+	opts := []jwt.ParserOption{
+		jwt.WithValidMethods([]string{a.config.SigningMethod}),
+	}
+	if a.config.Issuer != "" {
+		opts = append(opts, jwt.WithIssuer(a.config.Issuer))
+	}
+	if len(a.config.Audience) > 0 {
+		opts = append(opts, jwt.WithAudience(a.config.Audience...))
+	}
+	return opts
+}
+
+func (a *jwtAuth) keyFunc() jwt.Keyfunc {
+	return func(token *jwt.Token) (any, error) {
+		return []byte(a.config.SecretKey), nil
+	}
+}
+
+func (a *jwtAuth) parseClaimsWithoutTimeValidation(tokenString string) (*Claims, error) {
+	claims := &Claims{}
+	opts := append(a.validationParserOptions(), jwt.WithoutClaimsValidation())
+	token, err := jwt.ParseWithClaims(tokenString, claims, a.keyFunc(), opts...)
+	if err != nil {
+		if errors.Is(err, jwt.ErrTokenSignatureInvalid) {
+			return nil, ErrInvalidSignature
+		}
+		return nil, ErrInvalidToken
+	}
+	if !token.Valid {
+		return nil, ErrInvalidToken
+	}
+	return claims, nil
+}
+
+func cloneClaims(claims *Claims) *Claims {
+	copied := *claims
+	if claims.Roles != nil {
+		copied.Roles = append([]string(nil), claims.Roles...)
+	}
+	if claims.Extra != nil {
+		copied.Extra = make(map[string]any, len(claims.Extra))
+		for k, v := range claims.Extra {
+			copied.Extra[k] = v
+		}
+	}
+	if claims.Audience != nil {
+		copied.Audience = append(jwt.ClaimStrings(nil), claims.Audience...)
+	}
+	return &copied
+}
+
+func hasAnyAudience(tokenAud jwt.ClaimStrings, expected []string) bool {
+	for _, ta := range tokenAud {
+		if slices.Contains(expected, ta) {
+			return true
+		}
+	}
+	return false
+}

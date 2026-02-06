@@ -2,6 +2,7 @@ package auth
 
 import (
 	"net/http"
+	"slices"
 
 	"github.com/gin-gonic/gin"
 )
@@ -46,21 +47,13 @@ func RequireRoles(roles ...string) gin.HandlerFunc {
 		}
 
 		for _, required := range roles {
-			found := false
-			for _, role := range claims.Roles {
-				if role == required {
-					found = true
-					break
-				}
-			}
-			if !found {
+			if !slices.Contains(claims.Roles, required) {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 					"error": "forbidden: missing role " + required,
 				})
 				return
 			}
 		}
-
 		c.Next()
 	}
 }
@@ -71,5 +64,9 @@ func GetClaims(c *gin.Context) (*Claims, bool) {
 	if !exists {
 		return nil, false
 	}
-	return claims.(*Claims), true
+	authClaims, ok := claims.(*Claims)
+	if !ok {
+		return nil, false
+	}
+	return authClaims, true
 }

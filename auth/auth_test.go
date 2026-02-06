@@ -46,6 +46,14 @@ func TestNew(t *testing.T) {
 			},
 			wantErr: nil,
 		},
+		{
+			name: "invalid signing method",
+			cfg: &Config{
+				SecretKey:     "this-is-a-valid-secret-key-at-least-32-chars",
+				SigningMethod: "RS256",
+			},
+			wantErr: ErrInvalidConfig,
+		},
 	}
 
 	for _, tt := range tests {
@@ -135,7 +143,7 @@ func TestAuthenticator_ValidateToken_InvalidToken(t *testing.T) {
 		{
 			name:    "invalid signature",
 			token:   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dummy",
-			wantErr: ErrInvalidToken, // JWT 库对签名错误返回 ErrTokenInvalid
+			wantErr: ErrInvalidToken,
 		},
 	}
 
@@ -145,6 +153,26 @@ func TestAuthenticator_ValidateToken_InvalidToken(t *testing.T) {
 			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
+}
+
+func TestAuthenticator_ValidateToken_InvalidSignature(t *testing.T) {
+	authA, err := New(&Config{
+		SecretKey: "this-is-a-valid-secret-key-at-least-32-chars",
+	}, WithLogger(clog.Discard()), WithMeter(metrics.Discard()))
+	require.NoError(t, err)
+	authB, err := New(&Config{
+		SecretKey: "another-valid-secret-key-at-least-32-chars",
+	}, WithLogger(clog.Discard()), WithMeter(metrics.Discard()))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	token, err := authB.GenerateToken(ctx, &Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Subject: "user-123"},
+	})
+	require.NoError(t, err)
+
+	_, err = authA.ValidateToken(ctx, token)
+	assert.ErrorIs(t, err, ErrInvalidSignature)
 }
 
 func TestAuthenticator_ValidateToken_ExpiredToken(t *testing.T) {
@@ -193,6 +221,105 @@ func TestAuthenticator_RefreshToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "user-123", validatedClaims.Subject)
 	assert.Equal(t, "alice", validatedClaims.Username)
+}
+
+func TestAuthenticator_RefreshToken_ExpiredButWithinRefreshWindow(t *testing.T) {
+	auth, err := New(&Config{
+		SecretKey:       "this-is-a-valid-secret-key-at-least-32-chars",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 2 * time.Hour,
+	}, WithLogger(clog.Discard()), WithMeter(metrics.Discard()))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	claims := &Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "user-123",
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-1 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-30 * time.Minute)),
+		},
+		Username: "alice",
+	}
+	oldToken, err := auth.GenerateToken(ctx, claims)
+	require.NoError(t, err)
+
+	newToken, err := auth.RefreshToken(ctx, oldToken)
+	require.NoError(t, err)
+	assert.NotEmpty(t, newToken)
+}
+
+func TestAuthenticator_RefreshToken_ExpiredOutsideRefreshWindow(t *testing.T) {
+	auth, err := New(&Config{
+		SecretKey:       "this-is-a-valid-secret-key-at-least-32-chars",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 10 * time.Minute,
+	}, WithLogger(clog.Discard()), WithMeter(metrics.Discard()))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	claims := &Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "user-123",
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-20 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-30 * time.Minute)),
+		},
+	}
+	oldToken, err := auth.GenerateToken(ctx, claims)
+	require.NoError(t, err)
+
+	newToken, err := auth.RefreshToken(ctx, oldToken)
+	assert.ErrorIs(t, err, ErrExpiredToken)
+	assert.Empty(t, newToken)
+}
+
+func TestAuthenticator_RefreshToken_InvalidIssuerOrAudience(t *testing.T) {
+	ctx := context.Background()
+	authTokenIssuer, err := New(&Config{
+		SecretKey:       "this-is-a-valid-secret-key-at-least-32-chars",
+		Issuer:          "service-a",
+		Audience:        []string{"frontend"},
+		RefreshTokenTTL: 2 * time.Hour,
+	}, WithLogger(clog.Discard()), WithMeter(metrics.Discard()))
+	require.NoError(t, err)
+
+	authRefreshWrong, err := New(&Config{
+		SecretKey:       "this-is-a-valid-secret-key-at-least-32-chars",
+		Issuer:          "service-b",
+		Audience:        []string{"mobile"},
+		RefreshTokenTTL: 2 * time.Hour,
+	}, WithLogger(clog.Discard()), WithMeter(metrics.Discard()))
+	require.NoError(t, err)
+
+	token, err := authTokenIssuer.GenerateToken(ctx, &Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "user-123",
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-1 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-30 * time.Minute)),
+		},
+	})
+	require.NoError(t, err)
+
+	newToken, err := authRefreshWrong.RefreshToken(ctx, token)
+	assert.ErrorIs(t, err, ErrInvalidToken)
+	assert.Empty(t, newToken)
+}
+
+func TestAuthenticator_GenerateToken_NoMutation(t *testing.T) {
+	auth := createTestAuthenticator(t)
+	ctx := context.Background()
+
+	claims := &Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject: "user-123",
+		},
+		Username: "alice",
+		Roles:    []string{"admin"},
+	}
+
+	_, err := auth.GenerateToken(ctx, claims)
+	require.NoError(t, err)
+	assert.Nil(t, claims.ExpiresAt)
+	assert.Nil(t, claims.IssuedAt)
 }
 
 func TestAuthenticator_RefreshToken_InvalidToken(t *testing.T) {
@@ -326,6 +453,46 @@ func TestExtractToken_SingleSource_Query(t *testing.T) {
 	assert.Equal(t, "query-token", token)
 }
 
+func TestAuthenticator_ValidateToken_IssuerAndAudience(t *testing.T) {
+	issuer := "service-a"
+	audience := []string{"frontend"}
+	authA, err := New(&Config{
+		SecretKey: "this-is-a-valid-secret-key-at-least-32-chars",
+		Issuer:    issuer,
+		Audience:  audience,
+	}, WithLogger(clog.Discard()), WithMeter(metrics.Discard()))
+	require.NoError(t, err)
+
+	authWrongIssuer, err := New(&Config{
+		SecretKey: "this-is-a-valid-secret-key-at-least-32-chars",
+		Issuer:    "service-b",
+		Audience:  audience,
+	}, WithLogger(clog.Discard()), WithMeter(metrics.Discard()))
+	require.NoError(t, err)
+
+	authWrongAudience, err := New(&Config{
+		SecretKey: "this-is-a-valid-secret-key-at-least-32-chars",
+		Issuer:    issuer,
+		Audience:  []string{"mobile"},
+	}, WithLogger(clog.Discard()), WithMeter(metrics.Discard()))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	token, err := authA.GenerateToken(ctx, &Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Subject: "user-123"},
+	})
+	require.NoError(t, err)
+
+	_, err = authA.ValidateToken(ctx, token)
+	require.NoError(t, err)
+
+	_, err = authWrongIssuer.ValidateToken(ctx, token)
+	assert.ErrorIs(t, err, ErrInvalidToken)
+
+	_, err = authWrongAudience.ValidateToken(ctx, token)
+	assert.ErrorIs(t, err, ErrInvalidToken)
+}
+
 func TestGinMiddleware(t *testing.T) {
 	auth := createTestAuthenticator(t)
 	ctx := context.Background()
@@ -396,6 +563,14 @@ func TestGinMiddleware_InvalidToken(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, 401, w.Code)
+}
+
+func TestGetClaims_TypeMismatch(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set(ClaimsKey, "not-claims")
+	claims, ok := GetClaims(c)
+	assert.False(t, ok)
+	assert.Nil(t, claims)
 }
 
 // Benchmark functions
