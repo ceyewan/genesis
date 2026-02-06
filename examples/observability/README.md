@@ -6,7 +6,7 @@
 - 真实三服务链路（HTTP + gRPC + DB + MQ + gRPC 回调）
 - 指标能在 Prometheus/Grafana 看到（延迟/QPS/Go runtime/容器）
 - 日志能在 Loki 检索，并用 `trace_id` 串起全链路
-- Trace 能在 Tempo/Grafana 看到瀑布图，并且 MQ 侧保留 Span Link 语义（适配多消费者组/批消费的常见生产模式）
+- Trace 能在 Tempo/Grafana 看到瀑布图；本示例默认将 MQ 消费建模为 child-of，便于演示单条全链路（组件层也支持 Span Link 模式）
 
 ## 架构概览
 
@@ -167,7 +167,7 @@ LOAD_MAX_VUS=4000 \
 
 **常用 Prometheus 查询示例**：
 - HTTP QPS：`rate(http_request_duration_seconds_count[1m])`
-- HTTP P99：`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path))`
+- HTTP P99：`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route))`
 - MQ QPS（按 subject）：`sum(rate({__name__="mq.consume_total"}[1m])) by (subject)`
 - MQ handler P99（按 subject）：`histogram_quantile(0.99, sum(rate({__name__="mq.handle.duration_seconds_bucket"}[5m])) by (le, subject))`
 - Go runtime：`go_goroutines` / `go_memstats_heap_alloc_bytes`
@@ -191,7 +191,8 @@ LOAD_MAX_VUS=4000 \
 - `gorm.Create`：DB 写入
 - `mq.publish orders.created`：发布消息（Producer span）
 - `mq.consume orders.created`：消费消息（Consumer span）
-  - consumer span 上会有 **Span Link** 指向上游 producer span（更贴近生产中异步/批处理语义）
+  - 本示例默认使用 **child-of** 串成单条 Trace，便于在 Tempo/Grafana 中直接看到完整瀑布图
+  - 如果你要适配批消费/多消费者组/重试等异步场景，可切换为 **Span Link** 模式
 - `task.handle_order_created`：消费者内部业务处理
 - `proto.GatewayCallbackService/PushResult`：task → gateway 回调（gRPC client/server）
 

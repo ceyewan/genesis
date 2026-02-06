@@ -10,12 +10,11 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/examples/observability/internal/bootstrap"
-	"github.com/ceyewan/genesis/examples/observability/middleware"
 	"github.com/ceyewan/genesis/examples/observability/proto"
 	"github.com/ceyewan/genesis/metrics"
+	"github.com/ceyewan/genesis/trace"
 	"github.com/ceyewan/genesis/xerrors"
 	"github.com/gin-gonic/gin"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -73,16 +72,22 @@ func main() {
 		defer func(fn bootstrap.Shutdown) { _ = fn(ctx) }(shutdowns[i])
 	}
 
-	httpRequestDuration, _ := obs.Meter.Histogram(
-		"http_request_duration_seconds",
-		"HTTP request duration",
-		metrics.WithBuckets([]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}),
-	)
+	httpMetricsCfg := metrics.DefaultHTTPServerMetricsConfig("obs-gateway")
+	httpMetricsCfg.RequestDurationName = "http_request_duration_seconds"
+	httpMetrics, err := metrics.NewHTTPServerMetrics(obs.Meter, httpMetricsCfg)
+	if err != nil {
+		obs.Logger.Fatal("create http metrics failed", clog.Error(err))
+	}
+
+	grpcMetrics, err := metrics.NewGRPCServerMetrics(obs.Meter, metrics.DefaultGRPCServerMetricsConfig("obs-gateway"))
+	if err != nil {
+		obs.Logger.Fatal("create grpc metrics failed", clog.Error(err))
+	}
 
 	logicConn, err := grpc.NewClient(
 		getenv("LOGIC_GRPC_TARGET", logicTarget),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithStatsHandler(trace.GRPCClientStatsHandler()),
 	)
 	if err != nil {
 		obs.Logger.Fatal("connect logic failed", clog.Error(err))
@@ -95,7 +100,10 @@ func main() {
 		obs.Logger.Fatal("listen callback grpc failed", clog.Error(err))
 	}
 
-	cbSrv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	cbSrv := grpc.NewServer(
+		grpc.StatsHandler(trace.GRPCServerStatsHandler()),
+		grpc.UnaryInterceptor(grpcMetrics.UnaryServerInterceptor()),
+	)
 	proto.RegisterGatewayCallbackServiceServer(cbSrv, &callbackServer{logger: obs.Logger})
 	go func() {
 		obs.Logger.Info("gateway callback grpc listening", clog.String("addr", cbLis.Addr().String()))
@@ -105,10 +113,9 @@ func main() {
 	}()
 
 	r := gin.New()
-	r.Use(middleware.Observability(
-		middleware.WithServiceName("obs-gateway"),
-		middleware.WithHistogram(httpRequestDuration),
-	)...)
+	r.Use(gin.Recovery())
+	r.Use(trace.GinMiddleware("obs-gateway"))
+	r.Use(metrics.GinHTTPMiddleware(httpMetrics))
 
 	r.POST("/orders", func(c *gin.Context) {
 		ctx := c.Request.Context()
