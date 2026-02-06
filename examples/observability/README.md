@@ -85,11 +85,57 @@ curl -X POST http://localhost:8080/orders \
 - logic 落库后发布 NATS 消息
 - task 消费消息并通过 gRPC 把结果推回 gateway（到达 A 即算成功）
 
-压测（固定 5 QPS，默认带鉴权头）：
+压测（k6，默认带鉴权头）：
 
 ```bash
-go run ./bench/load.go
+# 固定 5 QPS，持续 10 分钟
+./bench/run-k6.sh
 ```
+
+`run-k6.sh` 会优先使用本机 `k6`；若未安装，会自动使用 `grafana/k6` Docker 镜像运行。
+
+工作日流量曲线压测（晨峰/午间回落/下午次峰/晚间回落）：
+
+```bash
+LOAD_PROFILE=weekday \
+LOAD_WEEKDAY_STEP=3m \
+LOAD_WEEKDAY_CYCLES=2 \
+LOAD_PRE_ALLOCATED_VUS=1200 \
+LOAD_MAX_VUS=6000 \
+./bench/run-k6.sh
+```
+
+大流量波动压测（低/高水位循环）：
+
+```bash
+LOAD_PROFILE=wave \
+LOAD_WAVE_LOW_RATE=300 \
+LOAD_WAVE_HIGH_RATE=1200 \
+LOAD_WAVE_CYCLES=12 \
+LOAD_WAVE_RAMP=2m \
+LOAD_WAVE_HOLD=8m \
+LOAD_PRE_ALLOCATED_VUS=800 \
+LOAD_MAX_VUS=4000 \
+./bench/run-k6.sh
+```
+
+> `./bench/run-k6.sh` 会自动导出 JSON：  
+> - 明细样本：`bench/results/metrics-<timestamp>.json`  
+> - 汇总结果：`bench/results/summary-<timestamp>.json`  
+> - 最新结果软指针：`bench/results/summary-latest.json`、`bench/results/run-latest.json`
+
+常用参数：
+> 注意：这里使用 `LOAD_` 前缀，避免与 k6 内置 `K6_` 环境变量冲突。
+
+- `LOAD_PROFILE`: `fixed`（固定 QPS）/ `wave`（波动 QPS）/ `weekday`（工作日曲线）
+- `LOAD_RATE`: 固定模式目标 QPS（默认 `5`）
+- `LOAD_DURATION`: 固定模式持续时长（默认 `10m`）
+- `LOAD_WAVE_LOW_RATE` / `LOAD_WAVE_HIGH_RATE`: 波动模式低/高水位 QPS
+- `LOAD_WAVE_CYCLES`: 波动模式循环次数
+- `LOAD_WEEKDAY_PATTERN`: 工作日曲线点位（逗号分隔 QPS 序列）
+- `LOAD_WEEKDAY_STEP`: 工作日曲线每个点位持续时长（默认 `5m`）
+- `LOAD_WEEKDAY_CYCLES`: 工作日曲线重复次数
+- `LOAD_PRE_ALLOCATED_VUS` / `LOAD_MAX_VUS`: VU 预分配与上限（高 QPS 时建议提高）
 
 ## 如何验证
 
@@ -175,6 +221,7 @@ go run ./bench/load.go
 ## 目录结构
 
 - `config/`: Prometheus / Loki / Tempo / Grafana / Alloy 的配置
+- `bench/`: k6 压测脚本、运行脚本、JSON 导出结果
 - `proto/`: gRPC 定义及生成代码
 - `docker-compose.yml`: 基础设施编排
 - `cmd/gateway`: 服务 A（HTTP + gRPC 回调）
