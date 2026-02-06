@@ -23,11 +23,9 @@ graph LR
 ```
 
 数据流转：
-- **Trace**：HTTP -> gRPC -> NATS -> gRPC 全链路透传 TraceContext（gRPC 自动、NATS 手动注入/提取），上报到 **OTel Collector**，再转发给 **Tempo**。
-- **Metrics**：应用通过 OTLP 协议 push 到 **OTel Collector**，Collector 通过 Remote Write 转发给 **Prometheus**。
-- **Logs**：三服务日志输出到 stdout，**OTel Collector** 采集容器日志后写入 **Loki**。
-
-> **统一入口**：所有可观测性数据（Logs/Traces/Metrics）都通过 OTel Collector 统一处理，便于采样、过滤、路由和多目标分发。
+- **Trace**：HTTP -> gRPC -> NATS -> gRPC 全链路透传 TraceContext（gRPC 自动、NATS 手动注入/提取），上报到 **Tempo**。
+- **Metrics**：三服务分别暴露 `/metrics`，**Prometheus** 拉取，Grafana 展示。
+- **Logs**：三服务日志输出到 stdout，**Alloy** 采集后写入 **Loki**。
 
 ## 快速开始（推荐：一键 Docker Compose）
 
@@ -45,24 +43,23 @@ docker compose up -d --build
 - **Gateway Callback (gRPC)**: localhost:9091
 - **Logic (gRPC)**: localhost:9092
 - **NATS**: localhost:4222
-- **OTel Collector**: http://localhost:13133 (health check)
 - **Prometheus**: http://localhost:9090
 - **Grafana**: http://localhost:3000
-- **Tempo**: http://localhost:3200 (查询 UI)
+- **Tempo (Ready)**: http://localhost:3200/ready（启动后前 ~15s 可能返回 503，随后变为 `ready`）
 - **Loki**: http://localhost:3100
 
 > 提示：`docker compose ps` 可以查看所有服务是否健康启动。
 
 ### 常用 Docker 操作（不重编译更快）
 
-- 不 build 仅重启（例如只改了配置/只想重启基建）：
-  `docker compose restart prometheus grafana tempo loki otel-collector nats cadvisor`
-- 不 build 但强制重建某个服务容器（例如改了 volumes/networking）：
+- 不 build 仅重启（例如只改了配置/只想重启基建）：  
+  `docker compose restart prometheus grafana tempo loki alloy nats cadvisor`
+- 不 build 但强制重建某个服务容器（例如改了 volumes/networking）：  
   `docker compose up -d --no-build --force-recreate logic`
-- 查看日志：
+- 查看日志：  
   `docker logs -f demo-gateway` / `docker logs -f demo-logic` / `docker logs -f demo-task`
-- 查看 OTel Collector 日志（排查日志采集问题）：
-  `docker logs -f demo-otel-collector`
+- 查看 Alloy 日志（排查日志采集问题）：  
+  `docker logs -f demo-alloy`
 
 ### 数据持久化（Docker volume）
 
@@ -166,44 +163,18 @@ go run ./bench/load.go
 **怎么用 `trace_id` 串全链路**：
 1. 进入 **Explore** → 数据源选择 **Loki**
 2. 查询所有服务的同一条链路日志：
-   - `{service_name=~"gateway|logic|task"} | json | trace_id="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"`
+   - `{job="docker", service=~"gateway|logic|task"} | json | trace_id="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"`
 
 **常用查询**：
-- 看 gateway 日志：`{service_name="gateway"} | json`
-- 看错误：`{service_name=~"gateway|logic|task"} | json |= "ERROR"`
-- 看某个订单：`{service_name=~"gateway|logic|task"} | json | order_id="ORD-..."`（如果该日志行带这个字段）
+- 看 gateway 日志：`{job="docker", service="gateway"} | json`
+- 看错误：`{job="docker", service=~"gateway|logic|task"} |= "level\":\"ERROR\""`
+- 看某个订单：`{job="docker", service=~"gateway|logic|task"} | json | order_id="ORD-..."`（如果该日志行带这个字段）
 
-> 如果日志没有显示，请先确认 OTel Collector 是否运行：`docker logs demo-otel-collector`。在 Docker Desktop 上如遇日志读取权限问题，可先用 `docker logs demo-gateway` 验证日志输出。
+> 如果日志没有显示，请先确认 Alloy 是否运行：`docker compose ps`。在 Docker Desktop 上如遇日志读取权限问题，可先用 `docker logs demo-gateway` 验证日志输出。
 
-## 架构设计
+## 目录结构
 
-本项目采用 **OTel Collector 统一入口** 架构，所有可观测性数据都经过 Collector 处理：
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    应用服务 (gateway / logic / task)              │
-└─────────────────────────────────────────────────────────────────┘
-     │                    │                        │
-     │ OTLP (Trace/Metric) │ OTLP (Trace/Metric)   │ stdout (JSON)
-     ▼                    ▼                        ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      OTel Collector                              │
-│  - OTLP Receiver: 接收 Trace/Metric                             │
-│  - Filelog Receiver: 采集容器日志                                │
-│  - Processors: 批量/资源属性/内存限流                             │
-└─────────────────────────────────────────────────────────────────┘
-     │                    │                        │
-     ▼                    ▼                        ▼
-┌─────────┐         ┌──────────┐          ┌─────────┐
-│  Tempo  │         │Prometheus│          │  Loki   │
-│ (Trace) │         │ (Metric) │          │  (Log)  │
-└─────────┘         └──────────┘          └─────────┘
-```
-
-**优势**：
-- **统一协议**：所有数据使用 OTLP 标准协议
-- **集中治理**：在 Collector 层统一处理采样、过滤、标签添加
-- **易于扩展**：未来可轻松添加新的后端存储或多目标分发
+- `config/`: Prometheus / Loki / Tempo / Grafana / Alloy 的配置
 - `proto/`: gRPC 定义及生成代码
 - `docker-compose.yml`: 基础设施编排
 - `cmd/gateway`: 服务 A（HTTP + gRPC 回调）
@@ -212,16 +183,6 @@ go run ./bench/load.go
 
 ## 常见问题（排障速查）
 
-- **Tempo 查不到 trace**：
-  1. 确认 Tempo 就绪：`curl http://localhost:3200/ready`
-  2. 确认 Collector 运行正常：`curl http://localhost:13133`
-  3. 查看 Collector 日志：`docker logs demo-otel-collector`
-- **Prometheus 查不到 metrics**：
-  1. 确认应用上报到 Collector：检查应用日志中的 `OTLP_ENDPOINT`
-  2. 确认 Collector Remote Write 配置正确
-  3. 查看 Prometheus targets: http://localhost:9090/targets
-- **Loki 里查不到日志**：
-  1. 确认 OTel Collector 正常运行：`docker logs demo-otel-collector`
-  2. 检查容器日志文件是否存在：`ls /var/lib/docker/containers/*/*.log`
-  3. 确认 Loki 数据源配置正确
-- **Collector 日志报错 "permission denied"**：确保 Collector 容器有权限读取 `/var/lib/docker/containers` 目录
+- **Tempo 查不到 trace**：确认 `curl http://localhost:3200/ready` 返回 `ready`；若 trace 产生时 Tempo 未启动，该 trace 不会补录。
+- **Loki 里 `{job="docker", ...}` 查不到**：确认 Alloy 正常运行（`docker logs demo-alloy`），并且查询时间范围覆盖到 Alloy 生效之后的日志。
+- **端口冲突（9090）**：Prometheus 占用宿主机 `9090`，logic gRPC 映射到宿主机 `9092`。
