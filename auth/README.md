@@ -4,6 +4,10 @@ Auth 组件为 Genesis 框架提供统一的认证能力，基于 JWT (JSON Web 
 
 ## 特性
 
+- **安全性保障**：
+  - 严格的签名方法验证（仅支持 HS256）
+  - Claims 不可变性（GenerateToken 不会修改原始 Claims）
+  - 完善的刷新令牌验证（Issuer、Audience、时间窗口检查）
 - **无状态认证**：JWT 自包含用户信息，易于横向扩展。
 - **多源 Token 提取**：自动从 Header、Query、Cookie 中提取 Token，开箱即用。
 - **Gin 集成**：提供开箱即用的中间件。
