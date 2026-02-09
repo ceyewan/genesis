@@ -6,7 +6,7 @@
 - 真实三服务链路（HTTP + gRPC + DB + MQ + gRPC 回调）
 - 指标能在 Prometheus/Grafana 看到（延迟/QPS/Go runtime/容器）
 - 日志能在 Loki 检索，并用 `trace_id` 串起全链路
-- Trace 能在 Tempo/Grafana 看到瀑布图，并且 MQ 侧保留 Span Link 语义（适配多消费者组/批消费的常见生产模式）
+- Trace 能在 Tempo/Grafana 看到瀑布图；本示例默认将 MQ 消费建模为 child-of，便于演示单条全链路（组件层也支持 Span Link 模式）
 
 ## 架构概览
 
@@ -25,7 +25,7 @@ graph LR
 数据流转：
 - **Trace**：HTTP -> gRPC -> NATS -> gRPC 全链路透传 TraceContext（gRPC 自动、NATS 手动注入/提取），上报到 **Tempo**。
 - **Metrics**：三服务分别暴露 `/metrics`，**Prometheus** 拉取，Grafana 展示。
-- **Logs**：三服务日志输出到 stdout，**Promtail** 采集后写入 **Loki**。
+- **Logs**：三服务日志输出到 stdout，**Alloy** 采集后写入 **Loki**。
 
 ## 快速开始（推荐：一键 Docker Compose）
 
@@ -46,17 +46,20 @@ docker compose up -d --build
 - **Prometheus**: http://localhost:9090
 - **Grafana**: http://localhost:3000
 - **Tempo (Ready)**: http://localhost:3200/ready（启动后前 ~15s 可能返回 503，随后变为 `ready`）
+- **Loki**: http://localhost:3100
 
 > 提示：`docker compose ps` 可以查看所有服务是否健康启动。
 
 ### 常用 Docker 操作（不重编译更快）
 
 - 不 build 仅重启（例如只改了配置/只想重启基建）：  
-  `docker compose restart prometheus grafana tempo loki promtail nats cadvisor`
+  `docker compose restart prometheus grafana tempo loki alloy nats cadvisor`
 - 不 build 但强制重建某个服务容器（例如改了 volumes/networking）：  
   `docker compose up -d --no-build --force-recreate logic`
 - 查看日志：  
   `docker logs -f demo-gateway` / `docker logs -f demo-logic` / `docker logs -f demo-task`
+- 查看 Alloy 日志（排查日志采集问题）：  
+  `docker logs -f demo-alloy`
 
 ### 数据持久化（Docker volume）
 
@@ -82,11 +85,57 @@ curl -X POST http://localhost:8080/orders \
 - logic 落库后发布 NATS 消息
 - task 消费消息并通过 gRPC 把结果推回 gateway（到达 A 即算成功）
 
-压测（固定 5 QPS，默认带鉴权头）：
+压测（k6，默认带鉴权头）：
 
 ```bash
-go run ./bench/load.go
+# 固定 5 QPS，持续 10 分钟
+./bench/run-k6.sh
 ```
+
+`run-k6.sh` 会优先使用本机 `k6`；若未安装，会自动使用 `grafana/k6` Docker 镜像运行。
+
+工作日流量曲线压测（晨峰/午间回落/下午次峰/晚间回落）：
+
+```bash
+LOAD_PROFILE=weekday \
+LOAD_WEEKDAY_STEP=3m \
+LOAD_WEEKDAY_CYCLES=2 \
+LOAD_PRE_ALLOCATED_VUS=1200 \
+LOAD_MAX_VUS=6000 \
+./bench/run-k6.sh
+```
+
+大流量波动压测（低/高水位循环）：
+
+```bash
+LOAD_PROFILE=wave \
+LOAD_WAVE_LOW_RATE=300 \
+LOAD_WAVE_HIGH_RATE=1200 \
+LOAD_WAVE_CYCLES=12 \
+LOAD_WAVE_RAMP=2m \
+LOAD_WAVE_HOLD=8m \
+LOAD_PRE_ALLOCATED_VUS=800 \
+LOAD_MAX_VUS=4000 \
+./bench/run-k6.sh
+```
+
+> `./bench/run-k6.sh` 会自动导出 JSON：  
+> - 明细样本：`bench/results/metrics-<timestamp>.json`  
+> - 汇总结果：`bench/results/summary-<timestamp>.json`  
+> - 最新结果软指针：`bench/results/summary-latest.json`、`bench/results/run-latest.json`
+
+常用参数：
+> 注意：这里使用 `LOAD_` 前缀，避免与 k6 内置 `K6_` 环境变量冲突。
+
+- `LOAD_PROFILE`: `fixed`（固定 QPS）/ `wave`（波动 QPS）/ `weekday`（工作日曲线）
+- `LOAD_RATE`: 固定模式目标 QPS（默认 `5`）
+- `LOAD_DURATION`: 固定模式持续时长（默认 `10m`）
+- `LOAD_WAVE_LOW_RATE` / `LOAD_WAVE_HIGH_RATE`: 波动模式低/高水位 QPS
+- `LOAD_WAVE_CYCLES`: 波动模式循环次数
+- `LOAD_WEEKDAY_PATTERN`: 工作日曲线点位（逗号分隔 QPS 序列）
+- `LOAD_WEEKDAY_STEP`: 工作日曲线每个点位持续时长（默认 `5m`）
+- `LOAD_WEEKDAY_CYCLES`: 工作日曲线重复次数
+- `LOAD_PRE_ALLOCATED_VUS` / `LOAD_MAX_VUS`: VU 预分配与上限（高 QPS 时建议提高）
 
 ## 如何验证
 
@@ -118,7 +167,7 @@ go run ./bench/load.go
 
 **常用 Prometheus 查询示例**：
 - HTTP QPS：`rate(http_request_duration_seconds_count[1m])`
-- HTTP P99：`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path))`
+- HTTP P99：`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route))`
 - MQ QPS（按 subject）：`sum(rate({__name__="mq.consume_total"}[1m])) by (subject)`
 - MQ handler P99（按 subject）：`histogram_quantile(0.99, sum(rate({__name__="mq.handle.duration_seconds_bucket"}[5m])) by (le, subject))`
 - Go runtime：`go_goroutines` / `go_memstats_heap_alloc_bytes`
@@ -142,7 +191,8 @@ go run ./bench/load.go
 - `gorm.Create`：DB 写入
 - `mq.publish orders.created`：发布消息（Producer span）
 - `mq.consume orders.created`：消费消息（Consumer span）
-  - consumer span 上会有 **Span Link** 指向上游 producer span（更贴近生产中异步/批处理语义）
+  - 本示例默认使用 **child-of** 串成单条 Trace，便于在 Tempo/Grafana 中直接看到完整瀑布图
+  - 如果你要适配批消费/多消费者组/重试等异步场景，可切换为 **Span Link** 模式
 - `task.handle_order_created`：消费者内部业务处理
 - `proto.GatewayCallbackService/PushResult`：task → gateway 回调（gRPC client/server）
 
@@ -167,11 +217,12 @@ go run ./bench/load.go
 - 看错误：`{job="docker", service=~"gateway|logic|task"} |= "level\":\"ERROR\""`
 - 看某个订单：`{job="docker", service=~"gateway|logic|task"} | json | order_id="ORD-..."`（如果该日志行带这个字段）
 
-> 如果日志没有显示，请先确认 Promtail 是否运行：`docker compose ps`。在 Docker Desktop 上如遇日志读取权限问题，可先用 `docker logs demo-gateway` 验证日志输出。
+> 如果日志没有显示，请先确认 Alloy 是否运行：`docker compose ps`。在 Docker Desktop 上如遇日志读取权限问题，可先用 `docker logs demo-gateway` 验证日志输出。
 
 ## 目录结构
 
-- `config/`: Prometheus / Loki / Tempo / Grafana / Promtail 的配置
+- `config/`: Prometheus / Loki / Tempo / Grafana / Alloy 的配置
+- `bench/`: k6 压测脚本、运行脚本、JSON 导出结果
 - `proto/`: gRPC 定义及生成代码
 - `docker-compose.yml`: 基础设施编排
 - `cmd/gateway`: 服务 A（HTTP + gRPC 回调）
@@ -181,5 +232,5 @@ go run ./bench/load.go
 ## 常见问题（排障速查）
 
 - **Tempo 查不到 trace**：确认 `curl http://localhost:3200/ready` 返回 `ready`；若 trace 产生时 Tempo 未启动，该 trace 不会补录。
-- **Loki 里 `{job="docker", ...}` 查不到**：确认 Promtail 配置已经写入 `job="docker"` label，并且查询时间范围覆盖到 Promtail 生效之后的日志。
+- **Loki 里 `{job="docker", ...}` 查不到**：确认 Alloy 正常运行（`docker logs demo-alloy`），并且查询时间范围覆盖到 Alloy 生效之后的日志。
 - **端口冲突（9090）**：Prometheus 占用宿主机 `9090`，logic gRPC 映射到宿主机 `9092`。

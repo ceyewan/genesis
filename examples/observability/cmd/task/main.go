@@ -12,11 +12,8 @@ import (
 	"github.com/ceyewan/genesis/examples/observability/proto"
 	"github.com/ceyewan/genesis/mq"
 	"github.com/ceyewan/genesis/trace"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -70,7 +67,7 @@ func main() {
 	cbConn, err := grpc.NewClient(
 		getenv("GATEWAY_CALLBACK_TARGET", callbackTarget),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithStatsHandler(trace.GRPCClientStatsHandler()),
 	)
 	if err != nil {
 		obs.Logger.Fatal("connect callback grpc failed", clog.Error(err))
@@ -81,33 +78,24 @@ func main() {
 	tracer := otel.Tracer("obs-task")
 
 	sub, err := mqClient.Subscribe(ctx, orderSubject, func(msg mq.Message) error {
-		// 从 msg.Context() 获取订阅时的上下文（已注入 trace）
-		handlerCtx := msg.Context()
-		parentCtx := trace.Extract(context.Background(), msg.Headers())
-		remoteSC := oteltrace.SpanContextFromContext(parentCtx)
-		links := make([]oteltrace.Link, 0, 1)
-		if remoteSC.IsValid() {
-			links = append(links, oteltrace.Link{SpanContext: remoteSC})
-		}
-
-		consumeCtx, consumeSpan := tracer.Start(
-			handlerCtx,
-			"mq.consume orders.created",
-			oteltrace.WithSpanKind(oteltrace.SpanKindConsumer),
-			oteltrace.WithLinks(links...),
+		consumeCtx, consumeSpan := trace.StartConsumerSpanFromHeaders(
+			msg.Context(),
+			tracer,
+			trace.SpanNameMQConsume(orderSubject),
+			msg.Headers(),
+			trace.MessagingMeta{
+				System:        trace.MessagingSystemNATS,
+				Destination:   orderSubject,
+				Operation:     trace.MessagingOperationProcess,
+				ConsumerGroup: "order-task-workers",
+				TraceRelation: trace.MessagingTraceRelationChildOf,
+			},
 		)
 		defer consumeSpan.End()
-		consumeSpan.SetAttributes(
-			attribute.String("messaging.system", "nats"),
-			attribute.String("messaging.destination", orderSubject),
-			attribute.String("messaging.operation", "process"),
-			attribute.String("messaging.consumer.group", "order-task-workers"),
-		)
 
 		ev := orderCreatedEvent{}
 		if err := json.Unmarshal(msg.Data(), &ev); err != nil {
-			consumeSpan.RecordError(err)
-			consumeSpan.SetStatus(codes.Error, err.Error())
+			trace.MarkSpanError(consumeSpan, err)
 			obs.Logger.ErrorContext(consumeCtx, "unmarshal order event failed", clog.Error(err))
 			return err
 		}
@@ -136,8 +124,7 @@ func main() {
 		})
 		if err != nil {
 			obs.Logger.ErrorContext(handledCtx, "push result to gateway failed", clog.Error(err))
-			consumeSpan.RecordError(err)
-			consumeSpan.SetStatus(codes.Error, err.Error())
+			trace.MarkSpanError(consumeSpan, err)
 			return err
 		}
 

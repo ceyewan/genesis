@@ -13,13 +13,12 @@ import (
 	"github.com/ceyewan/genesis/examples/observability/internal/bootstrap"
 	"github.com/ceyewan/genesis/examples/observability/internal/order"
 	"github.com/ceyewan/genesis/examples/observability/proto"
+	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/mq"
 	"github.com/ceyewan/genesis/trace"
 	"github.com/ceyewan/genesis/xerrors"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"gorm.io/gorm"
@@ -98,27 +97,23 @@ func (s *orderService) CreateOrder(ctx context.Context, req *proto.CreateOrderRe
 	}
 
 	tracer := otel.Tracer("obs-logic")
-	headers := map[string]string{}
-	pubCtx, pubSpan := tracer.Start(
+	pubCtx, pubSpan, headers := trace.StartProducerSpan(
 		ctx,
-		"mq.publish orders.created",
-		oteltrace.WithSpanKind(oteltrace.SpanKindProducer),
-	)
-	pubSpan.SetAttributes(
-		attribute.String("messaging.system", "nats"),
-		attribute.String("messaging.destination", orderSubject),
-		attribute.String("messaging.operation", "publish"),
+		tracer,
+		trace.SpanNameMQPublish(orderSubject),
+		trace.MessagingMeta{
+			System:      trace.MessagingSystemNATS,
+			Destination: orderSubject,
+			Operation:   trace.MessagingOperationPublish,
+		},
 		attribute.String("order.id", orderID),
 	)
+	defer pubSpan.End()
 
-	trace.Inject(pubCtx, headers)
 	if err := s.mq.Publish(pubCtx, orderSubject, data, mq.WithHeaders(headers)); err != nil {
-		pubSpan.RecordError(err)
-		pubSpan.SetStatus(codes.Error, err.Error())
-		pubSpan.End()
+		trace.MarkSpanError(pubSpan, err)
 		return nil, xerrors.Wrap(err, "publish order event")
 	}
-	pubSpan.End()
 
 	return &proto.CreateOrderResponse{
 		OrderId: orderID,
@@ -135,6 +130,11 @@ func main() {
 	}
 	for i := len(shutdowns) - 1; i >= 0; i-- {
 		defer func(fn bootstrap.Shutdown) { _ = fn(ctx) }(shutdowns[i])
+	}
+
+	grpcMetrics, err := metrics.NewGRPCServerMetrics(obs.Meter, metrics.DefaultGRPCServerMetricsConfig("obs-logic"))
+	if err != nil {
+		obs.Logger.Fatal("create grpc metrics failed", clog.Error(err))
 	}
 
 	natsConnCfg := &connector.NATSConfig{URL: getenv("NATS_URL", natsEndpoint)}
@@ -180,7 +180,10 @@ func main() {
 		obs.Logger.Fatal("listen grpc failed", clog.Error(err))
 	}
 
-	srv := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	srv := grpc.NewServer(
+		grpc.StatsHandler(trace.GRPCServerStatsHandler()),
+		grpc.UnaryInterceptor(grpcMetrics.UnaryServerInterceptor()),
+	)
 	proto.RegisterOrderServiceServer(srv, &orderService{
 		logger: obs.Logger,
 		db:     database,

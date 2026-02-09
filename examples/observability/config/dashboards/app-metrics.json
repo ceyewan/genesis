@@ -92,7 +92,7 @@
         {
           "expr": "rate(http_request_duration_seconds_count[1m])",
           "interval": "",
-          "legendFormat": "{{method}} {{path}}",
+          "legendFormat": "{{method}} {{route}}",
           "refId": "A"
         }
       ],
@@ -172,9 +172,9 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path))",
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route))",
           "interval": "",
-          "legendFormat": "{{path}} P99",
+          "legendFormat": "{{route}} P99",
           "refId": "A"
         }
       ],

@@ -74,7 +74,7 @@ services:
   # 0.1 Message Queue: NATS Core
   # ============================================================================
   nats:
-    image: nats:2.10-alpine
+    image: nats:2.12.4-alpine
     container_name: demo-nats
     ports:
       - "4222:4222"
@@ -85,7 +85,7 @@ services:
   # 1. Logs: Loki (存储)
   # ============================================================================
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.6.4
     container_name: demo-loki
     command: -config.file=/etc/loki/local-config.yaml
     volumes:
@@ -96,16 +96,15 @@ services:
       - demo-network
 
   # ============================================================================
-  # 1.1 Logs: Promtail (采集)
+  # 1.1 Logs: Alloy (采集)
   # ============================================================================
-  promtail:
-    image: grafana/promtail:latest
-    container_name: demo-promtail
-    command: -config.file=/etc/promtail/promtail.yaml
+  alloy:
+    image: grafana/alloy:v1.13.0
+    container_name: demo-alloy
+    command: ["run", "/etc/alloy/config.alloy"]
     volumes:
-      - ./config/promtail.yaml:/etc/promtail/promtail.yaml
+      - ./config/alloy.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
     depends_on:
       - loki
     networks:
@@ -115,7 +114,7 @@ services:
   # 2. Traces: Tempo (存储) - 使用 --target=all 运行所有组件
   # ============================================================================
   tempo:
-    image: grafana/tempo:2.8.3
+    image: grafana/tempo:2.10.0
     container_name: demo-tempo
     command: [ "-config.file=/etc/tempo.yaml" ]
     volumes:
@@ -133,7 +132,7 @@ services:
   # 3. Metrics: Prometheus (存储)
   # ============================================================================
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.9.1
     container_name: demo-prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -150,7 +149,7 @@ services:
   # 4. Infrastructure: cAdvisor (容器监控)
   # ============================================================================
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.47.0
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
     container_name: demo-cadvisor
     volumes:
       - /:/rootfs:ro
@@ -168,7 +167,7 @@ services:
   # 5. Visualization: Grafana (展示)
   # ============================================================================
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.3.2
     container_name: demo-grafana
     volumes:
       - ./config/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
