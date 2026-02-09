@@ -26,13 +26,7 @@ func main() {
 	}
 
 	// 2. 初始化日志
-	logger, err := clog.New(&clog.Config{
-		Level:       "info",
-		Format:      "console",
-		Output:      "stdout",
-		AddSource:   false,
-		EnableColor: true,
-	})
+	logger, err := clog.New(clog.NewDevDefaultConfig("example"))
 	if err != nil {
 		log.Fatalf("create logger: %v", err)
 	}
@@ -127,8 +121,8 @@ func main() {
 
 	// 启动服务器
 	go func() {
-		logger.Info("auth example server starting", clog.String("addr", ":8080"))
-		if err := http.ListenAndServe(":8080", mux); err != nil {
+		logger.Info("auth example server starting", clog.String("addr", ":12345"))
+		if err := http.ListenAndServe(":12345", mux); err != nil {
 			logger.Error("server error", clog.Error(err))
 		}
 	}()
@@ -143,7 +137,7 @@ func main() {
 // runBasicTests 运行基本功能测试
 func runBasicTests(logger clog.Logger) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	baseURL := "http://localhost:8080"
+	baseURL := "http://localhost:12345"
 
 	logger.Info("=== 开始基本功能测试 ===")
 

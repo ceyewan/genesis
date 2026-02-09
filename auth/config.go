@@ -1,6 +1,11 @@
 package auth
 
-import "time"
+import (
+	"time"
+
+	"github.com/ceyewan/genesis/xerrors"
+	"github.com/golang-jwt/jwt/v5"
+)
 
 // Config Auth 配置
 type Config struct {
@@ -36,4 +41,29 @@ func (c *Config) setDefaults() {
 		c.TokenHeadName = "Bearer"
 	}
 	// TokenLookup 留空时使用默认多源查找，不设置默认值
+}
+
+// validate 验证配置
+func (c *Config) validate() error {
+	if c.SecretKey == "" {
+		return ErrInvalidConfig
+	}
+
+	if len(c.SecretKey) < 32 {
+		return xerrors.Wrapf(ErrInvalidConfig, "secret_key must be at least 32 characters")
+	}
+
+	if c.SigningMethod != jwt.SigningMethodHS256.Alg() {
+		return xerrors.Wrapf(ErrInvalidConfig, "unsupported signing_method: %s", c.SigningMethod)
+	}
+
+	if c.AccessTokenTTL <= 0 {
+		return xerrors.Wrapf(ErrInvalidConfig, "access_token_ttl must be positive")
+	}
+
+	if c.RefreshTokenTTL <= 0 {
+		return xerrors.Wrapf(ErrInvalidConfig, "refresh_token_ttl must be positive")
+	}
+
+	return nil
 }

@@ -47,8 +47,8 @@ type Authenticator interface {
 
 // jwtAuth JWT 认证实现
 type jwtAuth struct {
-	config         *Config
-	options        *options
+	config         *Config         // 配置
+	options        *options        // 选项
 	validatedCount metrics.Counter // Token 验证计数
 	refreshedCount metrics.Counter // Token 刷新计数
 }
@@ -71,7 +71,7 @@ func New(cfg *Config, opts ...Option) (Authenticator, error) {
 		options: o,
 	}
 
-	if err := auth.validate(); err != nil {
+	if err := auth.config.validate(); err != nil {
 		return nil, err
 	}
 
@@ -86,31 +86,6 @@ func New(cfg *Config, opts ...Option) (Authenticator, error) {
 	)
 
 	return auth, nil
-}
-
-// validate 验证配置
-func (a *jwtAuth) validate() error {
-	if a.config.SecretKey == "" {
-		return ErrInvalidConfig
-	}
-
-	if len(a.config.SecretKey) < 32 {
-		return xerrors.Wrapf(ErrInvalidConfig, "secret_key must be at least 32 characters")
-	}
-
-	if a.config.SigningMethod != jwt.SigningMethodHS256.Alg() {
-		return xerrors.Wrapf(ErrInvalidConfig, "unsupported signing_method: %s", a.config.SigningMethod)
-	}
-
-	if a.config.AccessTokenTTL <= 0 {
-		return xerrors.Wrapf(ErrInvalidConfig, "access_token_ttl must be positive")
-	}
-
-	if a.config.RefreshTokenTTL <= 0 {
-		return xerrors.Wrapf(ErrInvalidConfig, "refresh_token_ttl must be positive")
-	}
-
-	return nil
 }
 
 // GenerateToken 生成 Token

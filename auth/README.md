@@ -128,11 +128,24 @@ token, err := authenticator.GenerateToken(ctx, claims)
 r := gin.Default()
 r.Use(authenticator.GinMiddleware())
 
+// 需要认证的路由
 r.GET("/profile", func(c *gin.Context) {
     claims, _ := auth.GetClaims(c)
     c.JSON(200, gin.H{"user_id": claims.Subject})
 })
+
+// 要求特定角色的路由（OR 逻辑）
+r.GET("/admin", auth.RequireRoles("admin"), handler)
+r.GET("/moderate", auth.RequireRoles("admin", "moderator"), handler)  // 拥有任一角色即可
 ```
+
+### RequireRoles
+
+`RequireRoles` 是一个角色检查中间件，采用 **OR 逻辑**：
+
+- 用户只需拥有 **任意一个** 指定角色即可通过
+- `RequireRoles("admin", "editor")` 表示用户必须有 `admin` 或 `editor` 角色
+- 如果没有任何匹配角色，返回 403 Forbidden
 
 ## 监控指标
 
