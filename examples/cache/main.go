@@ -3,33 +3,13 @@ package main
 import (
 	"context"
 	"log"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/ceyewan/genesis/cache"
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 )
-
-// getEnvOrDefault 获取环境变量，如果不存在则返回默认值
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// getEnvIntOrDefault 获取环境变量并转换为 int，如果不存在或转换失败则返回默认值
-func getEnvIntOrDefault(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
-}
 
 // 用户路由信息
 type UserRoute struct {
@@ -57,311 +37,329 @@ type Message struct {
 }
 
 func main() {
-	// 0. 加载环境变量（从根目录）
-	if err := godotenv.Load("/Users/ceyewan/CodeField/genesis/.env"); err != nil {
-		log.Printf("Warning: could not load .env file: %v", err)
-	}
-
 	// 初始化日志记录器
 	logger, err := clog.New(&clog.Config{
 		Level:  "info",
 		Format: "console",
 		Output: "stdout",
-	}, clog.WithNamespace("example", "cache", "im"))
+	}, clog.WithNamespace("example", "cache"))
 	if err != nil {
 		log.Fatalf("初始化日志记录器失败: %v", err)
 	}
 
-	logger.Info("=== Genesis Cache 组件示例 (Go Native DI) ===")
-	logger.Info("本示例演示 Cache 组件的标准使用模式:")
-	logger.Info("  1. 显式创建连接器")
-	logger.Info("  2. 显式创建缓存组件")
-	logger.Info("  3. 使用 Redis 的各种数据结构")
-	logger.Info("")
+	logger.Info("=== Genesis Cache 组件示例 ===")
 
-	// 示例 1: 用户路由缓存
-	userRouteExample(logger)
+	// 创建共享的 Redis 连接
+	redisConn := setupRedis(logger)
+	if redisConn == nil {
+		logger.Warn("Redis 连接失败，跳过 Redis 相关示例")
+	} else {
+		defer redisConn.Close()
+	}
 
-	// 示例 2: 会话列表缓存（按最后通话时间排序）
-	sessionListExample(logger)
+	// 示例 1: Key-Value 缓存
+	kvExample(logger, redisConn)
 
-	// 示例 3: 最新消息缓存（定长列表）
-	recentMessagesExample(logger)
+	// 示例 2: Hash 操作
+	hashExample(logger, redisConn)
 
-	// 示例 4: 单机内存缓存
+	// 示例 3: Sorted Set 排行榜
+	sortedSetExample(logger, redisConn)
+
+	// 示例 4: List 定长队列
+	listExample(logger, redisConn)
+
+	// 示例 5: 批量操作
+	batchExample(logger, redisConn)
+
+	// 示例 6: 单机内存缓存
 	standaloneExample(logger)
 }
 
-func userRouteExample(logger clog.Logger) {
-	logger.Info("--- 示例 1: 用户路由缓存 ---")
-
-	// 1. 创建 Redis 连接器
+// setupRedis 创建并连接 Redis
+func setupRedis(logger clog.Logger) connector.RedisConnector {
 	redisConn, err := connector.NewRedis(&connector.RedisConfig{
-		Addr:         getEnvOrDefault("REDIS_ADDR", "127.0.0.1:6379"),
-		Password:     getEnvOrDefault("REDIS_PASSWORD", ""), // 从环境变量读取密码
-		DB:           getEnvIntOrDefault("REDIS_DB", 0),
+		Addr:         "127.0.0.1:6379",
 		DialTimeout:  2 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-		PoolSize:     getEnvIntOrDefault("REDIS_POOL_SIZE", 10),
+		ReadTimeout:  2 * time.Second,
+		WriteTimeout: 2 * time.Second,
+		PoolSize:     10,
 	}, connector.WithLogger(logger))
 	if err != nil {
-		logger.Warn("跳过用户路由示例: 连接器初始化失败", clog.Error(err))
-		return
+		logger.Error("创建 Redis 连接器失败", clog.Error(err))
+		return nil
 	}
-	defer redisConn.Close()
 
-	// 2. 配置缓存
-	cacheCfg := &cache.Config{
+	if err := redisConn.Connect(context.Background()); err != nil {
+		logger.Error("连接 Redis 失败", clog.Error(err))
+		return nil
+	}
+
+	logger.Info("Redis 连接成功")
+	return redisConn
+}
+
+// newCache 创建 Redis 缓存实例
+func newCache(conn connector.RedisConnector, prefix string, logger clog.Logger) cache.Cache {
+	cfg := &cache.Config{
 		Driver:     cache.DriverRedis,
-		Prefix:     "im:route:",
+		Prefix:     prefix,
 		Serializer: "json",
 	}
-
-	// 3. 创建缓存实例 (Go Native DI)
-	cacheClient, err := cache.New(cacheCfg, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
+	c, err := cache.New(cfg, cache.WithRedisConnector(conn), cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
+		return nil
+	}
+	return c
+}
+
+func kvExample(logger clog.Logger, redisConn connector.RedisConnector) {
+	logger.Info("--- 示例 1: Key-Value 缓存 ---")
+
+	if redisConn == nil {
+		logger.Warn("跳过：Redis 未连接")
+		return
+	}
+
+	c := newCache(redisConn, "demo:kv:", logger)
+	if c == nil {
 		return
 	}
 
 	ctx := context.Background()
 
-	// 4. 缓存用户路由信息
+	// 设置缓存
 	route := UserRoute{
 		UserID:    "user_1001",
 		GatewayID: "gateway_01",
 		ServerID:  "server_01",
 	}
 
-	err = cacheClient.Set(ctx, "user:"+route.UserID, route, 24*time.Hour)
-	if err != nil {
-		logger.Error("设置用户路由失败", clog.Error(err))
+	if err := c.Set(ctx, "route:"+route.UserID, route, 10*time.Minute); err != nil {
+		logger.Error("设置缓存失败", clog.Error(err))
 		return
 	}
-	logger.Info("✓ 已缓存用户路由", clog.Any("route", route))
+	logger.Info("已缓存用户路由", clog.String("user_id", route.UserID))
 
-	// 5. 获取用户路由信息
+	// 获取缓存
 	var cachedRoute UserRoute
-	err = cacheClient.Get(ctx, "user:"+route.UserID, &cachedRoute)
-	if err != nil {
-		logger.Error("获取用户路由失败", clog.Error(err))
+	if err := c.Get(ctx, "route:"+route.UserID, &cachedRoute); err != nil {
+		logger.Error("获取缓存失败", clog.Error(err))
 		return
 	}
-	logger.Info("✓ 获取到的用户路由", clog.Any("route", cachedRoute))
+	logger.Info("获取到用户路由", clog.String("server", cachedRoute.ServerID))
+
+	// 检查是否存在
+	exists, _ := c.Has(ctx, "route:"+route.UserID)
+	logger.Info("缓存存在性检查", clog.Bool("exists", exists))
+
+	// 删除缓存
+	c.Delete(ctx, "route:"+route.UserID)
 }
 
-func sessionListExample(logger clog.Logger) {
-	logger.Info("--- 示例 2: 会话列表缓存（ZSet 按时间排序）---")
+func hashExample(logger clog.Logger, redisConn connector.RedisConnector) {
+	logger.Info("--- 示例 2: Hash 字段操作 ---")
 
-	// 1. 创建 Redis 连接器
-	redisConn, err := connector.NewRedis(&connector.RedisConfig{
-		Addr:         getEnvOrDefault("REDIS_ADDR", "127.0.0.1:6379"),
-		Password:     getEnvOrDefault("REDIS_PASSWORD", ""), // 从环境变量读取密码
-		DB:           getEnvIntOrDefault("REDIS_DB", 0),
-		DialTimeout:  2 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-		PoolSize:     getEnvIntOrDefault("REDIS_POOL_SIZE", 10),
-	}, connector.WithLogger(logger))
-	if err != nil {
-		logger.Warn("跳过会话列表示例: 连接器初始化失败", clog.Error(err))
+	if redisConn == nil {
+		logger.Warn("跳过：Redis 未连接")
 		return
 	}
-	defer redisConn.Close()
 
-	// 2. 配置缓存
-	cacheCfg := &cache.Config{
-		Driver:     cache.DriverRedis,
-		Prefix:     "im:session:",
-		Serializer: "json",
-	}
-
-	// 3. 创建缓存实例
-	cacheClient, err := cache.New(cacheCfg, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
-	if err != nil {
-		logger.Error("创建缓存失败", clog.Error(err))
+	c := newCache(redisConn, "demo:hash:", logger)
+	if c == nil {
 		return
 	}
 
 	ctx := context.Background()
 	userID := "user_1001"
 
-	// 4. 添加会话（使用时间戳作为分数）
-	sessions := []Session{
-		{SessionID: "session_001", UserID1: userID, UserID2: "user_1002", LastTime: time.Now().Add(-2 * time.Hour)},
-		{SessionID: "session_002", UserID1: userID, UserID2: "user_1003", LastTime: time.Now().Add(-1 * time.Hour)},
-		{SessionID: "session_003", UserID1: userID, UserID2: "user_1004", LastTime: time.Now()},
-	}
+	// 设置字段
+	c.HSet(ctx, "user:"+userID, "name", "Alice")
+	c.HSet(ctx, "user:"+userID, "age", 28)
+	c.HSet(ctx, "user:"+userID, "city", "Beijing")
+	logger.Info("已设置用户字段")
 
-	for _, session := range sessions {
-		// 将会话信息缓存为 Hash
-		err = cacheClient.HSet(ctx, "info:"+session.SessionID, "user_id1", session.UserID1)
-		if err != nil {
-			logger.Error("缓存会话信息失败", clog.Error(err))
-			continue
-		}
-		err = cacheClient.HSet(ctx, "info:"+session.SessionID, "user_id2", session.UserID2)
-		if err != nil {
-			logger.Error("缓存会话信息失败", clog.Error(err))
-			continue
-		}
+	// 获取单个字段
+	var name string
+	c.HGet(ctx, "user:"+userID, "name", &name)
+	logger.Info("获取用户名", clog.String("name", name))
 
-		// 将会话ID添加到用户的会话列表（按时间排序）
-		score := float64(session.LastTime.Unix())
-		err = cacheClient.ZAdd(ctx, "user:"+userID+":sessions", score, session.SessionID)
-		if err != nil {
-			logger.Error("添加会话到列表失败", clog.Error(err))
-			continue
-		}
-	}
-	logger.Info("✓ 已添加会话到用户会话列表", clog.Int("count", len(sessions)))
+	// 原子递增
+	newAge, _ := c.HIncrBy(ctx, "user:"+userID, "age", 1)
+	logger.Info("年龄递增后", clog.Int64("age", newAge))
 
-	// 5. 获取最近活跃的会话（按时间倒序）
-	var recentSessions []string
-	err = cacheClient.ZRevRange(ctx, "user:"+userID+":sessions", 0, 2, &recentSessions)
-	if err != nil {
-		logger.Error("获取会话列表失败", clog.Error(err))
-		return
-	}
+	// 获取所有字段
+	var allFields map[string]string
+	c.HGetAll(ctx, "user:"+userID, &allFields)
+	logger.Info("所有字段", clog.Any("fields", allFields))
 
-	logger.Info("✓ 用户最近活跃的会话", clog.Any("sessions", recentSessions))
-
-	// 6. 获取会话详细信息
-	for _, sessionID := range recentSessions {
-		var sessionInfo map[string]string
-		err = cacheClient.HGetAll(ctx, "info:"+sessionID, &sessionInfo)
-		if err != nil {
-			logger.Error("获取会话详情失败", clog.Error(err))
-			continue
-		}
-		logger.Info("✓ 会话详情", clog.String("session_id", sessionID), clog.Any("info", sessionInfo))
-	}
+	// 清理
+	c.HDel(ctx, "user:"+userID, "name", "age", "city")
 }
 
-func recentMessagesExample(logger clog.Logger) {
-	logger.Info("--- 示例 3: 最新消息缓存（定长列表）---")
+func sortedSetExample(logger clog.Logger, redisConn connector.RedisConnector) {
+	logger.Info("--- 示例 3: Sorted Set 排行榜 ---")
 
-	// 1. 创建 Redis 连接器
-	redisConn, err := connector.NewRedis(&connector.RedisConfig{
-		Addr:         getEnvOrDefault("REDIS_ADDR", "127.0.0.1:6379"),
-		Password:     getEnvOrDefault("REDIS_PASSWORD", ""), // 从环境变量读取密码
-		DB:           getEnvIntOrDefault("REDIS_DB", 0),
-		DialTimeout:  2 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-		PoolSize:     getEnvIntOrDefault("REDIS_POOL_SIZE", 10),
-	}, connector.WithLogger(logger))
-	if err != nil {
-		logger.Warn("跳过最新消息示例: 连接器初始化失败", clog.Error(err))
+	if redisConn == nil {
+		logger.Warn("跳过：Redis 未连接")
 		return
 	}
-	defer redisConn.Close()
 
-	// 2. 配置缓存
-	cacheCfg := &cache.Config{
-		Driver:     cache.DriverRedis,
-		Prefix:     "im:message:",
-		Serializer: "json",
-	}
-
-	// 3. 创建缓存实例
-	cacheClient, err := cache.New(cacheCfg, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
-	if err != nil {
-		logger.Error("创建缓存失败", clog.Error(err))
+	c := newCache(redisConn, "demo:zset:", logger)
+	if c == nil {
 		return
 	}
 
 	ctx := context.Background()
-	sessionID := "session_001"
+	key := "leaderboard"
 
-	// 4. 添加消息到定长列表（只保留最近10条）
-	messages := []Message{
-		{MessageID: "msg_001", SessionID: sessionID, UserID: "user_1001", Content: "你好", Timestamp: time.Now().Add(-5 * time.Minute), Seq: 1},
-		{MessageID: "msg_002", SessionID: sessionID, UserID: "user_1002", Content: "你好，很高兴认识你", Timestamp: time.Now().Add(-4 * time.Minute), Seq: 2},
-		{MessageID: "msg_003", SessionID: sessionID, UserID: "user_1001", Content: "最近怎么样？", Timestamp: time.Now().Add(-3 * time.Minute), Seq: 3},
-		{MessageID: "msg_004", SessionID: sessionID, UserID: "user_1002", Content: "还不错，谢谢关心", Timestamp: time.Now().Add(-2 * time.Minute), Seq: 4},
-		{MessageID: "msg_005", SessionID: sessionID, UserID: "user_1001", Content: "那就好", Timestamp: time.Now().Add(-1 * time.Minute), Seq: 5},
-	}
+	// 添加成员（分数为得分）
+	c.ZAdd(ctx, key, 100, "player_alice")
+	c.ZAdd(ctx, key, 85, "player_bob")
+	c.ZAdd(ctx, key, 92, "player_charlie")
+	c.ZAdd(ctx, key, 78, "player_david")
+	logger.Info("已添加排行榜成员")
 
-	// 使用定长列表，只保留最近10条消息
-	// 将 Message 切片转换为 any 切片
-	messageValues := make([]any, len(messages))
-	for i, msg := range messages {
-		messageValues[i] = msg
-	}
-	err = cacheClient.LPushCapped(ctx, "session:"+sessionID+":messages", 10, messageValues...)
-	if err != nil {
-		logger.Error("添加消息到定长列表失败", clog.Error(err))
+	// 获取分数
+	score, _ := c.ZScore(ctx, key, "player_alice")
+	logger.Info("Alice 的分数", clog.Float64("score", score))
+
+	// 获取前 3 名（分数倒序）
+	var top3 []string
+	c.ZRevRange(ctx, key, 0, 2, &top3)
+	logger.Info("排行榜前 3 名", clog.Any("players", top3))
+
+	// 按分数范围查询
+	var qualified []string
+	c.ZRangeByScore(ctx, key, 80, 100, &qualified)
+	logger.Info("分数 >= 80 的玩家", clog.Any("players", qualified))
+
+	// 清理
+	c.ZRem(ctx, key, "player_alice", "player_bob", "player_charlie", "player_david")
+}
+
+func listExample(logger clog.Logger, redisConn connector.RedisConnector) {
+	logger.Info("--- 示例 4: List 定长队列 ---")
+
+	if redisConn == nil {
+		logger.Warn("跳过：Redis 未连接")
 		return
 	}
-	logger.Info("✓ 已添加消息到会话消息列表", clog.Int("count", len(messages)), clog.Int("limit", 10))
 
-	// 5. 获取最近的消息
-	var recentMessages []Message
-	err = cacheClient.LRange(ctx, "session:"+sessionID+":messages", 0, 9, &recentMessages)
-	if err != nil {
-		logger.Error("获取消息列表失败", clog.Error(err))
+	c := newCache(redisConn, "demo:list:", logger)
+	if c == nil {
 		return
 	}
 
-	logger.Info("✓ 会话最近的消息:")
-	for i, msg := range recentMessages {
-		logger.Info("  消息",
-			clog.Int("index", i+1),
-			clog.String("user_id", msg.UserID),
-			clog.String("time", msg.Timestamp.Format("15:04:05")),
-			clog.String("content", msg.Content))
+	ctx := context.Background()
+	key := "recent_logs"
+
+	// 清空旧数据
+	c.Delete(ctx, key)
+
+	// 添加多条日志（只保留最新 5 条）
+	logs := []string{"log1", "log2", "log3", "log4", "log5", "log6", "log7"}
+	values := make([]any, len(logs))
+	for i, v := range logs {
+		values[i] = v
+	}
+	c.LPushCapped(ctx, key, 5, values...)
+	logger.Info("已添加日志（保留最新 5 条）")
+
+	// 获取所有日志
+	var allLogs []string
+	c.LRange(ctx, key, 0, -1, &allLogs)
+	logger.Info("当前日志列表", clog.Any("logs", allLogs))
+
+	// 从左侧弹出
+	var firstLog string
+	c.LPop(ctx, key, &firstLog)
+	logger.Info("弹出的日志", clog.String("log", firstLog))
+
+	// 清理
+	c.Delete(ctx, key)
+}
+
+func batchExample(logger clog.Logger, redisConn connector.RedisConnector) {
+	logger.Info("--- 示例 5: 批量操作 ---")
+
+	if redisConn == nil {
+		logger.Warn("跳过：Redis 未连接")
+		return
+	}
+
+	c := newCache(redisConn, "demo:batch:", logger)
+	if c == nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	// 批量设置
+	items := map[string]any{
+		"user:1": UserRoute{UserID: "1", GatewayID: "gw1", ServerID: "sv1"},
+		"user:2": UserRoute{UserID: "2", GatewayID: "gw2", ServerID: "sv2"},
+		"user:3": UserRoute{UserID: "3", GatewayID: "gw3", ServerID: "sv3"},
+	}
+	c.MSet(ctx, items, 5*time.Minute)
+	logger.Info("批量设置完成", clog.Int("count", len(items)))
+
+	// 批量获取
+	keys := []string{"user:1", "user:2", "user:3", "user:999"}
+	var results []UserRoute
+	c.MGet(ctx, keys, &results)
+	logger.Info("批量获取结果", clog.Int("count", len(results)))
+
+	// 清理
+	c.Delete(ctx, "user:1")
+	c.Delete(ctx, "user:2")
+	c.Delete(ctx, "user:3")
+
+	// 演示 Client() 方法：访问底层 Redis 客户执行 Pipeline
+	logger.Info("--- 使用底层客户端执行 Pipeline ---")
+	client := c.Client()
+	if client != nil {
+		pipe := client.(*redis.Client).Pipeline()
+		pipe.Set(ctx, "demo:batch:pipe:1", "value1", 0)
+		pipe.Set(ctx, "demo:batch:pipe:2", "value2", 0)
+		pipe.Get(ctx, "demo:batch:pipe:1")
+		_, _ = pipe.Exec(ctx)
+		logger.Info("Pipeline 执行完成")
+		c.Delete(ctx, "pipe:1")
+		c.Delete(ctx, "pipe:2")
 	}
 }
 
 func standaloneExample(logger clog.Logger) {
-	logger.Info("--- 示例 4: 单机内存缓存 ---")
+	logger.Info("--- 示例 6: 单机内存缓存 ---")
 
-	// 1. 配置缓存
-	cacheCfg := &cache.Config{
+	cfg := &cache.Config{
 		Driver: cache.DriverMemory,
 		Standalone: &cache.StandaloneConfig{
 			Capacity: 1000,
 		},
 	}
 
-	// 2. 创建缓存实例
-	cacheClient, err := cache.New(cacheCfg, cache.WithLogger(logger))
+	c, err := cache.New(cfg, cache.WithLogger(logger))
 	if err != nil {
-		logger.Error("创建单机缓存失败", clog.Error(err))
+		logger.Error("创建内存缓存失败", clog.Error(err))
 		return
 	}
-	defer cacheClient.Close()
+	defer c.Close()
 
 	ctx := context.Background()
 
-	// 3. 缓存本地数据
-	key := "local_config"
-	value := map[string]string{
-		"theme": "dark",
-		"lang":  "zh-CN",
-	}
+	// 设置缓存
+	c.Set(ctx, "local_key", map[string]string{"theme": "dark", "lang": "zh-CN"}, 5*time.Minute)
+	logger.Info("已设置本地缓存")
 
-	err = cacheClient.Set(ctx, key, value, 10*time.Minute)
-	if err != nil {
-		logger.Error("设置本地缓存失败", clog.Error(err))
-		return
-	}
-	logger.Info("✓ 已缓存本地配置", clog.Any("config", value))
+	// 获取缓存
+	var value map[string]string
+	c.Get(ctx, "local_key", &value)
+	logger.Info("获取到本地缓存", clog.Any("value", value))
 
-	// 4. 获取本地数据
-	var cachedValue map[string]string
-	err = cacheClient.Get(ctx, key, &cachedValue)
-	if err != nil {
-		logger.Error("获取本地缓存失败", clog.Error(err))
-		return
-	}
-	logger.Info("✓ 获取到的本地配置", clog.Any("config", cachedValue))
-
-	// 5. 尝试不支持的操作
-	err = cacheClient.HSet(ctx, "hash_key", "field", "value")
-	if err != nil {
-		logger.Info("✓ 验证不支持的操作返回错误: " + err.Error())
-	}
+	// 验证不支持的操作
+	err = c.HSet(ctx, "hash_key", "field", "value")
+	logger.Info("Hash 操作预期返回错误", clog.String("error", err.Error()))
 }

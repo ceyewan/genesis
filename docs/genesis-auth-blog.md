@@ -82,12 +82,7 @@ type Claims struct {
 
 ### 3.1 签发流程
 
-```go
-1. 深拷贝 Claims（避免修改原对象）
-2. 回填标准声明（exp、iat、iss、aud 缺省时注入）
-3. 使用 HS256 算法签名
-4. 记录日志并返回 Token
-```
+签发过程包含四个步骤：首先深拷贝 Claims 以避免修改原对象，然后回填标准声明（exp、iat、iss、aud 缺省时注入），接着使用 HS256 算法签名，最后记录日志并返回 Token。
 
 ### 3.2 Claims 不可变性
 
@@ -112,13 +107,7 @@ type Claims struct {
 
 ### 4.1 验证流程
 
-```go
-1. 使用 jwt.ParseWithClaims 解析
-2. 通过 jwt.WithValidMethods 限定算法为 HS256
-3. 根据配置附加 Issuer、Audience 校验
-4. 错误归类：expired / invalid_signature / invalid_token
-5. 记录指标 auth_tokens_validated_total
-```
+验证过程首先使用 `jwt.ParseWithClaims` 解析 Token，通过 `jwt.WithValidMethods` 限定算法为 HS256，然后根据配置附加 Issuer、Audience 校验。最后将错误归类为 `expired`、`invalid_signature`、`invalid_token` 三类，并记录 `auth_tokens_validated_total` 指标。
 
 ### 4.2 错误语义映射
 
@@ -140,35 +129,13 @@ type Claims struct {
 
 ### 5.1 分段验证策略
 
-刷新不是"盲目重签"，而是分两段校验：
+刷新不是盲目重签，而是分两段校验。
 
-**第一阶段：结构验证**
-
-```go
-使用 jwt.WithoutClaimsValidation 跳过时间校验
-仅验证签名与结构合法性
-```
-
-**第二阶段：刷新策略校验**
-
-```go
-1. iss 必须匹配（若配置了）
-2. aud 必须有交集（若配置了）
-3. nbf 不能在未来
-4. iat 必须存在，且 now <= iat + RefreshTokenTTL
-```
+第一阶段使用 `jwt.WithoutClaimsValidation` 跳过时间校验，仅验证签名与结构合法性。第二阶段执行自定义的刷新策略校验：iss 必须匹配配置（若配置了），aud 必须与配置有交集（若配置了），nbf 不能在未来，iat 必须存在且满足 `now <= iat + RefreshTokenTTL`。
 
 ### 5.2 刷新窗口设计
 
-刷新窗口独立于访问令牌有效期：
-
-```go
-|←------- AccessTokenTTL -------→|←------- RefreshWindow ---------→|
-←--------------------------- RefreshTokenTTL ----------------------→
-  now                         iat + RefreshTTL
-```
-
-这种设计允许"访问令牌已过期但仍在刷新窗口内"的令牌续期，同时阻断超窗刷新。
+刷新窗口独立于访问令牌有效期。从签发时间开始，AccessTokenTTL 决定访问令牌的生命周期，RefreshTokenTTL 决定整个刷新窗口的长度。这种设计允许访问令牌已过期但仍在刷新窗口内的令牌续期，同时阻断超窗刷新。
 
 ### 5.3 重签机制
 
@@ -180,34 +147,15 @@ type Claims struct {
 
 ### 6.1 提取策略
 
-**单源模式**（配置 `TokenLookup`）：
+单源模式通过配置 `TokenLookup` 指定唯一来源，如 `header:Authorization`、`query:token` 或 `cookie:jwt`。
 
-```go
-token_lookup: "header:Authorization"   # 仅从 Header 提取
-token_lookup: "query:token"            # 仅从 Query 提取
-token_lookup: "cookie:jwt"             # 仅从 Cookie 提取
-```
-
-**多源回退模式**（`TokenLookup` 留空）：
-
-```go
-1. Header: Authorization: Bearer <token>
-2. Query: ?token=<token>
-3. Cookie: jwt=<token>
-```
-
-多源模式让同一配置可以同时支持 REST API（Header）、WebSocket（Query）、前端应用（Cookie）。
+多源回退模式在 `TokenLookup` 留空时生效，按顺序尝试三个来源：Header（`Authorization: Bearer <token>`）、Query（`?token=<token>`）、Cookie（`jwt=<token>`）。这种设计让同一配置可以同时支持 REST API（Header）、WebSocket（Query）、前端应用（Cookie）。
 
 ### 6.2 Gin 中间件行为
 
-```go
-1. 从请求提取 Token
-2. 调用 ValidateToken 验证
-3. 将 Claims 存入 gin.Context（键：auth:claims）
-4. 失败时返回 401，成功时调用 c.Next()
-```
+中间件首先从请求提取 Token，然后调用 `ValidateToken` 验证。验证成功后将 Claims 存入 `gin.Context`（键：`auth:claims`）并调用 `c.Next()`，失败则返回 401。
 
-注意：Token 缺失不计入验证失败指标，因为"用户未提供 Token"属于正常业务场景，而非验证错误。
+注意：Token 缺失不计入验证失败指标，因为用户未提供 Token 属于正常业务场景，而非验证错误。
 
 ### 6.3 角色鉴权（RequireRoles）
 
@@ -226,15 +174,7 @@ r.GET("/admin", auth.RequireRoles("admin", "editor"), handler)
 
 ### 7.1 JWT 结构
 
-JWT（JWS 格式）由三部分组成：
-
-```go
-base64url(header).base64url(payload).base64url(signature)
-```
-
-- **Header**：`{"alg":"HS256","typ":"JWT"}`
-- **Payload**：标准声明 + 业务声明
-- **Signature**：HMAC-SHA256(base64url(header) + "." + base64url(payload), secret)
+JWT（JWS 格式）由三部分组成：`base64url(header).base64url(payload).base64url(signature)`。Header 包含算法类型（`{"alg":"HS256","typ":"JWT"}`），Payload 包含标准声明与业务声明，Signature 是 HMAC-SHA256 签名结果。
 
 注意：JWT 默认不是加密格式，Payload 可被 Base64 解码查看，不应存放敏感明文。
 
@@ -283,7 +223,7 @@ sum by (error_type) (
 
 ## 9 认证体系之外的补充方式
 
-JWT 适合"无状态访问令牌"，但不是所有场景的唯一解。
+JWT 适合无状态访问令牌场景，但并非所有场景的唯一解。
 
 ### 9.1 Session + Cookie（有状态）
 
@@ -314,22 +254,11 @@ JWT 适合"无状态访问令牌"，但不是所有场景的唯一解。
 
 ### 10.1 推荐配置
 
-```yaml
-auth:
-  secret_key: "${JWT_SECRET}"          # 从环境变量读取
-  signing_method: "HS256"
-  issuer: "my-service"
-  audience: ["my-service-api"]
-  access_token_ttl: 15m
-  refresh_token_ttl: 168h              # 7 天
-  token_lookup: ""                     # 使用默认多源提取
-```
+生产环境推荐配置如下：secret_key 从环境变量读取，signing_method 使用 HS256，设置合理的 issuer 和 audience，access_token_ttl 建议 15 分钟，refresh_token_ttl 建议 7 天，token_lookup 留空使用默认多源提取。
 
 ### 10.2 密钥管理
 
-- 生产环境密钥必须从环境变量或密钥管理系统读取，不应硬编码
-- 密钥长度至少 32 字符（256 位），推荐使用随机生成的高熵字符串
-- 密钥轮换需要平滑过渡策略（双密钥验证期）
+生产环境密钥必须从环境变量或密钥管理系统读取，不应硬编码。密钥长度至少 32 字符（256 位），推荐使用随机生成的高熵字符串。密钥轮换需要平滑过渡策略（双密钥验证期）。
 
 ### 10.3 TTL 选择建议
 
@@ -341,22 +270,12 @@ auth:
 
 ### 10.4 常见误区
 
-- **误区 1**：在 Token 中存储大量用户信息
-  - 正确做法：只存必要的标识（user_id），详细信息从数据库查询
-- **误区 2**：认为 RefreshToken 可以无限期使用
-  - 正确做法：RefreshToken 也应有合理的有效期，超期需重新登录
-- **误区 3**：忽略登出场景
-  - 正确做法：JWT 本身不支持主动失效，登出可通过客户端删除 Token 实现；高安全场景需要维护黑名单
+在 Token 中存储大量用户信息是常见误区，正确做法是只存必要的标识（如 user_id），详细信息从数据库查询。认为 RefreshToken 可以无限期使用也是错误的，RefreshToken 也应有合理的有效期，超期需重新登录。对于登出场景，JWT 本身不支持主动失效，登出可通过客户端删除 Token 实现，高安全场景需要维护黑名单。
 
 ---
 
 ## 11 总结
 
-Genesis `auth` 提供了一套生产可用的 JWT 认证组件，其核心价值在于：
+Genesis `auth` 提供了一套生产可用的 JWT 认证组件，其核心价值在于：通过接口抽象实现可替换性，通过构造时校验确保配置安全下限，通过分段验证实现可控的刷新策略，通过可观测性支持生产监控。
 
-- 通过接口抽象实现可替换性
-- 通过构造时校验确保配置安全下限
-- 通过分段验证实现可控的刷新策略
-- 通过可观测性支持生产监控
-
-认证体系通常是组合拳：`auth` 解决的是"本地令牌能力"的核心拼图，而非替代全部身份基础设施。实际系统中，JWT 常与 Session、OAuth2、mTLS 等机制按场景组合使用。
+认证体系通常是组合拳：`auth` 解决的是本地令牌能力的核心拼图，而非替代全部身份基础设施。实际系统中，JWT 常与 Session、OAuth2、mTLS 等机制按场景组合使用。
