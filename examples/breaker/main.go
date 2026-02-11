@@ -16,15 +16,15 @@ import (
 
 	"github.com/ceyewan/genesis/breaker"
 	"github.com/ceyewan/genesis/clog"
-	pb "github.com/ceyewan/genesis/examples/breaker/proto"
+	pb "github.com/ceyewan/genesis/examples/proto/demo/v1"
 )
 
 func main() {
 	ctx := context.Background()
 
-	// 1. 创建 Logger
+	// 1. 创建 Logger（warn 级别，减少输出）
 	logger, err := clog.New(&clog.Config{
-		Level:  "info",
+		Level:  "warn",
 		Format: "console",
 		Output: "stdout",
 	})
@@ -54,8 +54,12 @@ func main() {
 	fmt.Println("\n=== 示例 2: 自定义降级逻辑 ===")
 	fallbackExample(ctx, logger, addr)
 
-	// 示例 3: 服务级粒度熔断
-	fmt.Println("\n=== 示例 3: 服务级粒度熔断 ===")
+	// 示例 3: 半开状态探测失败
+	fmt.Println("\n=== 示例 3: 半开状态探测失败 ===")
+	halfOpenFailureExample(ctx, logger, addr)
+
+	// 示例 4: 服务级粒度熔断
+	fmt.Println("\n=== 示例 4: 服务级粒度熔断 ===")
 	multiServiceExample(ctx, logger)
 
 	fmt.Println("\n=== 示例完成 ===")
@@ -94,7 +98,7 @@ func basicExample(ctx context.Context, logger clog.Logger, addr string) {
 	}
 	defer conn.Close()
 
-	client := pb.NewTestServiceClient(conn)
+	client := pb.NewOrderServiceClient(conn)
 
 	fmt.Println("配置: FailureRatio=50%, MinimumRequests=5, Timeout=5s")
 	fmt.Println()
@@ -102,14 +106,15 @@ func basicExample(ctx context.Context, logger clog.Logger, addr string) {
 	// 阶段 1: 正常请求
 	fmt.Println("阶段 1: 发送 3 个正常请求")
 	for i := 0; i < 3; i++ {
-		resp, err := client.Call(ctx, &pb.CallRequest{
-			Message:    fmt.Sprintf("normal-%d", i+1),
-			ShouldFail: false,
+		resp, err := client.CreateOrder(ctx, &pb.CreateOrderRequest{
+			OrderId:     fmt.Sprintf("normal-%d", i+1),
+			Description: fmt.Sprintf("test order %d", i+1),
+			ShouldFail:  false,
 		})
 		if err != nil {
 			fmt.Printf("  请求 %d: ✗ 失败 - %v\n", i+1, err)
 		} else {
-			fmt.Printf("  请求 %d: ✓ 成功 - %s\n", i+1, resp.Message)
+			fmt.Printf("  请求 %d: ✓ 成功 - %s\n", i+1, resp.OrderId)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -117,9 +122,10 @@ func basicExample(ctx context.Context, logger clog.Logger, addr string) {
 	// 阶段 2: 触发熔断（发送失败请求）
 	fmt.Println("\n阶段 2: 发送 10 个失败请求（触发熔断）")
 	for i := 0; i < 10; i++ {
-		resp, err := client.Call(ctx, &pb.CallRequest{
-			Message:    fmt.Sprintf("fail-%d", i+1),
-			ShouldFail: true,
+		resp, err := client.CreateOrder(ctx, &pb.CreateOrderRequest{
+			OrderId:     fmt.Sprintf("fail-%d", i+1),
+			Description: fmt.Sprintf("failing order %d", i+1),
+			ShouldFail:  true,
 		})
 		if err != nil {
 			// 检查是否是熔断错误
@@ -129,7 +135,7 @@ func basicExample(ctx context.Context, logger clog.Logger, addr string) {
 				fmt.Printf("  请求 %d: ✗ 失败 - %v\n", i+1, err)
 			}
 		} else {
-			fmt.Printf("  请求 %d: ✓ 成功 - %s\n", i+1, resp.Message)
+			fmt.Printf("  请求 %d: ✓ 成功 - %s\n", i+1, resp.OrderId)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -148,14 +154,15 @@ func basicExample(ctx context.Context, logger clog.Logger, addr string) {
 	// 阶段 4: 半开状态探测（发送正常请求）
 	fmt.Println("\n阶段 4: 发送正常请求（探测恢复）")
 	for i := 0; i < 5; i++ {
-		resp, err := client.Call(ctx, &pb.CallRequest{
-			Message:    fmt.Sprintf("recovery-%d", i+1),
-			ShouldFail: false,
+		resp, err := client.CreateOrder(ctx, &pb.CreateOrderRequest{
+			OrderId:     fmt.Sprintf("recovery-%d", i+1),
+			Description: fmt.Sprintf("recovery order %d", i+1),
+			ShouldFail:  false,
 		})
 		if err != nil {
 			fmt.Printf("  请求 %d: ✗ 失败 - %v\n", i+1, err)
 		} else {
-			fmt.Printf("  请求 %d: ✓ 成功 - %s\n", i+1, resp.Message)
+			fmt.Printf("  请求 %d: ✓ 成功 - %s\n", i+1, resp.OrderId)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -176,9 +183,6 @@ func fallbackExample(ctx context.Context, logger clog.Logger, addr string) {
 	},
 		breaker.WithLogger(logger),
 		breaker.WithFallback(func(ctx context.Context, serviceName string, err error) error {
-			logger.Warn("circuit breaker open, using fallback",
-				clog.String("service", serviceName),
-				clog.Error(err))
 			fmt.Printf("  ⚡ 熔断器打开，执行降级逻辑（返回缓存数据）\n")
 			return nil // 返回 nil 表示降级成功
 		}),
@@ -199,7 +203,7 @@ func fallbackExample(ctx context.Context, logger clog.Logger, addr string) {
 	}
 	defer conn.Close()
 
-	client := pb.NewTestServiceClient(conn)
+	client := pb.NewOrderServiceClient(conn)
 
 	fmt.Println("配置: 带自定义降级逻辑")
 	fmt.Println()
@@ -207,9 +211,10 @@ func fallbackExample(ctx context.Context, logger clog.Logger, addr string) {
 	// 触发熔断
 	fmt.Println("阶段 1: 发送失败请求触发熔断")
 	for i := 0; i < 10; i++ {
-		_, err := client.Call(ctx, &pb.CallRequest{
-			Message:    fmt.Sprintf("fail-%d", i+1),
-			ShouldFail: true,
+		_, err := client.CreateOrder(ctx, &pb.CreateOrderRequest{
+			OrderId:     fmt.Sprintf("fail-%d", i+1),
+			Description: fmt.Sprintf("failing order %d", i+1),
+			ShouldFail:  true,
 		})
 		if err != nil {
 			fmt.Printf("  请求 %d: ✗ 失败\n", i+1)
@@ -218,6 +223,87 @@ func fallbackExample(ctx context.Context, logger clog.Logger, addr string) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// halfOpenFailureExample 半开状态探测失败示例
+func halfOpenFailureExample(ctx context.Context, logger clog.Logger, _ string) {
+	// 创建一个可控的测试服务器
+	server, testAddr := startTestServer("half-open-test")
+	defer server.Stop()
+
+	// 创建熔断器（短超时，便于观察）
+	brk, err := breaker.New(&breaker.Config{
+		MaxRequests:     1,               // 半开状态只允许 1 个探测请求
+		Timeout:         3 * time.Second, // 熔断 3 秒后进入半开状态
+		FailureRatio:    0.5,
+		MinimumRequests: 2,
+	}, breaker.WithLogger(logger))
+	if err != nil {
+		logger.Error("failed to create breaker", clog.Error(err))
+		return
+	}
+
+	conn, err := grpc.NewClient(
+		testAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
+	)
+	if err != nil {
+		logger.Error("failed to dial", clog.Error(err))
+		return
+	}
+	defer conn.Close()
+
+	client := pb.NewOrderServiceClient(conn)
+
+	fmt.Println("配置: MaxRequests=1（半开状态只允许 1 个探测请求）, Timeout=3s")
+	fmt.Println()
+
+	// 阶段 1: 触发熔断
+	fmt.Println("阶段 1: 发送失败请求触发熔断")
+	for i := 0; i < 5; i++ {
+		_, _ = client.CreateOrder(ctx, &pb.CreateOrderRequest{
+			OrderId:    fmt.Sprintf("fail-%d", i+1),
+			ShouldFail: true,
+		})
+	}
+	state, _ := brk.State(testAddr)
+	fmt.Printf("✓ 熔断器状态: %s\n\n", state)
+
+	// 阶段 2: 等待进入半开状态
+	fmt.Println("阶段 2: 等待 4 秒后熔断器进入半开状态...")
+	time.Sleep(4 * time.Second)
+	state, _ = brk.State(testAddr)
+	fmt.Printf("✓ 熔断器状态: %s\n\n", state)
+
+	// 阶段 3: 发送失败的探测请求
+	fmt.Println("阶段 3: 发送失败的探测请求（应该重新打开熔断器）")
+	_, err = client.CreateOrder(ctx, &pb.CreateOrderRequest{
+		OrderId:    "probe-fail",
+		ShouldFail: true,
+	})
+	if err != nil {
+		fmt.Printf("  探测请求失败: %v\n", err)
+	}
+	state, _ = brk.State(testAddr)
+	fmt.Printf("✓ 熔断器状态: %s（探测失败，重新打开）\n\n", state)
+
+	// 阶段 4: 验证熔断器仍然是打开状态
+	fmt.Println("阶段 4: 验证熔断器仍然打开（后续请求被拒绝）")
+	for i := 0; i < 3; i++ {
+		_, err := client.CreateOrder(ctx, &pb.CreateOrderRequest{
+			OrderId:    fmt.Sprintf("after-probe-%d", i+1),
+			ShouldFail: false,
+		})
+		if errors.Is(err, breaker.ErrOpenState) {
+			fmt.Printf("  请求 %d: ⚡ 被熔断器拒绝\n", i+1)
+		} else {
+			fmt.Printf("  请求 %d: ✗ 意外结果: %v\n", i+1, err)
+		}
+	}
+	state, _ = brk.State(testAddr)
+	fmt.Printf("\n✓ 最终熔断器状态: %s\n", state)
+	fmt.Println("\n✓ 验证成功：半开状态探测失败后，熔断器重新打开！")
 }
 
 // multiServiceExample 服务级粒度熔断示例
@@ -256,22 +342,24 @@ func multiServiceExample(ctx context.Context, logger clog.Logger) {
 		grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()))
 	defer conn2.Close()
 
-	client1 := pb.NewTestServiceClient(conn1)
-	client2 := pb.NewTestServiceClient(conn2)
+	client1 := pb.NewOrderServiceClient(conn1)
+	client2 := pb.NewOrderServiceClient(conn2)
 
 	// 只让服务 1 失败
 	fmt.Println("阶段 1: 服务 1 频繁失败，服务 2 正常")
 	for i := 0; i < 10; i++ {
 		// 服务 1 失败
-		_, err1 := client1.Call(ctx, &pb.CallRequest{
-			Message:    fmt.Sprintf("service1-fail-%d", i+1),
-			ShouldFail: true,
+		_, err1 := client1.CreateOrder(ctx, &pb.CreateOrderRequest{
+			OrderId:     fmt.Sprintf("service1-fail-%d", i+1),
+			Description: fmt.Sprintf("failing order %d", i+1),
+			ShouldFail:  true,
 		})
 
 		// 服务 2 正常
-		_, err2 := client2.Call(ctx, &pb.CallRequest{
-			Message:    fmt.Sprintf("service2-ok-%d", i+1),
-			ShouldFail: false,
+		_, err2 := client2.CreateOrder(ctx, &pb.CreateOrderRequest{
+			OrderId:     fmt.Sprintf("service2-ok-%d", i+1),
+			Description: fmt.Sprintf("normal order %d", i+1),
+			ShouldFail:  false,
 		})
 
 		status1 := "✗ 失败"
@@ -310,8 +398,9 @@ func startTestServer(serverID string) (*grpc.Server, string) {
 	// 注册测试服务
 	testSvc := &testServer{
 		serverID: serverID,
+		addr:     addr,
 	}
-	pb.RegisterTestServiceServer(server, testSvc)
+	pb.RegisterOrderServiceServer(server, testSvc)
 
 	// 启动服务器
 	go func() {
@@ -328,12 +417,13 @@ func startTestServer(serverID string) (*grpc.Server, string) {
 
 // testServer 实现测试服务
 type testServer struct {
-	pb.UnimplementedTestServiceServer
+	pb.UnimplementedOrderServiceServer
 	serverID     string
+	addr         string
 	requestCount atomic.Int64
 }
 
-func (s *testServer) Call(ctx context.Context, req *pb.CallRequest) (*pb.CallResponse, error) {
+func (s *testServer) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*pb.CreateOrderResponse, error) {
 	count := s.requestCount.Add(1)
 
 	// 如果请求要求失败，则返回错误
@@ -341,27 +431,31 @@ func (s *testServer) Call(ctx context.Context, req *pb.CallRequest) (*pb.CallRes
 		return nil, status.Errorf(codes.Internal, "simulated failure")
 	}
 
-	resp := &pb.CallResponse{
-		Message:   req.Message,
-		ServerId:  s.serverID,
-		Timestamp: time.Now().Unix(),
+	resp := &pb.CreateOrderResponse{
+		OrderId:    req.OrderId,
+		Status:     "created",
+		Amount:     req.Amount,
+		Timestamp:  time.Now().Unix(),
+		ServerId:   s.serverID,
+		ServerAddr: s.addr,
 	}
 
-	log.Printf("[%s] Request #%d: %s -> %s", s.serverID, count, req.Message, resp.Message)
+	log.Printf("[%s] Request #%d: %s -> %s", s.serverID, count, req.OrderId, resp.OrderId)
 
 	return resp, nil
 }
 
-func (s *testServer) StreamCall(stream pb.TestService_StreamCallServer) error {
+func (s *testServer) StreamOrders(stream pb.OrderService_StreamOrdersServer) error {
 	for {
 		req, err := stream.Recv()
 		if err != nil {
 			return err
 		}
 
-		resp := &pb.StreamResponse{
+		resp := &pb.StreamOrdersResponse{
 			Message:   req.Message,
 			Timestamp: time.Now().Unix(),
+			ServerId:  s.serverID,
 		}
 
 		if err := stream.Send(resp); err != nil {

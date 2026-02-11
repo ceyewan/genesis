@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package demo.v1;
+
+option go_package = "github.com/ceyewan/genesis/examples/proto/demo/v1;pb";
+
+// OrderService 订单服务（用于演示各种组件功能）
+service OrderService {
+  // CreateOrder 创建订单（一元调用）
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+
+  // StreamOrders 订单流式接口
+  rpc StreamOrders(stream StreamOrdersRequest) returns (stream StreamOrdersResponse);
+}
+
+// CreateOrderRequest 创建订单请求
+message CreateOrderRequest {
+  // 幂等性键（idem 组件使用）
+  string idempotency_key = 1;
+
+  // 订单基本信息
+  string order_id = 2;
+  string customer_id = 3;
+  double amount = 4;
+  string description = 5;
+
+  // 测试控制字段（breaker 组件使用）
+  bool should_fail = 10; // 是否应该失败（用于模拟故障）
+}
+
+// CreateOrderResponse 创建订单响应
+message CreateOrderResponse {
+  string order_id = 1;
+  string status = 2;
+  double amount = 3;
+  int64 timestamp = 4;
+
+  // 服务信息（registry 组件使用）
+  string server_id = 10; // 服务器唯一标识
+  string server_addr = 11; // 服务器地址
+}
+
+// StreamOrdersRequest 流式请求
+message StreamOrdersRequest {
+  string message = 1;
+}
+
+// StreamOrdersResponse 流式响应
+message StreamOrdersResponse {
+  string message = 1;
+  int64 timestamp = 2;
+  string server_id = 3;
+}
