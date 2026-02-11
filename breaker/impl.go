@@ -3,7 +3,6 @@ package breaker
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
@@ -22,65 +21,48 @@ type circuitBreaker struct {
 }
 
 // newBreaker 创建熔断器实例（内部函数）
+// 注意：cfg 已在 New() 中调用 validate() 设置了默认值，logger 已在 WithLogger() 中处理
 func newBreaker(
 	cfg *Config,
 	logger clog.Logger,
 	fallback FallbackFunc,
 ) (Breaker, error) {
-	// 设置默认值
-	if cfg.MaxRequests == 0 {
-		cfg.MaxRequests = 1
-	}
-	if cfg.Timeout == 0 {
-		cfg.Timeout = 60 * time.Second
-	}
-	if cfg.FailureRatio == 0 {
-		cfg.FailureRatio = 0.6
-	}
-	if cfg.MinimumRequests == 0 {
-		cfg.MinimumRequests = 10
-	}
-
 	cb := &circuitBreaker{
 		cfg:      cfg,
 		logger:   logger,
 		fallback: fallback,
 	}
 
-	if logger != nil {
-		logger.Info("circuit breaker created",
-			clog.Int("max_requests", int(cfg.MaxRequests)),
-			clog.Duration("timeout", cfg.Timeout),
-			clog.Float64("failure_ratio", cfg.FailureRatio),
-			clog.Int("minimum_requests", int(cfg.MinimumRequests)))
-	}
+	logger.Info("circuit breaker created",
+		clog.Int("max_requests", int(cfg.MaxRequests)),
+		clog.Duration("timeout", cfg.Timeout),
+		clog.Float64("failure_ratio", cfg.FailureRatio),
+		clog.Int("minimum_requests", int(cfg.MinimumRequests)))
 
 	return cb, nil
 }
 
 // Execute 执行受熔断保护的函数
-func (cb *circuitBreaker) Execute(ctx context.Context, serviceName string, fn func() (interface{}, error)) (interface{}, error) {
-	if serviceName == "" {
+func (cb *circuitBreaker) Execute(ctx context.Context, key string, fn func() (interface{}, error)) (interface{}, error) {
+	if key == "" {
 		return nil, ErrKeyEmpty
 	}
 
-	// 获取或创建服务级熔断器
-	breaker := cb.getOrCreateBreaker(serviceName)
+	// 获取或创建熔断器
+	breaker := cb.getOrCreateBreaker(key)
 
 	// 执行熔断保护的函数
 	result, err := breaker.Execute(fn)
 
 	// 如果熔断器打开且配置了降级函数
 	if err != nil && xerrors.Is(err, gobreaker.ErrOpenState) {
-		if cb.logger != nil {
-			cb.logger.Warn("circuit breaker open",
-				clog.String("service", serviceName),
-				clog.Error(err))
-		}
+		cb.logger.Info("circuit breaker open, initiating fallback",
+			clog.String("key", key),
+			clog.Error(err))
 
 		// 执行降级逻辑
 		if cb.fallback != nil {
-			fallbackErr := cb.fallback(ctx, serviceName, err)
+			fallbackErr := cb.fallback(ctx, key, err)
 			if fallbackErr == nil {
 				return nil, nil
 			}
@@ -93,13 +75,13 @@ func (cb *circuitBreaker) Execute(ctx context.Context, serviceName string, fn fu
 	return result, err
 }
 
-// State 获取指定服务的熔断器状态
-func (cb *circuitBreaker) State(serviceName string) (State, error) {
-	if serviceName == "" {
+// State 获取指定键的熔断器状态
+func (cb *circuitBreaker) State(key string) (State, error) {
+	if key == "" {
 		return StateClosed, ErrKeyEmpty
 	}
 
-	val, ok := cb.breakers.Load(serviceName)
+	val, ok := cb.breakers.Load(key)
 	if !ok {
 		return StateClosed, nil
 	}
@@ -119,16 +101,16 @@ func (cb *circuitBreaker) State(serviceName string) (State, error) {
 	}
 }
 
-// getOrCreateBreaker 获取或创建服务级熔断器
-func (cb *circuitBreaker) getOrCreateBreaker(serviceName string) *gobreaker.CircuitBreaker[interface{}] {
-	val, ok := cb.breakers.Load(serviceName)
+// getOrCreateBreaker 获取或创建指定键的熔断器
+func (cb *circuitBreaker) getOrCreateBreaker(key string) *gobreaker.CircuitBreaker[interface{}] {
+	val, ok := cb.breakers.Load(key)
 	if ok {
 		return val.(*gobreaker.CircuitBreaker[interface{}])
 	}
 
 	// 创建新的熔断器
 	settings := gobreaker.Settings{
-		Name:        serviceName,
+		Name:        key,
 		MaxRequests: cb.cfg.MaxRequests,
 		Interval:    cb.cfg.Interval,
 		Timeout:     cb.cfg.Timeout,
@@ -141,7 +123,7 @@ func (cb *circuitBreaker) getOrCreateBreaker(serviceName string) *gobreaker.Circ
 	breaker := gobreaker.NewCircuitBreaker[interface{}](settings)
 
 	// 存储熔断器（可能有并发创建，使用 LoadOrStore）
-	actual, _ := cb.breakers.LoadOrStore(serviceName, breaker)
+	actual, _ := cb.breakers.LoadOrStore(key, breaker)
 	return actual.(*gobreaker.CircuitBreaker[interface{}])
 }
 

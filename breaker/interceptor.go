@@ -13,20 +13,10 @@ import (
 //
 // 使用示例:
 //
-//	// 默认行为（服务级别熔断）
+//	// 默认行为（服务级别熔断），key 为 cc.Target()，即服务地址
 //	conn, _ := grpc.NewClient(
 //	    "localhost:9001",
 //	    grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
-//	)
-//
-//	// 自定义 Key（例如使用方法名）
-//	conn, _ := grpc.NewClient(
-//	    "etcd:///logic-service",
-//	    grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor(
-//	        breaker.WithKeyFunc(func(ctx context.Context, fullMethod string, cc *grpc.ClientConn) string {
-//	            return fullMethod
-//	        }),
-//	    )),
 //	)
 func (cb *circuitBreaker) UnaryClientInterceptor(opts ...InterceptorOption) grpc.UnaryClientInterceptor {
 	// 默认使用服务级别 Key

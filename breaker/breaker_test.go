@@ -32,11 +32,14 @@ func TestNewBreaker(t *testing.T) {
 	}
 }
 
-// TestNewBreakerNilConfig 测试 nil 配置
+// TestNewBreakerNilConfig 测试 nil 配置（应使用默认配置）
 func TestNewBreakerNilConfig(t *testing.T) {
-	_, err := New(nil)
-	if err == nil {
-		t.Fatal("New with nil config should return error")
+	brk, err := New(nil)
+	if err != nil {
+		t.Fatalf("New with nil config should not return error, got: %v", err)
+	}
+	if brk == nil {
+		t.Fatal("New with nil config should return a valid breaker")
 	}
 }
 
