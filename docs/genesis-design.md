@@ -109,6 +109,8 @@ Genesis 所有组件统一使用 L0 基础组件，确保一致的可观测性�
 
 - **metrics:** 基于 OpenTelemetry 的指标收集能力。所有组件通过 `WithMeter` 注入，自动埋点。
 
+- **trace:** 基于 OpenTelemetry 的链路追踪工具库，提供 SDK 初始化与传播辅助函数。
+
 - **xerrors:** 统一的错误码和错误包装器。所有组件使用 `xerrors` 定义 Sentinel Errors 和包装错误。
 
 ### 4.2. Level 1: 连接器 (Connectors)
@@ -270,7 +272,7 @@ genesis/
 ├── ratelimit/                # 限流 (L3) - 扁平化
 ├── registry/                 # 服务注册 (L3) - 扁平化
 ├── testkit/                  # 测试工具包
-├── trace/                    # 链路追踪工具
+├── trace/                    # 链路追踪 (L0) - 扁平化
 ├── xerrors/                  # 错误处理 (L0) - 扁平化
 ├── docs/                     # 设计文档
 ├── examples/                 # 使用示例
