@@ -123,9 +123,9 @@ make example-all
 
 ## 🗺️ 版本状态
 
-### v0.2.0 (已发布)
+### v0.4.0 (即将发布)
 
-- **Base (L0):** clog, config, metrics, xerrors
+- **Base (L0):** clog, config, metrics, trace, xerrors
 - **Infrastructure (L1):** connector, db
 - **Business (L2):** cache, dlock, idgen, mq, idem
 - **Governance (L3):** auth, ratelimit, breaker, registry
