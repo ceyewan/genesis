@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/clog"
 	natsgo "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,6 +21,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/redis"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"gorm.io/gorm"
+
+	"github.com/ceyewan/genesis/clog"
 )
 
 // getTestLogger 返回测试用日志记录器

@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/connector"
 	"github.com/stretchr/testify/require"
 	kafkacontainer "github.com/testcontainers/testcontainers-go/modules/kafka"
 	"github.com/twmb/franz-go/pkg/kgo"
+
+	"github.com/ceyewan/genesis/connector"
 )
 
 // NewKafkaContainerConfig 使用 testcontainers 创建 Kafka 容器并返回配置

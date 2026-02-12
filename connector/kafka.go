@@ -6,10 +6,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/xerrors"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
+
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 type kafkaConnector struct {

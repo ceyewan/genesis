@@ -73,6 +73,7 @@ Viper 内部并非将所有配置合并到一个 map，而是维护多个独立�
 ### 3.2 优先级：Get 时的查找顺序
 
 Viper 的优先级从高到低依次为：
+
 1. 显式 Set
 2. 命令行参数
 3. 环境变量
@@ -131,6 +132,7 @@ Viper 的 `AutomaticEnv` 会在 `Get` 时自动查找对应的环境变量。key
 ### 5.1 文件监听的挑战
 
 直接监听配置文件会遇到以下问题：
+
 - 许多编辑器（Vim、VS Code）使用写临时文件到 rename 的方式保存，导致原文件被 rename 后 watcher 失效。
 - 一次保存可能触发多个事件（Write、Chmod 等）。
 - 某些编辑器会先 truncate 再 write，可能读到空文件。
@@ -154,6 +156,7 @@ Viper 的 `AutomaticEnv` 会在 `Get` 时自动查找对应的环境变量。key
 ### 5.4 并发安全：读写锁 + 单例 watcher
 
 使用 `sync.RWMutex` 保护配置读写：
+
 - **读操作**：使用读锁，允许多 goroutine 并发读取配置。
 - **写操作**：使用写锁，确保配置更新与 watcher 启动的原子性。
 

@@ -6,13 +6,13 @@
 
 ## 特性
 
-| 特性 | Redis 驱动 | Memory 驱动 |
-|------|-----------|-------------|
-| Key-Value | ✅ | ✅ |
-| Hash | ✅ | ❌ |
-| Sorted Set | ✅ | ❌ |
-| List | ✅ | ❌ |
-| MSet/MGet | ✅ | ❌ |
+| 特性       | Redis 驱动 | Memory 驱动 |
+| ---------- | ---------- | ----------- |
+| Key-Value  | ✅         | ✅          |
+| Hash       | ✅         | ❌          |
+| Sorted Set | ✅         | ❌          |
+| List       | ✅         | ❌          |
+| MSet/MGet  | ✅         | ❌          |
 
 ## 快速开始
 

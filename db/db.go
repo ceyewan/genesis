@@ -72,12 +72,13 @@ package db
 import (
 	"context"
 
-	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/xerrors"
 	"github.com/uptrace/opentelemetry-go-extra/otelgorm"
 	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 	"gorm.io/sharding"
+
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // database 是 DB 接口的实现

@@ -7,14 +7,15 @@ import (
 	"net"
 	"time"
 
-	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/connector"
-	pb "github.com/ceyewan/genesis/examples/grpc-registry/proto"
-	"github.com/ceyewan/genesis/registry"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
+	pb "github.com/ceyewan/genesis/examples/grpc-registry/proto"
+	"github.com/ceyewan/genesis/registry"
 )
 
 // 演示 gRPC Resolver 动态服务发现功能

@@ -8,15 +8,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/examples/observability/internal/bootstrap"
 	"github.com/ceyewan/genesis/examples/observability/proto"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/trace"
 	"github.com/ceyewan/genesis/xerrors"
-	"github.com/gin-gonic/gin"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (

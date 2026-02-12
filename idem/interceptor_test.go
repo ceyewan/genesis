@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/testkit"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/ceyewan/genesis/testkit"
 )
 
 func TestUnaryServerInterceptor(t *testing.T) {
@@ -32,13 +33,15 @@ func TestUnaryServerInterceptor(t *testing.T) {
 
 	// 模拟 Handler
 	var handlerExecCount int32
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	//nolint:unparam
+	handler := func(_ context.Context, _ interface{}) (interface{}, error) {
 		atomic.AddInt32(&handlerExecCount, 1)
 		// 返回一个 proto.Message
 		return wrapperspb.String("success"), nil
 	}
 
-	errorHandler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	//nolint:unparam
+	errorHandler := func(_ context.Context, _ interface{}) (interface{}, error) {
 		atomic.AddInt32(&handlerExecCount, 1)
 		return nil, errors.New("rpc error")
 	}
@@ -153,6 +156,9 @@ func TestUnaryServerInterceptor(t *testing.T) {
 		resp, err = interceptor(ctx, "req", info, nonProtoHandler)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
+		}
+		if resp != "not-a-proto-message" {
+			t.Errorf("unexpected response: %v", resp)
 		}
 
 		if atomic.LoadInt32(&handlerExecCount) != currentCount+1 {

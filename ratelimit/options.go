@@ -11,9 +11,9 @@ type Option func(*options)
 
 // options 组件初始化选项配置（内部使用，小写）
 type options struct {
-	logger      clog.Logger
-	meter       metrics.Meter
-	redisConn   connector.RedisConnector
+	logger    clog.Logger
+	meter     metrics.Meter
+	redisConn connector.RedisConnector
 }
 
 // WithLogger 设置 Logger

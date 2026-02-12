@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/connector"
 	"github.com/stretchr/testify/require"
 	etcdcontainer "github.com/testcontainers/testcontainers-go/modules/etcd"
 	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"github.com/ceyewan/genesis/connector"
 )
 
 // NewEtcdContainerConfig 使用 testcontainers 创建 Etcd 容器并返回配置

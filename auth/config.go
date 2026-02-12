@@ -3,8 +3,9 @@ package auth
 import (
 	"time"
 
-	"github.com/ceyewan/genesis/xerrors"
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // Config Auth 配置

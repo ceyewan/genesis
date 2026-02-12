@@ -5,13 +5,14 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ceyewan/genesis/clog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"github.com/ceyewan/genesis/clog"
 )
 
 // ============================================================

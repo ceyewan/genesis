@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"log"
 
+	"gorm.io/gorm"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/db"
-	"gorm.io/gorm"
 )
 
 // Order 订单模型（分片表）
@@ -22,7 +23,7 @@ type Order struct {
 
 // Product 产品模型（非分片表）
 type Product struct {
-	ID    uint64  `gorm:"primaryKey"`
+	ID    uint64 `gorm:"primaryKey"`
 	Name  string
 	Price float64
 }

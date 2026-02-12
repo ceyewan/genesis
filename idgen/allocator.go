@@ -277,7 +277,11 @@ func (a *etcdAllocator) Allocate(ctx context.Context) (int64, error) {
 			Commit()
 		if err != nil {
 			// 清理已创建的 Lease
-			a.client.Revoke(context.Background(), lease.ID)
+			if _, revokeErr := a.client.Revoke(context.Background(), lease.ID); revokeErr != nil {
+				if a.logger != nil {
+					a.logger.Warn("etcd revoke lease failed during cleanup", clog.Error(revokeErr))
+				}
+			}
 			if a.logger != nil {
 				a.logger.Error("etcd txn failed",
 					clog.Error(err),
@@ -305,7 +309,11 @@ func (a *etcdAllocator) Allocate(ctx context.Context) (int64, error) {
 	}
 
 	// 所有 ID 都被占用，清理 Lease
-	a.client.Revoke(context.Background(), lease.ID)
+	if _, revokeErr := a.client.Revoke(context.Background(), lease.ID); revokeErr != nil {
+		if a.logger != nil {
+			a.logger.Warn("etcd revoke lease failed during cleanup", clog.Error(revokeErr))
+		}
+	}
 	return 0, xerrors.WithCode(ErrWorkerIDExhausted, "no_available_worker_id")
 }
 

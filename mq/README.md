@@ -12,26 +12,26 @@
 
 ## 支持的后端
 
-| 驱动 | 说明 | 持久化 | 消息确认 | 队列组 |
-|------|------|--------|----------|--------|
-| `nats_core` | NATS Core（高性能） | ❌ | ❌ | ✅ |
-| `nats_jetstream` | NATS JetStream | ✅ | ✅ | ✅ |
-| `redis_stream` | Redis Stream | ✅ | ✅ | ✅ |
-| `kafka` | Kafka（预留） | - | - | - |
+| 驱动             | 说明                | 持久化 | 消息确认 | 队列组 |
+| ---------------- | ------------------- | ------ | -------- | ------ |
+| `nats_core`      | NATS Core（高性能） | ❌     | ❌       | ✅     |
+| `nats_jetstream` | NATS JetStream      | ✅     | ✅       | ✅     |
+| `redis_stream`   | Redis Stream        | ✅     | ✅       | ✅     |
+| `kafka`          | Kafka（预留）       | -      | -        | -      |
 
 ## 特性对比
 
-| 特性 | NATS Core | JetStream | Redis Stream |
-|------|-----------|-----------|--------------|
-| 持久化 | ❌ | ✅ | ✅ |
-| 消息确认 (Ack) | ❌ | ✅ | ✅ |
-| 消息拒绝 (Nak) | ❌ | ✅ | ❌* |
-| 队列组 | ✅ | ✅ | ✅ |
-| 批量消费 | ❌ | ✅ | ✅ |
-| 最大在途限制 | ❌ | ✅ | ❌ |
-| 持久化订阅 | ❌ | ✅ | ✅ |
+| 特性           | NATS Core | JetStream | Redis Stream |
+| -------------- | --------- | --------- | ------------ |
+| 持久化         | ❌        | ✅        | ✅           |
+| 消息确认 (Ack) | ❌        | ✅        | ✅           |
+| 消息拒绝 (Nak) | ❌        | ✅        | ❌\*         |
+| 队列组         | ✅        | ✅        | ✅           |
+| 批量消费       | ❌        | ✅        | ✅           |
+| 最大在途限制   | ❌        | ✅        | ❌           |
+| 持久化订阅     | ❌        | ✅        | ✅           |
 
-*Redis Stream 无原生 Nak，消息留在 Pending 列表可被 XCLAIM
+\*Redis Stream 无原生 Nak，消息留在 Pending 列表可被 XCLAIM
 
 ## 快速开始
 
@@ -269,12 +269,12 @@ var DefaultRetryConfig = RetryConfig{
 
 ## 指标
 
-| 指标名 | 类型 | 描述 |
-|--------|------|------|
-| `mq.publish.total` | Counter | 发布消息总数 |
+| 指标名                | 类型      | 描述          |
+| --------------------- | --------- | ------------- |
+| `mq.publish.total`    | Counter   | 发布消息总数  |
 | `mq.publish.duration` | Histogram | 发布延迟 (秒) |
-| `mq.consume.total` | Counter | 消费消息总数 |
-| `mq.handle.duration` | Histogram | 处理耗时 (秒) |
+| `mq.consume.total`    | Counter   | 消费消息总数  |
+| `mq.handle.duration`  | Histogram | 处理耗时 (秒) |
 
 标签：`topic`、`status`、`driver`
 

@@ -56,14 +56,14 @@ type Logger interface {
 
 `clog.Config` 支持以下配置：
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `Level` | string | `info` | 日志级别 |
-| `Format` | string | `console` | 输出格式：`json` 或 `console` |
-| `Output` | string | `stdout` | 输出目标：`stdout`、`stderr` 或文件路径 |
-| `EnableColor` | bool | `false` | 是否启用彩色输出（仅 console 格式） |
-| `AddSource` | bool | `false` | 是否添加调用源信息 |
-| `SourceRoot` | string | - | 用于裁剪文件路径，获取相对路径 |
+| 字段          | 类型   | 默认值    | 说明                                    |
+| ------------- | ------ | --------- | --------------------------------------- |
+| `Level`       | string | `info`    | 日志级别                                |
+| `Format`      | string | `console` | 输出格式：`json` 或 `console`           |
+| `Output`      | string | `stdout`  | 输出目标：`stdout`、`stderr` 或文件路径 |
+| `EnableColor` | bool   | `false`   | 是否启用彩色输出（仅 console 格式）     |
+| `AddSource`   | bool   | `false`   | 是否添加调用源信息                      |
+| `SourceRoot`  | string | -         | 用于裁剪文件路径，获取相对路径          |
 
 提供两个便捷工厂函数：
 
@@ -269,12 +269,12 @@ if !l.handler.Enabled(ctx, slogLevel) {
 
 ### 7.1 三级错误字段
 
-| 函数                              | 输出结构                                                     | 适用场景       |
-| ------------------------------- | -------------------------------------------------------- | ---------- |
+| 函数                            | 输出结构                                                 | 适用场景             |
+| ------------------------------- | -------------------------------------------------------- | -------------------- |
 | `Error(err)`                    | `err_msg="message"`                                      | 一般错误，大多数场景 |
-| `ErrorWithCode(err, code)`      | `error={msg="...", code="..."}`                          | 需要错误分类/统计  |
-| `ErrorWithStack(err)`           | `error={msg="...", type="...", stack="..."}`             | 需要定位问题     |
-| `ErrorWithCodeStack(err, code)` | `error={msg="...", type="...", code="...", stack="..."}` | 严重错误排查     |
+| `ErrorWithCode(err, code)`      | `error={msg="...", code="..."}`                          | 需要错误分类/统计    |
+| `ErrorWithStack(err)`           | `error={msg="...", type="...", stack="..."}`             | 需要定位问题         |
+| `ErrorWithCodeStack(err, code)` | `error={msg="...", type="...", code="...", stack="..."}` | 严重错误排查         |
 
 ### 7.2 堆栈捕获
 
@@ -302,13 +302,13 @@ if !l.handler.Enabled(ctx, slogLevel) {
 
 ### 8.2 颜色映射
 
-| 级别 | 颜色 | 说明 |
-|------|------|------|
-| DEBUG | 紫色 | 显眼但不刺眼 |
-| INFO | 绿色 | 正常状态 |
-| WARN | 黄色 | 警告 |
-| ERROR | 粗体红色 | 错误 |
-| FATAL | 红底白字粗体 | 致命错误 |
+| 级别  | 颜色         | 说明         |
+| ----- | ------------ | ------------ |
+| DEBUG | 紫色         | 显眼但不刺眼 |
+| INFO  | 绿色         | 正常状态     |
+| WARN  | 黄色         | 警告         |
+| ERROR | 粗体红色     | 错误         |
+| FATAL | 红底白字粗体 | 致命错误     |
 
 ---
 
@@ -330,15 +330,15 @@ logger, _ := clog.New(&clog.Config{
 
 ```json
 {
-  "time": "2025-01-15T10:30:45.123+08:00",
-  "level": "INFO",
-  "caller": "handler.go:42",
-  "namespace": "user-service",
-  "trace_id": "7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c",
-  "span_id": "3d4e5f6a7b8c9d0e",
-  "msg": "user created",
-  "user_id": "123",
-  "email": "test@example.com"
+    "time": "2025-01-15T10:30:45.123+08:00",
+    "level": "INFO",
+    "caller": "handler.go:42",
+    "namespace": "user-service",
+    "trace_id": "7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c",
+    "span_id": "3d4e5f6a7b8c9d0e",
+    "msg": "user created",
+    "user_id": "123",
+    "email": "test@example.com"
 }
 ```
 
@@ -376,13 +376,13 @@ logger.SetLevel(clog.DebugLevel)  // 运行时生效，无需重启
 ### 10.2 常见误区
 
 - **误区 1**：用 `Any` 存储所有类型
-  - 正确做法：优先使用类型化字段（`String`、`Int` 等）
+    - 正确做法：优先使用类型化字段（`String`、`Int` 等）
 - **误区 2**：在消息里放结构化信息
-  - 正确做法：消息放人类可读描述，结构化信息放字段
+    - 正确做法：消息放人类可读描述，结构化信息放字段
 - **误区 3**：忽略 Context 传播
-  - 正确做法：全程传递 `ctx`，让 trace 自动关联
+    - 正确做法：全程传递 `ctx`，让 trace 自动关联
 - **误区 4**：生产环境用彩色输出
-  - 正确做法：生产环境用 json 格式，便于日志系统解析
+    - 正确做法：生产环境用 json 格式，便于日志系统解析
 
 ---
 

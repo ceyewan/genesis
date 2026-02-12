@@ -8,11 +8,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/mq"
 	"github.com/ceyewan/genesis/testkit"
-	"github.com/joho/godotenv"
 )
 
 func main() {

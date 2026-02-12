@@ -1,21 +1,25 @@
 // Package dlock 提供分布式锁组件，支持 Redis 和 Etcd 后端。
 //
 // 特性：
+//
 //   - 统一的 Locker 接口，屏蔽后端差异
+//
 //   - 阻塞式 Lock / 非阻塞 TryLock
+//
 //   - 自动续期（Redis Watchdog / Etcd Session KeepAlive）
+//
 //   - 防误删机制（token 校验）
 //
-//	redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
-//	locker, _ := dlock.New(&dlock.Config{
-//	    Driver: dlock.DriverRedis,
-//	    Prefix: "myapp:lock:",
-//	}, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
+//     redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+//     locker, _ := dlock.New(&dlock.Config{
+//     Driver: dlock.DriverRedis,
+//     Prefix: "myapp:lock:",
+//     }, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
 //
-//	if err := locker.Lock(ctx, "resource-key"); err != nil {
-//	    return err
-//	}
-//	defer locker.Unlock(ctx, "resource-key")
+//     if err := locker.Lock(ctx, "resource-key"); err != nil {
+//     return err
+//     }
+//     defer locker.Unlock(ctx, "resource-key")
 package dlock
 
 import (

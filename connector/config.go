@@ -297,10 +297,10 @@ type PostgreSQLConfig struct {
 
 	// 高级配置
 	SSLMode         string        `mapstructure:"sslmode"`           // SSL 模式 (默认: "disable")
-	MaxIdleConns    int           `mapstructure:"max_idle_conns"`     // 最大空闲连接数 (默认: 10)
-	MaxOpenConns    int           `mapstructure:"max_open_conns"`     // 最大打开连接数 (默认: 100)
-	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`  // 连接最大生命周期 (默认: 1h)
-	ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`    // 连接超时 (默认: 5s)
+	MaxIdleConns    int           `mapstructure:"max_idle_conns"`    // 最大空闲连接数 (默认: 10)
+	MaxOpenConns    int           `mapstructure:"max_open_conns"`    // 最大打开连接数 (默认: 100)
+	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"` // 连接最大生命周期 (默认: 1h)
+	ConnectTimeout  time.Duration `mapstructure:"connect_timeout"`   // 连接超时 (默认: 5s)
 	Timezone        string        `mapstructure:"timezone"`          // 时区 (默认: "UTC")
 }
 

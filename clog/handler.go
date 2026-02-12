@@ -102,15 +102,15 @@ func newReplaceAttr(config *Config) func(groups []string, a slog.Attr) slog.Attr
 		case slog.LevelKey:
 			level := a.Value.Any().(slog.Level)
 			var levelStr string
-		switch {
-		case level <= slog.LevelDebug:
-			levelStr = "DEBUG"
-		case level <= slog.LevelInfo:
-			levelStr = "INFO"
-		case level <= slog.LevelWarn:
-			levelStr = "WARN"
-		case level <= slog.LevelError:
-			levelStr = "ERROR"
+			switch {
+			case level <= slog.LevelDebug:
+				levelStr = "DEBUG"
+			case level <= slog.LevelInfo:
+				levelStr = "INFO"
+			case level <= slog.LevelWarn:
+				levelStr = "WARN"
+			case level <= slog.LevelError:
+				levelStr = "ERROR"
 			default:
 				levelStr = "FATAL"
 			}

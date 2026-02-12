@@ -5,8 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/clog"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ceyewan/genesis/clog"
 )
 
 // ============================================================

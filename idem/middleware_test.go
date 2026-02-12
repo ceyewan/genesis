@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/testkit"
 	"github.com/gin-gonic/gin"
+
+	"github.com/ceyewan/genesis/testkit"
 )
 
 func TestGinMiddleware(t *testing.T) {

@@ -5,12 +5,13 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/metrics"
 )
 
 // ============================================================
@@ -679,9 +680,8 @@ func (m *mockSubscription) Done() <-chan struct{} {
 
 // mockMessage 是 Message 的 mock 实现
 type mockMessage struct {
-	ackCalled    bool
-	nakCalled    bool
-	nakSupported bool
+	ackCalled bool
+	nakCalled bool
 }
 
 func (m *mockMessage) Context() context.Context {

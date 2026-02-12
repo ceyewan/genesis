@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ceyewan/genesis/connector"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+
+	"github.com/ceyewan/genesis/connector"
 )
 
 // NewSQLiteContainerConfig 返回 SQLite 内存数据库配置

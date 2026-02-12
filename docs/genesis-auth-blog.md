@@ -50,16 +50,16 @@ type Authenticator interface {
 
 组件配置集中在 `auth.Config`：
 
-| 字段                | 类型       | 默认值       | 说明         |
-| ----------------- | -------- | --------- | ---------- |
+| 字段              | 类型     | 默认值         | 说明           |
+| ----------------- | -------- | -------------- | -------------- |
 | `SecretKey`       | string   | 必填，≥32 字符 | HMAC 签名密钥  |
-| `SigningMethod`   | string   | `HS256`   | 签名算法       |
-| `Issuer`          | string   | -         | 签发者标识      |
-| `Audience`        | []string | -         | 受众列表       |
-| `AccessTokenTTL`  | duration | `15m`     | 访问令牌有效期    |
-| `RefreshTokenTTL` | duration | `7d`      | 刷新令牌有效期    |
-| `TokenLookup`     | string   | -         | Token 提取位置 |
-| `TokenHeadName`   | string   | `Bearer`  | Header 前缀  |
+| `SigningMethod`   | string   | `HS256`        | 签名算法       |
+| `Issuer`          | string   | -              | 签发者标识     |
+| `Audience`        | []string | -              | 受众列表       |
+| `AccessTokenTTL`  | duration | `15m`          | 访问令牌有效期 |
+| `RefreshTokenTTL` | duration | `7d`           | 刷新令牌有效期 |
+| `TokenLookup`     | string   | -              | Token 提取位置 |
+| `TokenHeadName`   | string   | `Bearer`       | Header 前缀    |
 
 配置验证在构造阶段执行：密钥长度不足、算法不支持、TTL 非正数等错误在初始化时暴露，避免运行时才发现配置问题。
 
@@ -111,11 +111,11 @@ type Claims struct {
 
 ### 4.2 错误语义映射
 
-| 底层 JWT 错误 | 映射后错误 | error_type 标签 |
-|--------------|-----------|----------------|
-| `jwt.ErrTokenExpired` | `ErrExpiredToken` | `expired` |
+| 底层 JWT 错误                  | 映射后错误            | error_type 标签     |
+| ------------------------------ | --------------------- | ------------------- |
+| `jwt.ErrTokenExpired`          | `ErrExpiredToken`     | `expired`           |
 | `jwt.ErrTokenSignatureInvalid` | `ErrInvalidSignature` | `invalid_signature` |
-| 其他 | `ErrInvalidToken` | `invalid_token` |
+| 其他                           | `ErrInvalidToken`     | `invalid_token`     |
 
 稳定的错误语义让业务侧可以做精确的错误处理，而不依赖第三方库的原始错误文案。
 
@@ -180,14 +180,14 @@ JWT（JWS 格式）由三部分组成：`base64url(header).base64url(payload).ba
 
 ### 7.2 标准声明的语义
 
-| 声明 | 含义 | 使用场景 |
-|------|------|----------|
-| `sub` | Subject | 用户唯一标识 |
-| `exp` | Expiration | 硬截止时间，过期即拒绝 |
-| `iat` | Issued At | 签发时间，用于刷新窗口与时钟校验 |
-| `nbf` | Not Before | 生效时间，防止提前使用 |
-| `iss` | Issuer | 签发者，防止跨系统串用 |
-| `aud` | Audience | 受众，限制令牌可使用的服务范围 |
+| 声明  | 含义       | 使用场景                         |
+| ----- | ---------- | -------------------------------- |
+| `sub` | Subject    | 用户唯一标识                     |
+| `exp` | Expiration | 硬截止时间，过期即拒绝           |
+| `iat` | Issued At  | 签发时间，用于刷新窗口与时钟校验 |
+| `nbf` | Not Before | 生效时间，防止提前使用           |
+| `iss` | Issuer     | 签发者，防止跨系统串用           |
+| `aud` | Audience   | 受众，限制令牌可使用的服务范围   |
 
 ### 7.3 常见误区
 
@@ -201,10 +201,10 @@ JWT（JWS 格式）由三部分组成：`base64url(header).base64url(payload).ba
 
 ### 8.1 指标设计
 
-| 指标名 | 类型 | 标签 | 描述 |
-|--------|------|------|------|
+| 指标名                        | 类型    | 标签                   | 描述           |
+| ----------------------------- | ------- | ---------------------- | -------------- |
 | `auth_tokens_validated_total` | Counter | `status`, `error_type` | Token 验证计数 |
-| `auth_tokens_refreshed_total` | Counter | `status` | Token 刷新计数 |
+| `auth_tokens_refreshed_total` | Counter | `status`               | Token 刷新计数 |
 
 ### 8.2 Prometheus 查询示例
 
@@ -262,11 +262,11 @@ JWT 适合无状态访问令牌场景，但并非所有场景的唯一解。
 
 ### 10.3 TTL 选择建议
 
-| 场景 | AccessTokenTTL | RefreshTokenTTL |
-|------|----------------|-----------------|
-| 普通 Web 应用 | 15m - 1h | 7d - 30d |
-| 移动应用 | 1h - 24h | 30d - 90d |
-| 高安全系统 | 5m - 15m | 1h - 24h |
+| 场景          | AccessTokenTTL | RefreshTokenTTL |
+| ------------- | -------------- | --------------- |
+| 普通 Web 应用 | 15m - 1h       | 7d - 30d        |
+| 移动应用      | 1h - 24h       | 30d - 90d       |
+| 高安全系统    | 5m - 15m       | 1h - 24h        |
 
 ### 10.4 常见误区
 

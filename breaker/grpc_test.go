@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/clog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/ceyewan/genesis/clog"
 )
 
 // ============================================================
@@ -29,16 +30,6 @@ func (e *errorInvoker) invoke(ctx context.Context, method string, req, reply int
 type successInvoker struct{}
 
 func (s *successInvoker) invoke(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
-	return nil
-}
-
-// countingInvoker 记录调用次数
-type countingInvoker struct {
-	count int
-}
-
-func (c *countingInvoker) invoke(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
-	c.count++
 	return nil
 }
 

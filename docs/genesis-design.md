@@ -40,12 +40,12 @@ Genesis 的设计遵循 Go 语言的核心哲学：
 
 移除 DI 容器后，Genesis 简化为清晰的四层结构：
 
-| 层次                        | 核心组件                                       | 职责                         | 组织方式 |
-| :-------------------------- | :--------------------------------------------- | :--------------------------- | :------- |
-| **Level 3: Governance**     | `auth`, `ratelimit`, `breaker`, `registry`     | 流量治理，身份认证，切面能力 | 扁平化   |
-| **Level 2: Business**       | `cache`, `idgen`, `dlock`, `idem`, `mq` | 业务能力封装                 | 扁平化   |
-| **Level 1: Infrastructure** | `connector`, `db`                              | 连接管理，底层 I/O           | 扁平化   |
-| **Level 0: Base**           | `clog`, `config`, `metrics`, `xerrors`         | 框架基石                     | 扁平化   |
+| 层次                        | 核心组件                                   | 职责                         | 组织方式 |
+| :-------------------------- | :----------------------------------------- | :--------------------------- | :------- |
+| **Level 3: Governance**     | `auth`, `ratelimit`, `breaker`, `registry` | 流量治理，身份认证，切面能力 | 扁平化   |
+| **Level 2: Business**       | `cache`, `idgen`, `dlock`, `idem`, `mq`    | 业务能力封装                 | 扁平化   |
+| **Level 1: Infrastructure** | `connector`, `db`                          | 连接管理，底层 I/O           | 扁平化   |
+| **Level 0: Base**           | `clog`, `config`, `metrics`, `xerrors`     | 框架基石                     | 扁平化   |
 
 ### 3.2. 架构图
 

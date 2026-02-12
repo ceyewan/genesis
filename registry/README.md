@@ -358,6 +358,7 @@ func main() {
 ```
 
 **语义说明**：
+
 - Watch 基于 Etcd Revision 增量监听，进程内自动重连。
 - 当发生 compaction（历史 revision 被清理）时，会触发一次全量拉取并从最新 revision 继续监听。
 - compaction 期间可能出现事件丢失，需保证业务侧具备幂等或容错处理能力。

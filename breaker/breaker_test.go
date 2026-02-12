@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/clog"
 	"google.golang.org/grpc"
+
+	"github.com/ceyewan/genesis/clog"
 )
 
 // TestNewBreaker 测试熔断器创建

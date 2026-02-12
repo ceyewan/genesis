@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ceyewan/genesis/clog"
 	"gorm.io/gorm/logger"
+
+	"github.com/ceyewan/genesis/clog"
 )
 
 // gormLogger 将 GORM 日志适配到 clog

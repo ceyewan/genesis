@@ -118,9 +118,9 @@ metrics.L("key", "value")
 
 ```yaml
 scrape_configs:
-  - job_name: "my-service"
-    static_configs:
-      - targets: ["localhost:9090"]
+    - job_name: "my-service"
+      static_configs:
+          - targets: ["localhost:9090"]
 ```
 
 ## License

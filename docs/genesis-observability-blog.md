@@ -33,12 +33,12 @@ Genesis 可观测性方案的核心在于**标准化**与**一体化**。它基�
 
 Genesis 强烈推荐使用 Grafana Labs 推出的 **LGTM** 技术栈作为可观测性后端，它与 Genesis 组件配合完美：
 
-| 支柱 | 作用 | 工具栈 | Genesis 组件 |
-| :--- | :--- | :--- | :--- |
-| **Trace** (链路追踪) | 追踪请求全路径 | **Tempo** (对象存储，低成本) | `genesis/trace` |
-| **Metrics** (指标监控) | 监控系统负载/QPS | **Prometheus** / **Mimir** | `genesis/metrics` |
-| **Logging** (日志) | 记录事件和错误 | **Loki** (轻量级，无索引内容) | `genesis/clog` |
-| **Visualization** | 统一展示界面 | **Grafana** | - |
+| 支柱                   | 作用             | 工具栈                        | Genesis 组件      |
+| :--------------------- | :--------------- | :---------------------------- | :---------------- |
+| **Trace** (链路追踪)   | 追踪请求全路径   | **Tempo** (对象存储，低成本)  | `genesis/trace`   |
+| **Metrics** (指标监控) | 监控系统负载/QPS | **Prometheus** / **Mimir**    | `genesis/metrics` |
+| **Logging** (日志)     | 记录事件和错误   | **Loki** (轻量级，无索引内容) | `genesis/clog`    |
+| **Visualization**      | 统一展示界面     | **Grafana**                   | -                 |
 
 ### 2.1 组件协同
 
@@ -78,7 +78,7 @@ func InitObservability(serviceName string) (func(context.Context) error, error) 
         &clog.Config{Level: "info", Format: "json"},
         clog.WithTraceContext(), // 自动注入 TraceID
     )
-    
+
     // 返回统一的清理函数
     return func(ctx context.Context) error {
         _ = meter.Shutdown(ctx)

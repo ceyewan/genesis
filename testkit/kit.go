@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
-	"github.com/google/uuid"
 )
 
 // Kit 包含通用的测试依赖

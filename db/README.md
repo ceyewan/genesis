@@ -182,6 +182,7 @@ database, err := db.New(cfg,
 ```
 
 每个数据库操作会自动创建一个 span，包含：
+
 - SQL 语句
 - 表名
 - 查询耗时

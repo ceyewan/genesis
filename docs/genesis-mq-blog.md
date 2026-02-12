@@ -60,13 +60,13 @@ type MQ interface {
 
 虽然 API 统一，但不同后端的底层语义（尤其是持久化和消费模式）存在客观差异。Genesis `mq` 通过 Option 模式尽可能抹平使用方式，但开发者仍需理解其行为边界。
 
-| 特性 | NATS Core | NATS JetStream | Redis Stream | 语义说明 |
-| :--- | :--- | :--- | :--- | :--- |
-| **持久化** | 否（内存转发） | 是（磁盘/文件） | 是（AOF/RDB） | 消息是否落盘，重启是否丢失 |
-| **消费者组** | Queue Group | Consumer | Consumer Group | `WithQueueGroup` 选项的映射 |
-| **确认机制** | 无（Fire & Forget） | 显式 Ack/Nak | XACK | `WithAutoAck` / `WithManualAck` |
-| **批处理** | 弱 | 支持 | `XREADGROUP COUNT` | `WithBatchSize` 提升吞吐 |
-| **消息回溯** | 不支持 | 支持 | 支持 | 是否能消费历史消息 |
+| 特性         | NATS Core           | NATS JetStream  | Redis Stream       | 语义说明                        |
+| :----------- | :------------------ | :-------------- | :----------------- | :------------------------------ |
+| **持久化**   | 否（内存转发）      | 是（磁盘/文件） | 是（AOF/RDB）      | 消息是否落盘，重启是否丢失      |
+| **消费者组** | Queue Group         | Consumer        | Consumer Group     | `WithQueueGroup` 选项的映射     |
+| **确认机制** | 无（Fire & Forget） | 显式 Ack/Nak    | XACK               | `WithAutoAck` / `WithManualAck` |
+| **批处理**   | 弱                  | 支持            | `XREADGROUP COUNT` | `WithBatchSize` 提升吞吐        |
+| **消息回溯** | 不支持              | 支持            | 支持               | 是否能消费历史消息              |
 
 ---
 
@@ -140,14 +140,14 @@ if err != nil {
 for i := 0; i < 3; i++ {
     go func(id int) {
         _, err := q.Subscribe(ctx, "orders.created", func(msg mq.Message) error {
-            logger.Info("processing order", 
+            logger.Info("processing order",
                 clog.String("worker", fmt.Sprintf("%d", id)),
                 clog.String("data", string(msg.Data())))
             return nil // 自动 Ack
-        }, 
+        },
         mq.WithQueueGroup("order-processor"), // 指定消费者组
         mq.WithBatchSize(10))                 // 批量拉取优化
-        
+
         if err != nil {
             logger.Fatal("subscribe failed", clog.Error(err))
         }

@@ -5,10 +5,11 @@ import (
 	"log"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/ceyewan/genesis/cache"
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/redis/go-redis/v9"
 )
 
 // 用户路由信息

@@ -118,11 +118,11 @@ func HandleRequest(ctx context.Context, userID string) error {
     // 检查限流
     // key 建议组合业务前缀，如 "user_upload:{uid}"
     allowed, err := limiter.Allow(ctx, "user_upload:"+userID, limit)
-    
+
     // 降级策略：基础设施错误时优先保业务
     if err != nil {
         logger.Error("ratelimit error, allowing", clog.Error(err))
-        return nil 
+        return nil
     }
 
     if !allowed {
@@ -142,7 +142,7 @@ Genesis 提供了开箱即用的 Gin 中间件，可以方便地挂载到路由�
 r := gin.New()
 
 // 注册中间件
-r.Use(ratelimit.GinMiddleware(limiter, 
+r.Use(ratelimit.GinMiddleware(limiter,
     // Key 提取函数
     func(c *gin.Context) string {
         return c.ClientIP()
@@ -160,7 +160,7 @@ r.Use(ratelimit.GinMiddleware(limiter,
 
 ```go
 s := grpc.NewServer(
-    grpc.UnaryInterceptor(ratelimit.UnaryServerInterceptor(limiter, 
+    grpc.UnaryInterceptor(ratelimit.UnaryServerInterceptor(limiter,
         func(ctx context.Context, req any, info *grpc.UnaryServerInfo) (string, ratelimit.Limit) {
             // 按 FullMethod 限流
             return info.FullMethod, ratelimit.Limit{Rate: 500, Burst: 1000}

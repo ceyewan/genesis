@@ -6,11 +6,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/xerrors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // TestRedisConfigValidation 测试 Redis 配置验证

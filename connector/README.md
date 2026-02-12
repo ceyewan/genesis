@@ -62,15 +62,15 @@ func main() {
 
 ## 4. 支持的连接器类型
 
-| 类型          | 接口                  | 底层客户端           | 工厂函数        |
-| :------------ | :------------------- | :------------------- | :-------------- |
-| **Redis**     | `RedisConnector`    | `*redis.Client`      | `NewRedis`     |
-| **MySQL**     | `MySQLConnector`    | `*gorm.DB`           | `NewMySQL`     |
-| **PostgreSQL**| `PostgreSQLConnector`| `*gorm.DB`          | `NewPostgreSQL`|
-| **SQLite**    | `SQLiteConnector`   | `*gorm.DB`           | `NewSQLite`    |
-| **Etcd**      | `EtcdConnector`     | `*clientv3.Client`   | `NewEtcd`      |
-| **NATS**      | `NATSConnector`     | `*nats.Conn`         | `NewNATS`      |
-| **Kafka**     | `KafkaConnector`    | `*kgo.Client`        | `NewKafka`     |
+| 类型           | 接口                  | 底层客户端         | 工厂函数        |
+| :------------- | :-------------------- | :----------------- | :-------------- |
+| **Redis**      | `RedisConnector`      | `*redis.Client`    | `NewRedis`      |
+| **MySQL**      | `MySQLConnector`      | `*gorm.DB`         | `NewMySQL`      |
+| **PostgreSQL** | `PostgreSQLConnector` | `*gorm.DB`         | `NewPostgreSQL` |
+| **SQLite**     | `SQLiteConnector`     | `*gorm.DB`         | `NewSQLite`     |
+| **Etcd**       | `EtcdConnector`       | `*clientv3.Client` | `NewEtcd`       |
+| **NATS**       | `NATSConnector`       | `*nats.Conn`       | `NewNATS`       |
+| **Kafka**      | `KafkaConnector`      | `*kgo.Client`      | `NewKafka`      |
 
 ## 5. 资源所有权模型
 
@@ -134,7 +134,7 @@ type RedisConfig struct {
 
     // 核心配置 (必填)
     Addr     string `mapstructure:"addr"`     // 连接地址，如 "127.0.0.1:6379"
-    
+
     // 可选配置
     Password string `mapstructure:"password"` // 认证密码
     DB       int    `mapstructure:"db"`       // 数据库编号 (默认: 0)
