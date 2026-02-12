@@ -52,6 +52,6 @@ example-all:
 	for d in examples/*; do \
 		if [ -f "$d/main.go" ]; then \
 			echo "运行 $(basename $d) 示例..."; \
-			(cd "$d" && go run main.go) || true; \
+			(cd "$d" && go run main.go) || exit 1; \
 		fi; \
 	done
