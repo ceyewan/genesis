@@ -5,9 +5,9 @@ Auth 组件为 Genesis 框架提供统一的认证能力，基于 JWT (JSON Web 
 ## 特性
 
 - **安全性保障**：
-  - 严格的签名方法验证（仅支持 HS256）
-  - Claims 不可变性（GenerateToken 不会修改原始 Claims）
-  - 完善的刷新令牌验证（Issuer、Audience、时间窗口检查）
+    - 严格的签名方法验证（仅支持 HS256）
+    - Claims 不可变性（GenerateToken 不会修改原始 Claims）
+    - 完善的刷新令牌验证（Issuer、Audience、时间窗口检查）
 - **无状态认证**：JWT 自包含用户信息，易于横向扩展。
 - **多源 Token 提取**：自动从 Header、Query、Cookie 中提取 Token，开箱即用。
 - **Gin 集成**：提供开箱即用的中间件。
@@ -72,7 +72,7 @@ auth:
     refresh_token_ttl: 168h
     # token_lookup: 可选，留空则使用默认多源查找
     # 默认查找顺序: header:Authorization -> query:token -> cookie:jwt
-    token_lookup: "header:Authorization"  # 可指定单一来源
+    token_lookup: "header:Authorization" # 可指定单一来源
     token_head_name: "Bearer"
 ```
 
@@ -85,11 +85,13 @@ auth:
 3. **Cookie**: `jwt=<token>`
 
 这种设计使得同一份配置可以同时支持：
+
 - REST API（使用 Header）
 - WebSocket 连接（使用 Query）
 - 前端应用（使用 Cookie）
 
 如果需要限制只从特定来源提取，可配置 `token_lookup`：
+
 ```go
 &auth.Config{
     SecretKey: "...",
@@ -151,10 +153,10 @@ r.GET("/moderate", auth.RequireRoles("admin", "moderator"), handler)  // 拥有�
 
 Auth 组件提供以下可观测性指标，业务方可通过导出的常量引用指标名称：
 
-| 指标名 | 类型 | 标签 | 描述 |
-|--------|------|------|------|
+| 指标名                        | 类型    | 标签                                                                                | 描述           |
+| ----------------------------- | ------- | ----------------------------------------------------------------------------------- | -------------- |
 | `auth_tokens_validated_total` | Counter | `status="success\|error"`, `error_type="expired\|invalid_signature\|invalid_token"` | Token 验证计数 |
-| `auth_tokens_refreshed_total` | Counter | `status="success\|error"` | Token 刷新计数 |
+| `auth_tokens_refreshed_total` | Counter | `status="success\|error"`                                                           | Token 刷新计数 |
 
 ### 指标常量引用
 

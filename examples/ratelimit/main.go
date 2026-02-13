@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -122,6 +123,12 @@ func distributedExample(ctx context.Context, logger clog.Logger) {
 		return
 	}
 	defer redisConn.Close()
+
+	// 建立连接
+	if err := redisConn.Connect(ctx); err != nil {
+		logger.Warn("跳过分布式模式示例: Redis 连接失败", clog.Error(err))
+		return
+	}
 
 	// 测试连接
 	if err := redisConn.GetClient().Ping(ctx).Err(); err != nil {
@@ -292,33 +299,50 @@ func ginExample(logger clog.Logger) {
 		})
 	})
 
-	logger.Info("starting gin server on :8080")
-	fmt.Println("\nGin server is running on :8080")
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		logger.Error("failed to listen", clog.Error(err))
+		return
+	}
+	addr := lis.Addr().String()
+
+	logger.Info("starting gin server", clog.String("addr", addr))
+	fmt.Printf("\nGin server is running on %s\n", addr)
 	fmt.Println("\n测试命令（注意：限流器已修改为按路径限流，所以访问同一路径会触发限流）:")
 	fmt.Println()
 	fmt.Println("  # 测试 /api/test 限流 (Rate=10 QPS, Burst=15)")
 	fmt.Println("  # 快速发送 20 个请求，前 15 个应该通过（Burst），后 5 个被限流")
-	fmt.Println("  for i in {1..20}; do curl http://localhost:8080/api/test && echo; sleep 0.01; done")
+	fmt.Printf("  for i in {1..20}; do curl http://%s/api/test && echo; sleep 0.01; done\n", addr)
 	fmt.Println()
 	fmt.Println("  # 测试登录接口限流 (Rate=5 QPS, Burst=8)")
 	fmt.Println("  # 快速发送 12 个请求，前 8 个应该通过，后 4 个被限流")
-	fmt.Println("  for i in {1..12}; do curl -X POST http://localhost:8080/api/login && echo; sleep 0.01; done")
+	fmt.Printf("  for i in {1..12}; do curl -X POST http://%s/api/login && echo; sleep 0.01; done\n", addr)
 	fmt.Println()
 	fmt.Println("  # 测试上传接口限流 (Rate=2 QPS, Burst=3)")
 	fmt.Println("  # 快速发送 6 个请求，前 3 个应该通过，后 3 个被限流")
-	fmt.Println("  for i in {1..6}; do curl -X POST http://localhost:8080/api/upload && echo; sleep 0.01; done")
+	fmt.Printf("  for i in {1..6}; do curl -X POST http://%s/api/upload && echo; sleep 0.01; done\n", addr)
 	fmt.Println()
 	fmt.Println("  # 测试用户维度限流 (Rate=3 QPS, Burst=3)")
 	fmt.Println("  # 同一用户触发限流，不同用户互不影响")
-	fmt.Println("  for i in {1..6}; do curl -H 'X-User: alice' http://localhost:8080/api-user/echo && echo; sleep 0.01; done")
-	fmt.Println("  for i in {1..6}; do curl -H 'X-User: bob' http://localhost:8080/api-user/echo && echo; sleep 0.01; done")
+	fmt.Printf("  for i in {1..6}; do curl -H 'X-User: alice' http://%s/api-user/echo && echo; sleep 0.01; done\n", addr)
+	fmt.Printf("  for i in {1..6}; do curl -H 'X-User: bob' http://%s/api-user/echo && echo; sleep 0.01; done\n", addr)
 	fmt.Println()
 	fmt.Println("  # 测试 IP 维度限流 (Rate=2 QPS, Burst=2)")
 	fmt.Println("  # 同一 IP 快速发送 5 个请求，前 2 个应该通过，后 3 个被限流")
-	fmt.Println("  for i in {1..5}; do curl http://localhost:8080/api-ip/ping && echo; sleep 0.01; done")
+	fmt.Printf("  for i in {1..5}; do curl http://%s/api-ip/ping && echo; sleep 0.01; done\n", addr)
 	fmt.Println()
 
-	if err := r.Run(":8080"); err != nil {
-		logger.Error("failed to start server", clog.Error(err))
+	srv := &http.Server{
+		Handler: r,
 	}
+	go func() {
+		if err := srv.Serve(lis); err != nil && err != http.ErrServerClosed {
+			logger.Error("failed to start server", clog.Error(err))
+		}
+	}()
+
+	// 给服务器一点启动时间，然后退出（示例演示模式）
+	time.Sleep(2 * time.Second)
+	srv.Close()
+	fmt.Println("Gin server stopped.")
 }

@@ -8,10 +8,11 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
-	"github.com/joho/godotenv"
 )
 
 // 本示例演示了 Genesis Connector 的标准使用模式：
@@ -43,7 +44,7 @@ func main() {
 	runMySQLExample(ctx, logger, meter)
 	runSQLiteExample(ctx, logger, meter)
 	runEtcdExample(ctx, logger, meter)
-	runNATSExample(ctx, logger,)
+	runNATSExample(ctx, logger)
 	runKafkaExample(ctx, logger, meter)
 
 	logger.Info("=== 示例演示完成 ===")

@@ -95,7 +95,7 @@ func basicConfigExample() {
 	// 创建配置加载器
 	loader, err := config.New(&config.Config{
 		Name:      "config",
-		Paths:     []string{"./config"},
+		Paths:     []string{"."},
 		FileType:  "yaml",
 		EnvPrefix: "GENESIS",
 	})
@@ -166,7 +166,7 @@ func usageExamples() {
 
 	loader, err := config.New(&config.Config{
 		Name:      "config",
-		Paths:     []string{"./config"},
+		Paths:     []string{"."},
 		FileType:  "yaml",
 		EnvPrefix: "GENESIS",
 	})
@@ -239,7 +239,7 @@ func configWatchExample() {
 
 	loader, err := config.New(&config.Config{
 		Name:      "config",
-		Paths:     []string{"./config"},
+		Paths:     []string{"."},
 		FileType:  "yaml",
 		EnvPrefix: "GENESIS",
 	})

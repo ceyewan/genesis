@@ -1,4 +1,4 @@
-# Genesis idem：分布式幂等的设计与实现
+# Genesis Idem：分布式幂等的设计与实现
 
 Genesis `idem` 是业务层（L2）的幂等组件，用来解决“同一请求/消息被重复提交”带来的副作用问题。它提供统一接口覆盖三类入口：手动调用、Gin 中间件、gRPC 一元拦截器。
 
@@ -6,205 +6,175 @@ Genesis `idem` 是业务层（L2）的幂等组件，用来解决“同一请求
 
 ## 0. 摘要
 
-- `idem` 支持两种驱动：`redis`（分布式）与 `memory`（单机）。
-- 核心流程是“先读结果，再抢锁，成功执行后缓存结果并释放锁”。
-- `Execute` 对并发同 key 采用“等待结果或抢到锁后执行”的策略，重复请求通常返回同一结果。
-- `Consume` 面向消息去重，更强调快速失败：并发冲突时返回 `ErrConcurrentRequest`。
-- 内置锁续期（Refresh）机制，避免长耗时任务期间锁过期。
-- Gin 中间件默认只缓存 2xx 响应；gRPC 拦截器默认只缓存成功的 `proto.Message`。
+- **统一抽象**：提供 `Execute` / `Consume` 接口，屏蔽底层锁与存储细节
+- **双驱动支持**：支持 `redis`（分布式）与 `memory`（单机）两种后端
+- **结果缓存**：核心流程为“读缓存 -> 抢锁 -> 执行 -> 写缓存”，确保结果一致性
+- **并发控制**：内置分布式锁与续期（Renew）机制，防止并发穿透与长任务锁过期
+- **多端集成**：开箱即用的 Gin 中间件与 gRPC 拦截器，自动处理幂等 Header/Metadata
 
 ---
 
-## 1. 组件定位：把幂等从“业务约定”变成“标准能力”
+## 1. 背景：把幂等从“业务约定”变成“标准能力”
 
-`Idempotency` 对外提供四个入口：
+在分布式系统中，网络抖动导致客户端重试是常态。如果没有幂等机制，一次扣款请求的重试可能导致用户被扣两次钱。传统的做法是在业务代码中手动查询数据库、插入去重表或使用 Redis SETNX，代码侵入性强且容易出错。
 
-- `Execute(ctx, key, fn)`：通用幂等执行，返回结果
-- `Consume(ctx, key, ttl, fn)`：消息消费去重，只关心“是否执行”
-- `GinMiddleware(opts...)`：HTTP 请求幂等
-- `UnaryServerInterceptor(opts...)`：gRPC 一元调用幂等
+Genesis `idem` 旨在提供一套标准的、可配置的幂等解决方案，将复杂的并发控制和结果缓存逻辑封装在组件内部，业务开发者只需关注核心逻辑。
 
-统一目标：
+`Idempotency` 接口对外提供四个入口：
 
-- 第一次请求执行真实逻辑
-- 重复请求不重复执行副作用逻辑
-- 在可接受窗口内返回一致结果
+- `Execute(ctx, key, fn)`：通用幂等执行，返回结果，适合业务逻辑手动调用
+- `Consume(ctx, key, ttl, fn)`：消息消费去重，只关心“是否执行”，适合 MQ 消费者
+- `GinMiddleware(opts...)`：HTTP 请求幂等，通过 Header 传递幂等键
+- `UnaryServerInterceptor(opts...)`：gRPC 一元调用幂等，通过 Metadata 传递幂等键
 
 ---
 
-## 2. 配置模型与默认值
+## 2. 核心设计：结果优先 + 锁保护
 
-`Config` 关键字段：
+### 2.1 `Execute` 的状态机
 
-- `Driver`: `redis | memory`（默认 `redis`）
-- `Prefix`: 键前缀（默认 `idem:`）
-- `DefaultTTL`: 结果缓存 TTL（默认 24h）
-- `LockTTL`: 执行锁 TTL（默认 30s）
-- `WaitTimeout`: 等待结果上限（默认 0，跟随 `ctx`）
-- `WaitInterval`: 轮询起始间隔（默认 50ms）
+对同一 `key`，`Execute` 的主流程遵循“结果优先”原则，以最大程度减少重复计算：
 
-实现上有两个重要默认行为：
+1.  **查缓存**：首先尝试读取该 Key 对应的执行结果。如果命中，直接返回缓存结果（Success）。
+2.  **抢锁**：如果未命中缓存，尝试获取分布式锁。
+    - **抢锁成功**：执行业务函数 `fn`。
+    - **抢锁失败**：说明有并发请求正在执行。此时不会立即失败，而是进入轮询等待状态，定期检查结果缓存或尝试重新抢锁。
+3.  **写结果**：
+    - `fn` 执行成功：将结果序列化并写入存储，同时释放锁。
+    - `fn` 执行失败：不缓存结果，直接释放锁，允许后续重试。
 
-- 轮询等待采用指数退避，最大到 `500ms`。
-- 若实现支持 `Refresh`，执行期间会周期性刷新锁 TTL。
+这意味着：在并发压力下，通常只有一个请求真正执行业务逻辑，其它请求等到结果后直接复用，从而保证了系统的高效与一致性。
 
----
+### 2.2 `Consume` 的差异化语义
 
-## 3. 核心算法：结果优先 + 锁保护
+`Consume` 专为消息队列消费场景设计，它不关心返回值，只关心“是否已处理”。
 
-### 3.1 `Execute` 的状态机
+- **已处理**：返回 `executed=false, nil`，业务层直接 ACK 消息。
+- **处理中**（抢锁失败）：返回 `executed=false, ErrConcurrentRequest`，业务层可选择 NACK 稍后重试，或丢弃（取决于业务对顺序性的要求）。
+- **未处理**（抢锁成功）：执行 `fn`，成功后标记 Key 为已完成，返回 `executed=true, nil`。
 
-对同一 `key`，`Execute` 的主流程是：
+### 2.3 锁续期（Renew）
 
-1. 读结果缓存：命中直接返回。
-2. 未命中则尝试加锁：
-   - 抢锁成功：执行 `fn`。
-   - 抢锁失败：等待后重试“读结果/抢锁”。
-3. `fn` 成功：序列化结果并落库，标记完成。
-4. `fn` 失败：不缓存错误，释放锁并返回错误。
-
-这意味着：在并发压力下，通常只有一个请求真正执行业务逻辑，其它请求等到结果后直接复用。
-
-### 3.2 `Consume` 的差异化语义
-
-`Consume` 不是返回业务结果，而是返回 `executed bool`：
-
-- 已有处理标记：`executed=false, nil`
-- 抢锁成功并执行成功：`executed=true, nil`
-- 抢锁失败（并发冲突）：`executed=false, ErrConcurrentRequest`
-
-相比 `Execute`，`Consume` 没有等待-复读结果的闭环，更适合“消息幂等去重”这种快速判定场景。
+为了防止长耗时任务执行期间锁过期导致并发穿透，组件内置了**自动看门狗**机制。当任务执行时间超过 `LockTTL` 的一半时，后台协程会自动延长锁的有效期，直到任务完成或明确失败。
 
 ---
 
-## 4. 存储抽象与双驱动实现
+## 3. 存储抽象与双驱动实现
 
-### 4.1 Store 抽象
+`idem` 定义了 `Store` 接口来解耦上层逻辑与底层存储：
 
-`Store` 定义了四个操作：
+```go
+type Store interface {
+    Lock(ctx context.Context, key string, ttl time.Duration) (string, bool, error)
+    Unlock(ctx context.Context, key string, token string) error
+    SetResult(ctx context.Context, key string, result []byte, ttl time.Duration, token string) error
+    GetResult(ctx context.Context, key string) ([]byte, bool, error)
+}
+```
 
-- `Lock`
-- `Unlock`
-- `SetResult`
-- `GetResult`
+### 3.1 Redis 驱动（分布式）
 
-可选扩展 `RefreshableStore`：
+适用于生产环境。它使用两个 Key：
 
-- `Refresh(ctx, key, token, ttl)` 用于续期
+- `prefix + key + ":lock"`：分布式锁，值是随机 Token。
+- `prefix + key + ":result"`：执行结果。
 
-这使上层幂等逻辑可以复用，不和具体后端耦合。
+关键操作如 `Unlock` 和 `SetResult` 均使用 **Lua 脚本** 保证原子性，防止误删他人的锁。
 
-### 4.2 Redis 驱动（分布式）
+### 3.2 Memory 驱动（单机）
 
-Redis 使用两类 key：
-
-- `prefix + key + ":lock"`：执行锁
-- `prefix + key + ":result"`：执行结果
-
-关键机制：
-
-- `Lock`: `SET NX` + 随机 token
-- `Unlock`: Lua 校验 token 后删除（防误删）
-- `SetResult`: Lua 原子写结果并按 token 删除锁
-- `Refresh`: Lua 校验 token 后 `PEXPIRE`
-
-适用于多实例部署的真实生产场景。
-
-### 4.3 Memory 驱动（单机）
-
-Memory 使用进程内 map + 过期时间：
-
-- 支持锁和结果 TTL
-- 支持 token 校验释放和刷新
-- 仅在单进程内有效，不能跨实例保证幂等
-
-适用于本地开发、单测或单节点任务。
+适用于本地开发、单测或单体应用。它基于 `sync.Map` 实现，性能极高但不支持跨进程幂等。
 
 ---
 
-## 5. 锁续期与长耗时任务
+## 4. 实战落地
 
-当 `Store` 支持 `Refresh` 且 `LockTTL > 0` 时，组件会在执行期间启动后台续期：
+### 4.1 初始化
 
-- 续期间隔约为 `LockTTL/2`（最小 500ms）
-- 续期失败只记录告警日志，不会立即中断业务函数
+```go
+// 1. 初始化 Redis 连接器
+rdb, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
 
-这能降低“执行时间超过 `LockTTL` 导致锁提前过期”的风险，但并不等价于事务保证。关键副作用操作仍应保持幂等。
+// 2. 初始化 Idem 组件
+idempotency, _ := idem.New(&idem.Config{
+    Driver:     idem.DriverRedis,
+    Prefix:     "order:idem:",
+    DefaultTTL: 24 * time.Hour, // 结果保留 24 小时
+    LockTTL:    30 * time.Second, // 锁默认 30 秒
+}, idem.WithRedisConnector(rdb), idem.WithLogger(logger))
+```
 
----
+### 4.2 手动调用 (Execute)
 
-## 6. Gin 与 gRPC：缓存边界要看清
+```go
+// 定义业务逻辑
+createOrder := func(ctx context.Context) (interface{}, error) {
+    // ... 创建订单 ...
+    return &Order{ID: "123"}, nil
+}
 
-### 6.1 Gin 中间件
+// 执行幂等操作
+// key: "create_order:{user_id}:{request_id}"
+result, err := idempotency.Execute(ctx, "create_order:1001:req_abc", createOrder)
+if err != nil {
+    return err
+}
 
-默认请求头键：`X-Idempotency-Key`（可通过 `WithHeaderKey` 覆盖）。
+order := result.(*Order)
+```
 
-缓存策略：
+### 4.3 Gin 中间件
 
-- 有 key 才启用幂等
-- 仅缓存 2xx 响应（状态码、响应头、响应体）
-- 5xx/4xx 默认不缓存，后续相同 key 会再次执行 handler
+```go
+r := gin.New()
 
-这符合大多数 API 的语义：只缓存“成功结果”，避免把临时错误固化。
+// 注册中间件
+// 客户端需传递 Header: X-Idempotency-Key: <unique-key>
+r.POST("/orders", idempotency.GinMiddleware(), func(c *gin.Context) {
+    // ... 业务逻辑 ...
+    c.JSON(200, gin.H{"status": "ok"})
+})
+```
 
-### 6.2 gRPC 一元拦截器
+**注意**：中间件默认只缓存 2xx 响应。如果业务逻辑返回 4xx/5xx，不会被缓存，允许客户端修正后重试。
 
-默认 metadata 键：`x-idem-key`（可 `WithMetadataKey` 覆盖）。
+### 4.4 gRPC 拦截器
 
-缓存策略：
+```go
+s := grpc.NewServer(
+    // 注册一元拦截器
+    // 客户端需传递 Metadata: x-idem-key: <unique-key>
+    grpc.UnaryInterceptor(idempotency.UnaryServerInterceptor()),
+)
+```
 
-- 仅对成功响应尝试缓存
-- 仅缓存 `proto.Message` 类型响应
-- 非 proto 返回值会跳过缓存
-
-这是因为实现使用 `Any` 封装/反序列化 protobuf 消息，保证跨调用一致恢复。
-
----
-
-## 7. 错误语义与行为约定
-
-关键错误：
-
-- `ErrConfigNil`: 配置为空
-- `ErrKeyEmpty`: 幂等键为空
-- `ErrConcurrentRequest`: 并发请求冲突（常见于 `Consume`）
-- `ErrResultNotFound`: 内部未命中结果
-
-行为约定：
-
-- 业务函数返回错误时，不写入结果缓存。
-- 成功结果按 `DefaultTTL` 或 `Consume` 的传入 TTL 存储。
-- `WaitTimeout` 到期时，`Execute` 会按上下文超时返回错误。
-
----
-
-## 8. 实践建议
-
-### 8.1 幂等键设计
-
-- 保证全局唯一且稳定：如 `order:create:{request_id}`、`msg:{topic}:{msg_id}`
-- 键中包含业务域前缀，避免不同操作冲突
-
-### 8.2 TTL 选择
-
-- `DefaultTTL` 应覆盖“客户端可能重试的最长窗口”
-- `LockTTL` 要大于常见执行时间，并为慢请求预留余量
-
-### 8.3 两种常见落地模式
-
-HTTP/RPC 幂等：
-
-- 客户端生成并透传幂等键
-- 服务端用 `Execute` 或中间件/拦截器托管
-
-MQ 消费去重：
-
-- `Consume` key 建议绑定消息唯一 ID
-- `executed=false` 可视为“已处理或并发处理中”，按业务策略跳过
+**注意**：gRPC 拦截器仅支持 `proto.Message` 类型的响应缓存，且仅缓存执行成功的请求。
 
 ---
 
-## 9. 总结
+## 5. 最佳实践与常见坑
 
-`idem` 的核心价值不是“缓存一次结果”这么简单，而是把并发竞争、结果复用、锁安全释放、长任务续期这些细节封装成统一语义。  
-在分布式场景下建议优先 Redis 驱动；Memory 驱动用于单机与测试。只要键设计和 TTL 合理，`idem` 能显著降低重复请求造成的数据不一致风险。
+### 5.1 幂等键的设计
+
+幂等键（Idempotency Key）的设计至关重要，必须保证**全局唯一**且与**业务操作绑定**。
+
+- **好的设计**：`source + 业务ID + 操作类型`，例如 `app:order:create:req_12345`。
+- **坏的设计**：只使用 UUID（无法与业务关联）、粒度过粗（导致不同用户的请求冲突）。
+
+### 5.2 TTL 的选择
+
+- **DefaultTTL（结果缓存时间）**：应覆盖客户端可能发起重试的最长周期。例如，如果客户端只在 1 分钟内重试，TTL 设为 1 小时足矣；如果涉及隔天对账，TTL 可能需要设为 24 小时甚至更长。
+- **LockTTL（锁时间）**：应略大于业务逻辑的 P99 耗时。虽然有自动续期机制，但合理的初始值能减少不必要的网络开销。
+
+### 5.3 错误处理
+
+在使用 `Execute` 时，需要注意区分错误的类型：
+
+- `ErrConcurrentRequest`：表示并发请求且等待超时。此时业务应根据情况决定是报错还是稍后重试。
+- 业务逻辑错误：如果 `fn` 返回 error，`idem` 不会缓存结果。这意味着客户端重试时，`fn` 会被再次执行。这是符合预期的，因为失败的操作通常不具备幂等性约束（除非是永久性失败）。
+
+---
+
+## 6. 总结
+
+Genesis `idem` 组件通过标准化接口和可靠的存储实现，将幂等性从复杂的业务逻辑中剥离出来。无论是简单的 API 去重，还是复杂的分布式消息处理，它都能提供一致、可靠的保障。正确使用 `idem`，能显著提升系统的健壮性和数据一致性。

@@ -4,11 +4,11 @@
 
 ## 特性
 
-*   **服务级熔断**：按目标服务名（或自定义 Key）独立管理熔断状态。
-*   **gRPC 集成**：提供 `UnaryClientInterceptor`，无侵入式集成。
-*   **自动恢复**：支持半开状态（Half-Open）探测，自动从故障中恢复。
-*   **灵活降级**：支持快速失败或自定义降级逻辑（Fallback）。
-*   **可观测性**：集成 Genesis 标准日志（clog）。
+- **服务级熔断**：按目标服务名（或自定义 Key）独立管理熔断状态。
+- **gRPC 集成**：提供 `UnaryClientInterceptor`，无侵入式集成。
+- **自动恢复**：支持半开状态（Half-Open）探测，自动从故障中恢复。
+- **灵活降级**：支持快速失败或自定义降级逻辑（Fallback）。
+- **可观测性**：集成 Genesis 标准日志（clog）。
 
 ## 安装
 
@@ -53,17 +53,17 @@ conn, err := grpc.NewClient(
 
 ### 核心配置 (Config)
 
-| 字段 | 类型 | 说明 | 默认值 |
-| :--- | :--- | :--- | :--- |
-| `MaxRequests` | `uint32` | 半开状态下允许通过的最大请求数 | 1 |
-| `Interval` | `duration` | 闭合状态下的统计周期 (0 表示不清空) | 0 |
-| `Timeout` | `duration` | 打开状态持续时间 (冷却时间) | 60s |
-| `FailureRatio` | `float64` | 触发熔断的失败率阈值 | 0.6 |
-| `MinimumRequests` | `uint32` | 触发熔断的最小请求数 | 10 |
+| 字段              | 类型       | 说明                                | 默认值 |
+| :---------------- | :--------- | :---------------------------------- | :----- |
+| `MaxRequests`     | `uint32`   | 半开状态下允许通过的最大请求数      | 1      |
+| `Interval`        | `duration` | 闭合状态下的统计周期 (0 表示不清空) | 0      |
+| `Timeout`         | `duration` | 打开状态持续时间 (冷却时间)         | 60s    |
+| `FailureRatio`    | `float64`  | 触发熔断的失败率阈值                | 0.6    |
+| `MinimumRequests` | `uint32`   | 触发熔断的最小请求数                | 10     |
 
 ### 拦截器选项 (InterceptorOption)
 
-*   `WithKeyFunc(fn KeyFunc)`: 自定义熔断 Key 生成策略（默认使用 `cc.Target()`）。
+- `WithKeyFunc(fn KeyFunc)`: 自定义熔断 Key 生成策略（默认使用 `cc.Target()`）。
 
 ```go
 // 使用方法名作为熔断 Key

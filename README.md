@@ -15,12 +15,12 @@ Genesis 旨在为 Go 微服务开发提供一套**统一的架构规范**和**�
 
 ## 🏗️ 架构概览
 
-| 层次                        | 核心组件                                       | 职责                         |
-| :-------------------------- | :--------------------------------------------- | :--------------------------- |
-| **Level 3: Governance**     | `auth`, `ratelimit`, `breaker`, `registry`     | 流量治理，身份认证，切面能力 |
-| **Level 2: Business**       | `cache`, `idgen`, `dlock`, `mq`, `idem` | 业务能力封装                 |
-| **Level 1: Infrastructure** | `connector`, `db`                              | 连接管理，底层 I/O           |
-| **Level 0: Base**           | `clog`, `config`, `metrics`, `xerrors`         | 框架基石                     |
+| 层次                        | 核心组件                                   | 职责                         |
+| :-------------------------- | :----------------------------------------- | :--------------------------- |
+| **Level 3: Governance**     | `auth`, `ratelimit`, `breaker`, `registry` | 流量治理，身份认证，切面能力 |
+| **Level 2: Business**       | `cache`, `idgen`, `dlock`, `mq`, `idem`    | 业务能力封装                 |
+| **Level 1: Infrastructure** | `connector`, `db`                          | 连接管理，底层 I/O           |
+| **Level 0: Base**           | `clog`, `config`, `metrics`, `xerrors`     | 框架基石                     |
 
 ## 📚 文档
 
@@ -123,9 +123,9 @@ make example-all
 
 ## 🗺️ 版本状态
 
-### v0.2.0 (已发布)
+### v0.4.0 (即将发布)
 
-- **Base (L0):** clog, config, metrics, xerrors
+- **Base (L0):** clog, config, metrics, trace, xerrors
 - **Infrastructure (L1):** connector, db
 - **Business (L2):** cache, dlock, idgen, mq, idem
 - **Governance (L3):** auth, ratelimit, breaker, registry

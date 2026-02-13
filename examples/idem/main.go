@@ -52,6 +52,12 @@ func main() {
 	}
 	defer redisConn.Close()
 
+	// 建立连接
+	if err := redisConn.Connect(context.Background()); err != nil {
+		fmt.Printf("连接 Redis 失败: %v\n", err)
+		return
+	}
+
 	// 3. 创建幂等性组件
 	idem, err := idem.New(&idem.Config{
 		Driver:     idem.DriverRedis,
@@ -72,14 +78,13 @@ func main() {
 
 	// 5. 启动 HTTP 服务器
 	fmt.Println("=== 启动 HTTP 服务器 ===")
-	httpServer := startHTTPServer(appLogger, idem)
+	httpServer, httpAddr := startHTTPServer(appLogger, idem)
 	defer httpServer.Close()
-	fmt.Println("✓ HTTP 服务器已启动: http://localhost:8080")
-	fmt.Println()
+	fmt.Printf("✓ HTTP 服务器已启动: http://%s\n\n", httpAddr)
 
 	// 6. 演示 HTTP 中间件
 	fmt.Println("=== 示例 1: HTTP 中间件（Gin）===")
-	demonstrateHTTP()
+	demonstrateHTTP(httpAddr)
 
 	// 7. 演示 gRPC 一元拦截器
 	fmt.Println("\n=== 示例 2: gRPC 一元拦截器 ===")
@@ -120,7 +125,7 @@ func startGRPCServer(logger clog.Logger, idem idem.Idempotency) (*grpc.Server, s
 }
 
 // startHTTPServer 启动 HTTP 服务器
-func startHTTPServer(logger clog.Logger, idem idem.Idempotency) *http.Server {
+func startHTTPServer(logger clog.Logger, idem idem.Idempotency) (*http.Server, string) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 
@@ -134,31 +139,37 @@ func startHTTPServer(logger clog.Logger, idem idem.Idempotency) *http.Server {
 		})
 	})
 
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatalf("Failed to listen for HTTP: %v", err)
+	}
+
 	server := &http.Server{
-		Addr:    ":8080",
 		Handler: router,
 	}
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.Serve(lis); err != nil && err != http.ErrServerClosed {
 			log.Printf("HTTP server error: %v", err)
 		}
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	return server
+	return server, lis.Addr().String()
 }
 
 // demonstrateHTTP 演示 HTTP 中间件
-func demonstrateHTTP() {
+func demonstrateHTTP(addr string) {
 	time.Sleep(500 * time.Millisecond)
 
 	fmt.Println("配置: 使用 X-Idempotency-Key 头")
 	fmt.Println()
 
+	url := fmt.Sprintf("http://%s/orders", addr)
+
 	// 第一次请求
 	fmt.Println("第一次请求（创建订单）...")
-	req, _ := http.NewRequest("POST", "http://localhost:8080/orders", nil)
+	req, _ := http.NewRequest("POST", url, nil)
 	req.Header.Set("X-Idempotency-Key", "order-key-001")
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
@@ -171,7 +182,7 @@ func demonstrateHTTP() {
 
 	// 第二次请求（相同的幂等性键）
 	fmt.Println("\n第二次请求（相同的幂等性键，应该返回缓存）...")
-	req2, _ := http.NewRequest("POST", "http://localhost:8080/orders", nil)
+	req2, _ := http.NewRequest("POST", url, nil)
 	req2.Header.Set("X-Idempotency-Key", "order-key-001")
 	resp2, err := client.Do(req2)
 	if err != nil {

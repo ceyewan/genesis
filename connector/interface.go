@@ -37,9 +37,10 @@
 //	result, err := client.Get(ctx, "key").Result()
 //
 // 资源所有权：
-//   Connector 拥有底层连接的生命周期，应通过 defer 确保 Close() 被调用。
-//   Component（如 cache、dlock）仅借用 Connector，不应调用 Close()。
-//   应用层应按照 LIFO 顺序释放资源：先关闭依赖 Connector 的组件，再关闭 Connector。
+//
+//	Connector 拥有底层连接的生命周期，应通过 defer 确保 Close() 被调用。
+//	Component（如 cache、dlock）仅借用 Connector，不应调用 Close()。
+//	应用层应按照 LIFO 顺序释放资源：先关闭依赖 Connector 的组件，再关闭 Connector。
 package connector
 
 import (

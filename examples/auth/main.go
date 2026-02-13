@@ -9,9 +9,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/ceyewan/genesis/auth"
 	"github.com/ceyewan/genesis/clog"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 func main() {

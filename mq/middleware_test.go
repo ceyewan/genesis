@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/clog"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ceyewan/genesis/clog"
 )
 
 // ============================================================
@@ -340,7 +341,7 @@ func TestWithRecover(t *testing.T) {
 
 	t.Run("捕获不同类型的 panic", func(t *testing.T) {
 		tests := []struct {
-			name    string
+			name     string
 			panicVal interface{}
 		}{
 			{"string panic", "panic string"},

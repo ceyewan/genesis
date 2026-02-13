@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/ceyewan/genesis/testkit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+
+	"github.com/ceyewan/genesis/testkit"
 )
 
 // TestUser 测试用的用户模型

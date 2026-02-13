@@ -260,9 +260,9 @@ func TestNewWithConfig(t *testing.T) {
 	}
 
 	loader, err := New(&Config{
-		Name:     "app",
-		Paths:    []string{tmpDir},
-		FileType: "json",
+		Name:      "app",
+		Paths:     []string{tmpDir},
+		FileType:  "json",
 		EnvPrefix: "MYAPP",
 	})
 	if err != nil {

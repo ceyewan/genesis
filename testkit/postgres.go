@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/connector"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"gorm.io/gorm"
+
+	"github.com/ceyewan/genesis/connector"
 )
 
 // NewPostgreSQLContainerConfig 使用 testcontainers 创建 PostgreSQL 容器并返回配置

@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/connector"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	natscontainer "github.com/testcontainers/testcontainers-go/modules/nats"
+
+	"github.com/ceyewan/genesis/connector"
 )
 
 // NewNATSContainerConfig 使用 testcontainers 创建 NATS 容器并返回配置

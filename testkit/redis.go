@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/connector"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
+
+	"github.com/ceyewan/genesis/connector"
 )
 
 // NewRedisContainerConfig 使用 testcontainers 创建 Redis 容器并返回配置

@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.0
 // - protoc             v6.33.2
-// source: examples/idem/proto/idempotency.proto
+// source: examples/proto/demo/v1/order.proto
 
 package pb
 
@@ -20,17 +20,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OrderService_CreateOrder_FullMethodName = "/idem.OrderService/CreateOrder"
+	OrderService_CreateOrder_FullMethodName  = "/demo.v1.OrderService/CreateOrder"
+	OrderService_StreamOrders_FullMethodName = "/demo.v1.OrderService/StreamOrders"
 )
 
 // OrderServiceClient is the client API for OrderService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// OrderService 订单服务定义
+// OrderService 订单服务（用于演示各种组件功能）
 type OrderServiceClient interface {
 	// CreateOrder 创建订单（一元调用）
 	CreateOrder(ctx context.Context, in *CreateOrderRequest, opts ...grpc.CallOption) (*CreateOrderResponse, error)
+	// StreamOrders 订单流式接口
+	StreamOrders(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamOrdersRequest, StreamOrdersResponse], error)
 }
 
 type orderServiceClient struct {
@@ -51,14 +54,29 @@ func (c *orderServiceClient) CreateOrder(ctx context.Context, in *CreateOrderReq
 	return out, nil
 }
 
+func (c *orderServiceClient) StreamOrders(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamOrdersRequest, StreamOrdersResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &OrderService_ServiceDesc.Streams[0], OrderService_StreamOrders_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamOrdersRequest, StreamOrdersResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type OrderService_StreamOrdersClient = grpc.BidiStreamingClient[StreamOrdersRequest, StreamOrdersResponse]
+
 // OrderServiceServer is the server API for OrderService service.
 // All implementations must embed UnimplementedOrderServiceServer
 // for forward compatibility.
 //
-// OrderService 订单服务定义
+// OrderService 订单服务（用于演示各种组件功能）
 type OrderServiceServer interface {
 	// CreateOrder 创建订单（一元调用）
 	CreateOrder(context.Context, *CreateOrderRequest) (*CreateOrderResponse, error)
+	// StreamOrders 订单流式接口
+	StreamOrders(grpc.BidiStreamingServer[StreamOrdersRequest, StreamOrdersResponse]) error
 	mustEmbedUnimplementedOrderServiceServer()
 }
 
@@ -71,6 +89,9 @@ type UnimplementedOrderServiceServer struct{}
 
 func (UnimplementedOrderServiceServer) CreateOrder(context.Context, *CreateOrderRequest) (*CreateOrderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateOrder not implemented")
+}
+func (UnimplementedOrderServiceServer) StreamOrders(grpc.BidiStreamingServer[StreamOrdersRequest, StreamOrdersResponse]) error {
+	return status.Error(codes.Unimplemented, "method StreamOrders not implemented")
 }
 func (UnimplementedOrderServiceServer) mustEmbedUnimplementedOrderServiceServer() {}
 func (UnimplementedOrderServiceServer) testEmbeddedByValue()                      {}
@@ -111,11 +132,18 @@ func _OrderService_CreateOrder_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OrderService_StreamOrders_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(OrderServiceServer).StreamOrders(&grpc.GenericServerStream[StreamOrdersRequest, StreamOrdersResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type OrderService_StreamOrdersServer = grpc.BidiStreamingServer[StreamOrdersRequest, StreamOrdersResponse]
+
 // OrderService_ServiceDesc is the grpc.ServiceDesc for OrderService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var OrderService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "idem.OrderService",
+	ServiceName: "demo.v1.OrderService",
 	HandlerType: (*OrderServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -123,6 +151,13 @@ var OrderService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _OrderService_CreateOrder_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "examples/idem/proto/idempotency.proto",
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "StreamOrders",
+			Handler:       _OrderService_StreamOrders_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "examples/proto/demo/v1/order.proto",
 }

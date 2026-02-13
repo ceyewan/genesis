@@ -1,207 +1,132 @@
-# Genesis dlock：分布式锁的设计与实现
+# Genesis DLock：分布式锁的设计与实现
 
-Genesis `dlock` 是业务层（L2）的分布式锁组件，提供统一 `Locker` 接口，支持 Redis 与 Etcd 两种后端。它的核心目标是：在保证易用性的前提下，尽可能降低“误删锁”“锁丢失不可感知”“并发竞态”这些常见风险。
-
----
-
-## 0. 摘要
-
-- `dlock` 统一暴露 `Lock / TryLock / Unlock / Close` 四个核心方法。
-- 配置驱动选择后端：`driver=redis` 或 `driver=etcd`。
-- Redis 方案基于 `SET NX PX` + token 校验 Lua + watchdog 自动续期。
-- Etcd 方案基于 `concurrency.Mutex` + Session KeepAlive 自动续租。
-- 组件内维护本地持锁表，防止同一 `Locker` 实例重复持有同一 key。
-- `WithTTL` 支持运行时覆盖默认 TTL；`Lock` 支持重试，`TryLock` 非阻塞。
-- 组件遵循 Genesis 规范：显式依赖注入、`clog` 日志、`xerrors` 错误语义。
+Genesis `dlock` 是业务层（L2）的分布式锁组件，提供统一的 `Locker` 接口，支持 Redis 与 Etcd 两种后端。它的核心目标是在保证易用性的前提下，尽可能降低误删锁、锁丢失不可感知、并发竞态等分布式锁常见风险。
 
 ---
 
-## 1. 组件定位：统一接口，后端可切换
+## 0 摘要
 
-对外接口非常克制：
-
-- `Lock(ctx, key, opts...) error`：阻塞式获取锁
-- `TryLock(ctx, key, opts...) (bool, error)`：非阻塞尝试
-- `Unlock(ctx, key) error`：释放锁
-- `Close() error`：释放组件内部资源
-
-初始化使用配置 + Option 注入：
-
-- Redis：`dlock.New(cfg, dlock.WithRedisConnector(redisConn), ...)`
-- Etcd：`dlock.New(cfg, dlock.WithEtcdConnector(etcdConn), ...)`
-
-这种设计和 Genesis 其他组件一致：能力通过配置选择，依赖通过构造注入，资源所有权清晰。
+- `dlock` 统一了分布式锁的接口语义，屏蔽 Redis 与 Etcd 后端的实现差异，业务代码可以通过配置切换后端
+- Redis 方案基于 SET NX 原子实现分布式锁，通过 token 校验机制防止误删，通过 watchdog 协程实现自动续期
+- Etcd 方案基于 concurrency.Mutex 和 Session 租约机制实现，适用于强一致场景
+- 组件遵循 Genesis 显式依赖注入规范，通过 Option 注入连接器和日志，资源所有权清晰
+- 提供 Lock（阻塞重试）、TryLock（非阻塞尝试）、Unlock（释放锁）、Close（组件资源清理）等核心方法
 
 ---
 
-## 2. 配置模型与默认值策略
+## 1 背景：为什么需要分布式锁
 
-`Config` 核心字段：
+在微服务场景中，多个服务实例同时操作同一资源时，需要一种机制来保证互斥访问。单机环境的互斥锁（如 sync.Mutex）无法跨进程工作，因此需要引入能够跨进程同步的分布式锁。
 
-- `Driver`：后端类型（`redis` / `etcd`）
-- `Prefix`：锁键前缀
-- `DefaultTTL`：默认过期时间（默认 `10s`）
-- `RetryInterval`：`Lock` 重试间隔（默认 `100ms`）
-
-默认值策略：
-
-- `DefaultTTL <= 0` 时回落到 `10s`
-- `RetryInterval <= 0` 时回落到 `100ms`
-
-这保证了“最小可用配置”，同时允许按场景精细调参。
+典型的应用场景包括防止重复执行任务（如定时任务）、保护临界资源（如库存扣减）、实现幂等性控制、实现租约互斥等。如果没有可靠的分布式锁机制，这些场景可能出现重复执行、数据不一致、资源竞争等问题。
 
 ---
 
-## 3. Redis 实现：SETNX + Token + Watchdog
+## 2 核心设计：统一接口与后端可切换
+
+### 2.1 核心接口
+
+`dlock` 对外暴露的 `Locker` 接口设计非常克制，仅包含四个核心方法：Lock 用于阻塞式获取锁，支持重试间隔；TryLock 用于非阻塞尝试获取锁；Unlock 用于释放锁；Close 用于清理组件内部资源。这种设计让调用方可以灵活选择阻塞或非阻塞语义。
+
+### 2.2 后端驱动选择
+
+组件通过配置的 Driver 字段选择后端实现，支持 redis 和 etcd 两种驱动。这种设计让业务可以在不同场景下选择合适的后端，例如已有 Redis 基础设施时优先使用 Redis 方案，需要强一致场景时使用 Etcd 方案。
+
+---
+
+## 3 Redis 实现：SET NX 与 Token 校验
 
 ### 3.1 获取锁流程
 
-Redis 路径的关键步骤：
+Redis 分布式锁的获取过程包含多个关键步骤：
 
-1. 本地检查：若同一 `Locker` 已持有该 key，直接返回 `ErrLockAlreadyHeld`。
-2. 生成随机 token（16 字节随机值，hex 编码）。
-3. 执行 `SET key token NX PX(ttl)` 尝试抢锁。
-4. 成功后写入本地持锁表，并启动 watchdog 续期协程。
+1.  **本地持锁检查**：组件内部维护一个本地锁表，记录当前进程已持有的锁。如果本地检查发现同一 key 已被持有，直接返回 `ErrLockAlreadyHeld` 错误，避免无效的 Redis 请求。
+2.  **生成随机 Token**：组件使用 `crypto/rand` 生成 16 字节随机值并编码为 hex 字符串。这个 token 作为锁的唯一标识，只有持有该 token 的客户端才能释放锁。
+3.  **原子设置**：执行 `SET NX PX` 命令，通过 Redis 的原子操作尝试设置 key 并设置过期时间。`SET NX` 的语义是仅当 key 不存在时才设置成功，`PX` 参数指定过期时间。如果设置失败说明锁已被其他客户端持有，根据重试配置决定是否继续重试。
+4.  **状态更新**：获取成功后更新本地持锁表，将 key 和 token 记录到 locks map 中，并启动 watchdog 续约协程。
 
-本地“先查后写 + 二次检查”的处理能避免并发竞态下重复持有。
+### 3.2 Token 校验机制
 
-### 3.2 安全释放（防误删）
+释放锁不是简单的 `DEL key` 操作，而是通过 Lua 脚本保证原子性和正确性。
 
-释放锁不是直接 `DEL`，而是执行 Lua 脚本：
+Lua 脚本首先使用 `GET` 命令获取当前 key 对应的 token 值，然后检查获取的 token 是否与存储的 token 一致。只有当两个 token 完全匹配时，脚本才返回执行 `DEL` 命令删除 key。
 
-- 只有当 `GET key == token` 时才 `DEL key`
-- 否则返回 0，报告 `ErrOwnershipLost`
+如果 token 不匹配或 key 不存在，脚本返回 0 表示释放失败。这种设计确保了只有锁的持有者才能释放锁，避免误删其他客户端持有的锁。
 
-这确保了“只有锁拥有者才能删锁”，避免误删其他实例的锁。
+### 3.3 Watchdog 自动续期
 
-### 3.3 自动续期（Watchdog）
+watchdog 协程负责在锁持有期间自动续期，防止业务执行时间超过初始 TTL 导致锁过期。
 
-watchdog 策略：
+续期策略为在 TTL 过去三分之一时触发续约，使用 Lua 脚本的 `PEXPIRE` 命令延长过期时间。
 
-- 续期间隔为 `ttl/3`（最小 1 秒）
-- 每次用 Lua 校验 token 后再 `PEXPIRE`
-- 续期失败或 token 不匹配，协程退出并记录日志
-
-这可以覆盖“业务执行时间超出初始 TTL”的场景，减少锁意外过期导致的并发问题。
+watchdog 执行时会检查多个退出条件：context 取消、续期失败、锁已被释放。任一条件发生时 watchdog 协程退出，并在退出前清理本地持锁记录。这种设计让业务代码可以专注于任务逻辑，无需担心长时间任务导致的锁过期问题。
 
 ---
 
-## 4. Etcd 实现：Mutex + Session 租约
+## 4 Etcd 实现：Mutex 与 Session 租约
 
 ### 4.1 加锁机制
 
-Etcd 路径基于 `clientv3/concurrency`：
+Etcd 分布式锁基于 etcd clientv3 的 concurrency 接口实现，该接口在单机环境和分布式环境下有不同的行为。在单机场景下，concurrency.NewMutex 实现为普通的 sync.Mutex，提供了高效的本地锁能力。
 
-- 使用 `concurrency.NewMutex(session, key)`
-- `Lock` 走 `mutex.Lock(ctx)`
-- `TryLock` 走 `mutex.TryLock(ctx)`，占用时返回 `false, nil`
+在分布式场景下，concurrency.NewMutex 的行为会发生变化。当多个客户端竞争同一个 key 时，Etcd 会按照请求的时间顺序确定锁的归属，先到达的请求优先获得锁，这种机制称为先入先出公平锁。
 
-### 4.2 TTL 与 Session 策略
+### 4.2 Session 与 TTL
 
-- 默认情况下复用组件级 session（默认 TTL）
-- 如果调用 `WithTTL` 且与默认值不同，会为这次锁创建独立 session
-- 该 session 由 etcd keepalive 自动续租
-- 解锁后若是独立 session，会主动关闭
+Etcd 实现利用了 clientv3 的 Session 功能来实现租约自动续期。创建 Session 时可以指定 TTL，Etcd 服务器会在该 Session 存活期间自动刷新租约，保持锁的有效性。
 
-这个设计兼顾了“默认路径低开销”和“单次锁可定制 TTL”。
-
-### 4.3 生命周期
-
-- `Unlock`：先释放 mutex，再清理本地持锁记录
-- `Close`：关闭默认 session
-
-相比 Redis，Etcd 的所有权语义更多由租约与 mutex 原语保障。
+组件支持通过 WithTTL Option 为单次锁操作指定独立的过期时间，这提供了灵活的租约控制能力。如果未指定 TTL 则使用配置的 DefaultTTL，如果 DefaultTTL 也未设置则使用 10 秒的默认值。
 
 ---
 
-## 5. Lock、TryLock 与上下文语义
+## 5 错误语义与可观测性
 
-### 5.1 `Lock`
+### 5.1 标准错误定义
 
-- 阻塞式重试获取锁
-- 每次重试间隔由 `RetryInterval` 控制
-- 上下文取消/超时会及时返回 `context.Canceled` 或 `context.DeadlineExceeded`
+组件定义了清晰的错误类型来区分不同的失败场景。ErrConfigNil 表示配置为空，ErrConnectorNil 表示未注入必需的连接器，ErrLockNotHeld 表示尝试释放未持有的锁，ErrLockAlreadyHeld 表示本地检测到重复持锁，ErrOwnershipLost 表示释放时发现所有权变更。
 
-### 5.2 `TryLock`
+这些错误基于 Genesis xerrors 组件，提供统一的错误类型和可观测性。业务代码可以通过错误类型判断进行不同的处理策略，如 ErrLockAlreadyHeld 时跳过操作，context.Canceled 时快速返回等。
 
-- 单次尝试，不重试
-- 成功返回 `true, nil`
-- 被占用返回 `false, nil`
-- 真正错误返回 `false, err`
+### 5.2 日志集成
 
-这让调用方可以清晰区分“竞争失败”和“系统异常”。
+通过 WithLogger Option 注入 clog.Logger 后，组件会在关键事件上输出结构化日志。日志自动包含 component=dlock 字段，便于过滤和检索。
+
+关键事件包括 lock acquired（锁获取成功）、lock released（锁释放成功）、watchdog renew failed（续期失败）、ownership lost（所有权丢失）等。这些日志对于生产环境的问题排查和监控非常重要。
 
 ---
 
-## 6. 错误模型与可观测性
+## 6 使用场景与最佳实践
 
-### 6.1 标准错误
+### 6.1 场景选择
 
-组件定义了稳定错误语义：
+Redis 方案适用于已有 Redis 基础设施且追求接入简单的场景，适合大多数分布式锁需求。Etcd 方案适用于需要强一致性保证的场景，或者已有 Etcd 基础设施的环境。
 
-- `ErrConfigNil`：配置为空
-- `ErrConnectorNil`：连接器为空
-- `ErrLockNotHeld`：释放未持有的锁
-- `ErrLockAlreadyHeld`：同一实例重复持锁
-- `ErrOwnershipLost`：释放时发现所有权丢失
+### 6.2 阻塞与非阻塞选择
 
-### 6.2 日志
+Lock 方法是阻塞式获取，支持配置重试间隔，适合必须获取锁成功才能继续的场景。TryLock 是非阻塞尝试，适合可选执行的业务逻辑，调用方可以根据返回布尔值决定后续处理。
 
-通过 `WithLogger` 注入后，组件会带上 `component=dlock`。关键事件包括：
+### 6.3 关键资源保护
 
-- lock acquired
-- lock released
-- watchdog renew failed / lost ownership
+进入关键区前应先获取锁，使用 defer 确保锁的释放，结合 context 超时控制避免无限等待。这种模式可以避免死锁和资源泄漏。
 
-对于线上排障，建议把业务 key、request id 一并打到上层日志上下文中。
+### 6.4 Key 命名规范
+
+建议按应用或业务域隔离锁的 key，避免跨服务 key 冲突。配置 Prefix 参数可以实现 key 的命名空间隔离，如 myapp:lock:resource。
 
 ---
 
-## 7. 设计边界与注意事项
+## 7 设计权衡
 
-- `dlock` 是“互斥原语”，不是事务协调器；业务幂等仍需自己保证。
-- Redis watchdog 续期失败后会退出，业务侧应关注日志和异常路径。
-- Etcd 的 TTL 是秒级（`WithTTL` 最终按秒传入 session），不适合亚秒精度控制。
-- `Prefix` 建议按应用或业务域隔离，避免跨服务 key 冲突。
-- 长耗时任务建议显式设置 `WithTTL`，并结合业务超时控制。
+### 7.1 复杂度与可靠性
 
----
+Redis 方案通过 SET NX 和 Lua 脚本实现的分布式锁提供了完整的锁语义，包括自动续期和所有权校验，适用于大多数业务场景。Etcd 方案利用了 Etcd 的原生一致性保证，更适合需要强一致性的场景。
 
-## 8. 实践建议
+### 7.2 性能考量
 
-### 8.1 场景选型
-
-- 已有 Redis 基础设施且追求接入简单：优先 Redis 驱动。
-- 控制面、强一致协调场景：优先 Etcd 驱动。
-
-### 8.2 推荐参数起点
-
-- `DefaultTTL`: 10s~30s
-- `RetryInterval`: 50ms~200ms
-- 单次关键任务可用 `WithTTL` 提升容错余量
-
-### 8.3 典型模式
-
-任务竞选：
-
-- 定时任务实例先 `TryLock("job:xxx")`
-- 成功者执行任务，结束后 `Unlock`
-
-临界资源保护：
-
-- 进入关键区前 `Lock`
-- 使用 `defer Unlock`
-- 结合上下文超时防止无限等待
+Redis 方案在网络开销上相对较低，但在高并发场景下可能需要调整重试间隔以减少无效请求。Etcd 方案在单机场景下性能最优，分布式场景下依赖 Etcd 集群的性能。
 
 ---
 
-## 9. 总结
+## 8 总结
 
-`dlock` 的价值不在“隐藏后端差异”，而在于把分布式锁最容易出错的几件事做成默认正确：
-
-- 持锁所有权校验（防误删）
-- 自动续期（降低长任务锁过期风险）
-- 本地重复持锁防护（降低应用内竞态）
-- 统一错误语义与上下文取消行为
-
-在此基础上，业务可以按场景选择 Redis 或 Etcd，并通过 `TTL/重试/日志` 做工程化调优。
+`dlock` 组件的核心价值在于提供了一个统一、可靠、易用的分布式锁解决方案。通过屏蔽不同后端的实现差异，业务代码可以使用相同的接口完成分布式互斥、任务调度、幂等性控制等功能。组件遵循 Genesis 的设计规范，采用显式依赖注入，提供清晰的错误语义和可观测性，让分布式锁的使用更加安全和可维护。

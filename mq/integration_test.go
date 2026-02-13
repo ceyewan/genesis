@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/testkit"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ceyewan/genesis/testkit"
 )
 
 func newJetStreamMQ(t *testing.T) MQ {

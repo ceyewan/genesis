@@ -7,6 +7,12 @@ import (
 	"os"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+	"gorm.io/gorm"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/db"
@@ -17,11 +23,6 @@ import (
 	"github.com/ceyewan/genesis/mq"
 	"github.com/ceyewan/genesis/trace"
 	"github.com/ceyewan/genesis/xerrors"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	oteltrace "go.opentelemetry.io/otel/trace"
-	"google.golang.org/grpc"
-	"gorm.io/gorm"
 )
 
 const (

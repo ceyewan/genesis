@@ -98,7 +98,9 @@ func (c *natsConnector) Close() error {
 	// Drain 确保消息完全处理后再关闭（仅在已连接状态下）
 	if c.conn.Status() == nats.CONNECTED {
 		c.logger.Debug("draining nats connection before close")
-		c.conn.Drain()
+		if err := c.conn.Drain(); err != nil {
+			c.logger.Warn("failed to drain nats connection", clog.Error(err))
+		}
 	}
 
 	c.conn.Close()

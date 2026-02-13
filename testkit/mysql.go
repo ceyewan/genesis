@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/connector"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
 	"gorm.io/gorm"
+
+	"github.com/ceyewan/genesis/connector"
 )
 
 // NewMySQLContainerConfig 使用 testcontainers 创建 MySQL 容器并返回配置

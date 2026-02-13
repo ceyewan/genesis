@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
+	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
 // ========================================

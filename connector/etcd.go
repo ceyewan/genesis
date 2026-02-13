@@ -154,4 +154,3 @@ func (c *etcdConnector) GetClient() *clientv3.Client {
 	defer c.mu.RUnlock()
 	return c.client
 }
-

@@ -11,6 +11,7 @@ type Config struct {
 }
 
 // validate 设置默认值并验证配置
+// nolint:unparam
 func (c *Config) validate() error {
 	// 设置默认值
 	if c.Name == "" {

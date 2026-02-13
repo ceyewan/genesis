@@ -118,6 +118,22 @@ type Config struct {
 	MinimumRequests uint32 `json:"minimum_requests" yaml:"minimum_requests"`
 }
 
+// validate 验证配置并设置默认值（内部使用）
+func (c *Config) validate() {
+	if c.MaxRequests == 0 {
+		c.MaxRequests = 1
+	}
+	if c.Timeout == 0 {
+		c.Timeout = 60 * time.Second
+	}
+	if c.FailureRatio == 0 {
+		c.FailureRatio = 0.6
+	}
+	if c.MinimumRequests == 0 {
+		c.MinimumRequests = 10
+	}
+}
+
 // ========================================
 // 工厂函数 (Factory Functions)
 // ========================================
@@ -126,22 +142,16 @@ type Config struct {
 // 这是标准的工厂函数，支持在不依赖其他容器的情况下独立实例化
 //
 // 参数:
-//   - cfg: 熔断器配置
+//   - cfg: 熔断器配置，传 nil 时使用默认配置
 //   - opts: 可选参数 (Logger, Fallback)
 //
-// 使用示例:
-//
-//	brk, _ := breaker.New(&breaker.Config{
-//		MaxRequests:     5,
-//		Interval:        60 * time.Second,
-//		Timeout:         30 * time.Second,
-//		FailureRatio:    0.6,
-//		MinimumRequests: 10,
-//	}, breaker.WithLogger(logger))
+// 返回: Breaker 实例和错误（仅当配置无效时返回错误）
 func New(cfg *Config, opts ...Option) (Breaker, error) {
+	// nil cfg 时使用默认配置
 	if cfg == nil {
-		return nil, ErrConfigNil
+		cfg = &Config{}
 	}
+	cfg.validate()
 
 	// 应用选项
 	opt := options{}
@@ -149,20 +159,18 @@ func New(cfg *Config, opts ...Option) (Breaker, error) {
 		o(&opt)
 	}
 
-	// 派生 Logger（添加 component 字段）
+	// nil logger 时使用 Discard（确保 logger 永远不为 nil）
 	logger := opt.logger
-	if logger != nil {
-		logger = logger.With(clog.String("component", "breaker"))
+	if logger == nil {
+		logger = clog.Discard()
 	}
 
-	if logger != nil {
-		logger.Info("creating circuit breaker",
-			clog.Int("max_requests", int(cfg.MaxRequests)),
-			clog.Duration("interval", cfg.Interval),
-			clog.Duration("timeout", cfg.Timeout),
-			clog.Float64("failure_ratio", cfg.FailureRatio),
-			clog.Int("minimum_requests", int(cfg.MinimumRequests)))
-	}
+	logger.Info("creating circuit breaker",
+		clog.Int("max_requests", int(cfg.MaxRequests)),
+		clog.Duration("interval", cfg.Interval),
+		clog.Duration("timeout", cfg.Timeout),
+		clog.Float64("failure_ratio", cfg.FailureRatio),
+		clog.Int("minimum_requests", int(cfg.MinimumRequests)))
 
 	return newBreaker(cfg, logger, opt.fallback)
 }

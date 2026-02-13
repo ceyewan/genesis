@@ -436,7 +436,6 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 						r.logger.Warn("watch channel closed, will retry",
 							clog.String("service_name", serviceName),
 							clog.Duration("retry_after", retryInterval))
-						watchCh = nil
 						break innerLoop
 					}
 
@@ -454,14 +453,12 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 							} else {
 								lastRev = resp.Header.Revision
 							}
-							watchCh = nil
 							break innerLoop
 						}
 						r.logger.Error("watch error, will retry",
 							clog.String("service_name", serviceName),
 							clog.Error(wresp.Err()),
 							clog.Duration("retry_after", retryInterval))
-						watchCh = nil
 						break innerLoop
 					}
 					// 处理事件

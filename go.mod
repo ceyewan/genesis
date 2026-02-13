@@ -1,6 +1,6 @@
 module github.com/ceyewan/genesis
 
-go 1.25.1
+go 1.24.0
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
@@ -16,9 +16,16 @@ require (
 	github.com/sony/gobreaker/v2 v2.3.0
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
+	github.com/testcontainers/testcontainers-go/modules/etcd v0.40.0
+	github.com/testcontainers/testcontainers-go/modules/kafka v0.40.0
+	github.com/testcontainers/testcontainers-go/modules/mysql v0.40.0
+	github.com/testcontainers/testcontainers-go/modules/nats v0.40.0
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.40.0
+	github.com/testcontainers/testcontainers-go/modules/redis v0.40.0
 	github.com/twmb/franz-go v1.20.6
 	github.com/uptrace/opentelemetry-go-extra/otelgorm v0.3.2
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	go.etcd.io/etcd/api/v3 v3.6.6
 	go.etcd.io/etcd/client/v3 v3.6.6
 	go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin v0.64.0
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.64.0
@@ -34,6 +41,7 @@ require (
 	google.golang.org/grpc v1.77.0
 	google.golang.org/protobuf v1.36.10
 	gorm.io/driver/mysql v1.6.0
+	gorm.io/driver/postgres v1.6.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1
 	gorm.io/sharding v0.6.2
@@ -136,12 +144,6 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/testcontainers/testcontainers-go v0.40.0 // indirect
-	github.com/testcontainers/testcontainers-go/modules/etcd v0.40.0 // indirect
-	github.com/testcontainers/testcontainers-go/modules/kafka v0.40.0 // indirect
-	github.com/testcontainers/testcontainers-go/modules/mysql v0.40.0 // indirect
-	github.com/testcontainers/testcontainers-go/modules/nats v0.40.0 // indirect
-	github.com/testcontainers/testcontainers-go/modules/postgres v0.40.0 // indirect
-	github.com/testcontainers/testcontainers-go/modules/redis v0.40.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
@@ -150,7 +152,6 @@ require (
 	github.com/uptrace/opentelemetry-go-extra/otelsql v0.3.2 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	go.etcd.io/etcd/api/v3 v3.6.6 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.6.6 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.49.0 // indirect
@@ -170,5 +171,4 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gorm.io/driver/postgres v1.6.0 // indirect
 )

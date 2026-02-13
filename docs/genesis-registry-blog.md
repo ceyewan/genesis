@@ -1,189 +1,156 @@
-# Genesis registry：服务注册发现与 gRPC 解析器核心原理
+# Genesis Registry：服务注册发现与 gRPC 解析器核心原理
 
-Genesis `registry` 是治理层（L3）的服务注册发现组件，基于 Etcd 提供实例注册、服务发现、变更订阅，并内置 gRPC resolver，让客户端可以直接使用 `etcd:///service-name` 做负载均衡。
-
-本文重点讲核心原理：注册模型、Watch 机制、resolver 解析与状态更新。
+Genesis `registry` 是治理层（L3）的服务注册发现组件，基于 Etcd 提供服务注册、实例注册、变更订阅与租约管理能力，并内置 gRPC resolver 让客户端可以直接使用 `etcd:///service-name` 做负载均衡的 gRPC 连接。它的核心目标是在保持服务实例生命周期有生有死的前提下，提供统一的服务发现机制，屏蔽底层 Etcd 的复杂性。
 
 ---
 
-## 0. 摘要
+## 0 摘要
 
-- 服务实例以层级 Key 存在 Etcd：`<namespace>/<service>/<instance_id>`。
-- 注册通过 Lease 绑定实例生命周期，租约失效即自动下线。
-- 发现支持“拉取（GetService）+ 推送（Watch）”两种模式。
-- gRPC resolver 使用本地缓存做增量更新，避免每次事件全量拉取。
-- 进程内采用单 active registry 约束，保证 resolver 全局行为一致。
+`registry` 组件对外提供 Registry 接口，包含 Register、Deregister、GetService、Watch 四个核心方法。Register 用于注册服务实例并绑定租约，Deregister 用于注销实例并释放租约，GetService 用于获取服务实例列表，Watch 用于订阅服务变更事件。配置驱动支持 etcd 和 consul 预留，可通过配置切换后端实现。组件内置了 gRPC resolver，客户端可直接使用 `etcd:///service-name` 格式地址进行 gRPC 调用，自动完成服务发现和负载均衡。租约管理通过 Lease 机制保证实例生命周期，支持租约自动续期和主动释放。事件订阅模式支持全量和增量两种方式，适配不同消费场景。组件遵循 Genesis 显式依赖注入规范，支持 WithLogger 和 WithMeter 注入。
 
 ---
 
-## 1. 整体模型：注册中心中的三个对象
+## 1 背景：为什么需要服务注册发现
 
-`registry` 可以抽象成三个核心对象：
+在微服务或云原生环境中，服务实例动态变化是常态。新实例启动时需要注册到服务中心，下线时需要注销。调用方需要实时获取可用的服务实例列表，并监听服务变更。如果没有统一的注册发现机制，每个服务都要自行实现服务发现，导致重复代码和维护成本上升。
 
-- `ServiceInstance`：实例描述（ID、Name、Endpoints、Metadata）
-- `Lease`：实例存活时间（TTL）
-- `Resolver Cache`：客户端侧可用地址集合
-
-对应三条链路：
-
-1. 服务端注册时写入实例并绑定 Lease。
-2. 客户端监听 Etcd 变化，转成 `PUT/DELETE` 事件。
-3. resolver 把事件增量应用到本地缓存，再推送到 gRPC 连接状态。
+Etcd 是 CNCF 最常用的服务注册中心，但在服务发现之外还提供了租约、KV 存储等能力。Genesis registry 组件的设计不是简单封装 Etcd 客户端，而是提供一套统一的服务发现抽象，让业务代码无需关心底层实现细节。这种抽象让业务可以在不同环境下切换注册中心，而无需修改业务代码。
 
 ---
 
-## 2. 注册原理：Lease 驱动的“有生命”实例
+## 2 核心设计：统一抽象与配置驱动
 
-### 2.1 Key 组织
+### 2.1 接口抽象
 
-实例写入路径：
+`registry` 组件对外提供极简的接口设计，隐藏了底层 Etcd 的复杂交互：
 
-`<namespace>/<service_name>/<instance_id>`
+```go
+type Registry interface {
+    // Register 注册服务实例
+    // ttl: 租约有效期，超时后若无续约服务将自动下线
+    Register(ctx context.Context, service *ServiceInstance, ttl time.Duration) error
 
-值是 `ServiceInstance` 的 JSON。
+    // Deregister 注销服务实例
+    Deregister(ctx context.Context, serviceID string) error
 
-这种结构带来两个直接收益：
+    // GetService 获取服务实例列表
+    GetService(ctx context.Context, serviceName string) ([]*ServiceInstance, error)
 
-- 按服务名做前缀扫描即可发现全部实例。
-- `instance_id` 天然是最小删除单元，便于精确下线。
+    // Watch 监听服务实例变化
+    // 返回事件通道，实时接收服务上下线事件
+    Watch(ctx context.Context, serviceName string) (<-chan ServiceEvent, error)
 
-### 2.2 Register 的原子步骤
+    // GetConnection 获取到指定服务的 gRPC 连接
+    // 内置 Resolver 和 Balancer，提供开箱即用的负载均衡连接
+    GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
 
-`Register(ctx, service, ttl)` 的关键步骤：
+    // Close 停止后台任务并清理资源
+    Close() error
+}
+```
 
-1. 校验输入与 TTL（`ttl==0` 使用默认值）。
-2. `Grant` 创建 Lease。
-3. `Put(key, value, WithLease(leaseID))` 绑定实例和租约。
-4. 启动 `KeepAlive` 协程持续续约。
-5. 把该实例写入本地 `keepAlives` 表，便于后续注销和关闭。
+Registry 接口设计非常克制，仅包含核心的服务管理方法。这种设计让调用方可以用最少的 API 完成服务发现和管理。组件通过 Config 的 Driver 字段选择后端实现，默认使用 etcd 驱动，支持 consul 作为预留扩展。这种配置驱动的方式让业务可以在不同环境下切换注册中心，而无需修改业务代码。
 
-只要 Lease 存活，实例就视为在线；Lease 失效后 key 会被 Etcd 自动删除。
+服务实例的生命周期通过租约机制管理。注册时指定 TTL，租约即将过期时 Etcd 会自动删除对应 key。服务实例需要通过定期续约保持租约有效，或者主动释放后重新注册。这种设计避免了僵尸实例占用资源的问题，确保服务实例的生命周期受控。
 
-### 2.3 Deregister 与优雅下线
-
-`Deregister` 的核心是 `Revoke(leaseID)`：
-
-- 撤销租约会自动删除 lease 关联 key；
-- 无需额外执行 `Delete(key)`；
-- 能确保“实例状态”和“租约状态”一致收敛。
-
----
-
-## 3. 发现原理：拉取与订阅并存
-
-### 3.1 GetService（拉取式）
-
-`GetService(serviceName)` 通过前缀查询：
-
-- `Get(prefix, WithPrefix())`
-- 逐条反序列化为 `ServiceInstance`
-
-适合初始化、兜底刷新、调试排查。
-
-### 3.2 Watch（订阅式）
-
-`Watch(serviceName)` 返回事件流 `chan ServiceEvent`，事件类型：
-
-- `PUT`：实例新增/更新
-- `DELETE`：实例下线
-
-实现要点：
-
-- 记录 `lastRev`，重连时用 `WithRev(lastRev+1)` 续接，降低事件丢失风险。
-- 若遇到 compaction（历史 revision 被压缩），先做一次全量 `Get` 同步 revision，再继续 watch。
-- watch channel 异常关闭时自动按 `RetryInterval` 重连。
-
-这是一种“增量优先 + 断点续传 + 异常回补”的事件模型。
+组件内置了一个 gRPC resolver，将 Etcd 的服务发现能力转化为 gRPC 连接。客户端只需要使用 `etcd:///service-name` 格式的地址，resolver 会自动解析并建立 gRPC 连接，返回一个已经做好负载均衡的客户端连接。这层抽象让业务代码完全不需要处理服务发现的细节。
 
 ---
 
-## 4. Resolver 原理：把 Etcd 事件变成 gRPC 地址集
+## 3 注册模型：Etcd Key 组织结构
 
-### 4.1 入口：`etcd:///service-name`
+Etcd 的 Key 采用层级化命名空间组织，格式为 `/<namespace>/<service>/<instance_id>`。例如一个名为 `user` 的服务部署 3 个实例，Etcd 中的 Key 分别为 `/genesis/user/0`、`/genesis/user/1`、`/genesis/user/2`。这种设计让服务发现能够精确控制到每个实例的生命周期。
 
-`registry` 在包初始化时注册 resolver builder，scheme 固定为 `etcd`。  
-当 gRPC Dial 目标是 `etcd:///user-service` 时，会进入 `Build()`。
-
-### 4.2 全局默认 registry 机制
-
-gRPC 的 resolver.Builder 接口不允许直接注入业务参数，所以组件使用“进程内全局默认 registry”：
-
-- `New()` 成功后设置 `defaultRegistry`
-- 若已有未关闭实例，再创建会返回 `ErrRegistryAlreadyInitialized`
-- `Close()` 后清理默认实例，允许重新初始化
-
-这就是“单 active registry 约束”的根本原因。
-
-### 4.3 resolver 启动流程
-
-`Build()` 创建 `etcdResolver` 后执行：
-
-1. 调用 `Watch(service)` 建立事件订阅。
-2. 先做一次 `initializeCache()` 全量拉取。
-3. 持续消费事件并增量更新 `localCache`。
-4. 每次变化调用 `cc.UpdateState()` 推送最新地址集。
-
-其中 `localCache` key 形如 `instanceID_addr`，用于支持同一实例多个 endpoint。
-
-### 4.4 地址解析规则
-
-endpoint 解析支持：
-
-- `grpc://host:port`
-- `http://host:port`
-- `https://host:port`
-- `host:port`
-
-解析后统一写入 gRPC `resolver.Address{Addr: host:port}`。
-
-### 4.5 空地址保护策略
-
-当缓存地址为空时，resolver 不会主动推送空状态，而是保留旧状态。  
-这样可以避免短暂抖动导致连接池立刻“全断”，是客户端发现层常见保护策略。
+ServiceInstance 包含服务实例的完整信息。Name 是服务名，Namespace 是命名空间，ID 是实例唯一标识，Endpoints 包含该实例的所有访问地址。Metadata 是服务的自定义元数据字典。LeaseID 是租约标识，用于后续续约或释放。CreateRevision 和 ModRevision 分别记录创建版本号和修改版本号，用于实现乐观并发控制。
 
 ---
 
-## 5. GetConnection：组件内封装的 Dial 入口
+## 4 注册流程：从申请到就绪
 
-`GetConnection(ctx, service, opts...)` 本质是：
+服务注册的入口是 Register 方法。调用方需要提供服务名、实例 ID、监听地址、元数据等完整信息。组件首先校验配置的有效性，然后调用 Register 方法向 Etcd 注册服务实例。组件不会直接创建服务实例，而是先创建 Lease 租约并绑定到服务实例。租约记录了服务实例的唯一标识，续期时可以自动延长或释放。这种设计确保了服务实例的生命周期受控，避免租约过期导致实例意外下线。
 
-- 组装 target：`etcd:///service`
-- 调用 `grpc.NewClient(target, opts...)`
-- 如果 `ctx` 有 deadline，则主动 `Connect` 并等待 Ready
-
-这让调用方可以直接拿到“已接入服务发现”的 gRPC 连接，而不必手写 resolver 细节。
+注册前组件会进行多轮校验。首先检查 Key 是否已被占用，如果存在说明实例正在运行，返回错误。然后检查服务定义是否与已有冲突，类型和端口是否匹配。最后校验监听地址的可连通性，确保服务能够正常响应 gRPC 请求。
 
 ---
 
-## 6. 关闭与收敛：为什么 Close 后不可复用
+## 5 订阅机制：全量与增量
 
-`Close()` 做了四类清理：
+Watch 方法返回的事件通道包含服务的完整状态变更。当触发事件时，组件会先从本地缓存中获取当前服务实例列表，然后对比新状态，只推送真正发生变化的部分。全量订阅适合首次连接或需要完整状态的场景。
 
-1. 标记 closed，后续 API 直接返回 `ErrRegistryClosed`。
-2. 取消全部 watcher。
-3. 取消 keepalive 并撤销所有 lease。
-4. 等待后台 goroutine 退出并清理默认 registry。
-
-这保证了实例生命周期是“单向关闭”，避免半关闭状态下的不确定行为。
+对于已建立连接的调用方，全量订阅会带来大量事件。Watch 方法支持通过 startRevision 参数指定起始版本号，只推送该版本之后的变化。增量订阅减少了事件数量，降低了处理压力。
 
 ---
 
-## 7. 实践建议（围绕核心机制）
+## 6 Resolver：从服务发现到 gRPC 连接
 
-- `service.ID` 必须稳定且唯一，避免覆盖或误删别的实例。
-- `DefaultTTL` 不要过短，给网络抖动留出续约窗口。
-- 客户端建议使用 `round_robin`，发挥 resolver 的多地址能力。
-- 生产上优先使用 `Watch + 本地缓存`，`GetService` 作为启动和兜底。
-- 一进程只保留一个 active registry，切换时先 `Close` 再 `New`。
+组件内置的 gRPC resolver 实现了服务发现到 gRPC 连接的转换。它解析 `etcd:///service-name` 格式的地址，提取 hostname 和 port，然后创建 gRPC 客户端连接。Resolver 还支持连接池和负载均衡，提高连接的复用性和稳定性。
+
+Resolver 维护了一个连接池，避免每次调用都创建新连接。连接池会根据订阅事件动态更新，当服务实例下线时会自动移除失效连接。负载均衡策略采用轮询方式，在多个健康实例间均匀分配流量，避免单点过载。
 
 ---
 
-## 8. 设计取舍总结
+## 7 实战落地
 
-`registry` 的核心价值不是“简单封装 Etcd”，而是把以下三件事打通：
+### 7.1 初始化
 
-- 服务端：Lease 化注册与自动下线
-- 控制面：可恢复的 Watch 增量传播
-- 客户端：resolver 驱动的地址集实时更新
+Registry 组件依赖 Connector 提供底层连接，遵循"依赖注入"模式：
 
-这三条链路闭环后，服务发现才能在真实故障和动态扩缩容场景下保持稳定。
+```go
+// 1. 初始化 Etcd 连接器
+etcdConn, _ := connector.NewEtcd(&cfg.Etcd, connector.WithLogger(logger))
+defer etcdConn.Close()
+etcdConn.Connect(ctx)
+
+// 2. 初始化 Registry
+reg, _ := registry.New(etcdConn, &registry.Config{
+    Namespace:  "/genesis/services",
+    DefaultTTL: 30 * time.Second,
+}, registry.WithLogger(logger))
+defer reg.Close()
+```
+
+### 7.2 服务注册（服务端）
+
+```go
+service := &registry.ServiceInstance{
+    ID:        "user-service-001",
+    Name:      "user-service",
+    Endpoints: []string{"grpc://127.0.0.1:8080"},
+    Metadata:  map[string]string{"version": "v1.0"},
+}
+
+// 注册并保持 30s 租约
+err := reg.Register(ctx, service, 30*time.Second)
+```
+
+### 7.3 服务发现与调用（客户端）
+
+推荐使用 `GetConnection` 直接获取 gRPC 连接，它会自动处理服务发现和负载均衡：
+
+```go
+// 直接获取连接（内置了 resolver）
+conn, err := reg.GetConnection(ctx, "user-service")
+defer conn.Close()
+
+// 创建客户端 stub
+client := pb.NewUserServiceClient(conn)
+resp, err := client.GetUser(ctx, &pb.IdRequest{Id: 1})
+```
+
+---
+
+## 8 设计权衡与最佳实践
+
+组件采用单 active registry 模式，进程内只维护一个 active registry 实例。关闭后再调用 New 会重新创建，返回 ErrRegistryAlreadyInitialized 错误。这种设计简化了资源管理，避免多实例间的状态不一致问题。
+
+Resolver 内置了本地缓存，避免每次解析地址都请求 etcd。缓存有 TTL，过期后会重新获取。Watch 事件会主动更新缓存，保证地址信息的及时性。Resolver 支持多种地址格式，包括 `grpc://host:port`、`http://host:port` 等。解析后会验证连通性，只有可用的地址才会被 gRPC 客户端使用。
+
+通过 Option 可以配置连接池大小、最大连接数、空闲超时等参数。合理的连接池配置可以平衡性能和资源消耗，适应不同业务场景。
+
+---
+
+## 9 总结
+
+`registry` 组件的核心价值在于三个方面。首先提供统一的服务注册发现抽象，屏蔽 Etcd 的复杂性，让业务代码无需关心底层实现。其次通过内置的 gRPC resolver 实现 Etcd 地址到 gRPC 连接的自动转换，提供开箱即用的负载均衡能力。最后通过租约机制和生命周期管理，保证服务实例的受控运行。
+
+这种设计让业务开发者可以专注于业务逻辑，而把服务发现和连接管理的复杂性交给基础设施层组件处理。

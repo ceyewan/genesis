@@ -3,6 +3,7 @@
 这是一个 **"全栈可观测性" (Full-Stack Observability)** 的演示项目，展示了如何在 Genesis 中打通 **Logging (日志)**、**Metrics (指标)** 和 **Tracing (链路追踪)** 三大支柱，并在 Grafana 中看到真实数据。
 
 你可以把它当成一个“可观测性模范工程”的最小闭环：
+
 - 真实三服务链路（HTTP + gRPC + DB + MQ + gRPC 回调）
 - 指标能在 Prometheus/Grafana 看到（延迟/QPS/Go runtime/容器）
 - 日志能在 Loki 检索，并用 `trace_id` 串起全链路
@@ -23,6 +24,7 @@ graph LR
 ```
 
 数据流转：
+
 - **Trace**：HTTP -> gRPC -> NATS -> gRPC 全链路透传 TraceContext（gRPC 自动、NATS 手动注入/提取），上报到 **Tempo**。
 - **Metrics**：三服务分别暴露 `/metrics`，**Prometheus** 拉取，Grafana 展示。
 - **Logs**：三服务日志输出到 stdout，**Alloy** 采集后写入 **Loki**。
@@ -39,6 +41,7 @@ docker compose up -d --build
 > 注意：本示例属于 Genesis 仓库的一部分，不是独立 Go Module，请不要在 `examples/observability` 下执行 `go mod init` / `go mod tidy`。
 
 服务启动后：
+
 - **Gateway (HTTP)**: http://localhost:8080
 - **Gateway Callback (gRPC)**: localhost:9091
 - **Logic (gRPC)**: localhost:9092
@@ -64,6 +67,7 @@ docker compose up -d --build
 ### 数据持久化（Docker volume）
 
 本示例使用 Docker volume 持久化数据（避免映射到本地目录）：
+
 - `tempo-data`：Tempo 的本地存储/WAL
 - `logic-data`：SQLite 数据库文件
 
@@ -81,6 +85,7 @@ curl -X POST http://localhost:8080/orders \
 ```
 
 你会在容器日志中看到三段关键输出（同一条 trace 下）：
+
 - gateway 收到请求并转发到 logic
 - logic 落库后发布 NATS 消息
 - task 消费消息并通过 gRPC 把结果推回 gateway（到达 A 即算成功）
@@ -119,12 +124,14 @@ LOAD_MAX_VUS=4000 \
 ./bench/run-k6.sh
 ```
 
-> `./bench/run-k6.sh` 会自动导出 JSON：  
-> - 明细样本：`bench/results/metrics-<timestamp>.json`  
-> - 汇总结果：`bench/results/summary-<timestamp>.json`  
+> `./bench/run-k6.sh` 会自动导出 JSON：
+>
+> - 明细样本：`bench/results/metrics-<timestamp>.json`
+> - 汇总结果：`bench/results/summary-<timestamp>.json`
 > - 最新结果软指针：`bench/results/summary-latest.json`、`bench/results/run-latest.json`
 
 常用参数：
+
 > 注意：这里使用 `LOAD_` 前缀，避免与 k6 内置 `K6_` 环境变量冲突。
 
 - `LOAD_PROFILE`: `fixed`（固定 QPS）/ `wave`（波动 QPS）/ `weekday`（工作日曲线）
@@ -146,26 +153,31 @@ LOAD_MAX_VUS=4000 \
 ### 1) Metrics（指标）：看“系统整体健康”和趋势（告警主力）
 
 **适合回答的问题**：
+
 - 系统现在吞吐（QPS）是多少？是否抖动？
 - 延迟（P95/P99）是否变差？
 - 错误率是否升高？
 - Go runtime / 容器资源是否异常（CPU、内存、Goroutine、GC）？
 
 **本示例提供什么**：
+
 - 业务 HTTP 指标（来自 `metrics` 组件 + 自定义直方图）：`http_request_duration_seconds_*`
 - MQ 组件内置指标（来自 `mq` 组件）：`mq_publish_total`、`mq_consume_total`、`mq_handle_duration_seconds_*`
 - Go runtime/进程指标（自动，无需手写）：`go_*`、`process_*`
 - 容器指标（cAdvisor）：`container_*`
 
 **Dashboard**：
+
 - 打开 **Dashboards** → **"Observability Demo App"**
 - 打开 **Dashboards** → **"Observability Demo - Runtime & cAdvisor"**
 
 **P99 是怎么来的（核心概念）**：
+
 - Prometheus 里直方图会暴露 `*_bucket / *_sum / *_count`
 - P99 通常用 `histogram_quantile(0.99, sum(rate(<metric>_bucket[5m])) by (le, ...))` 计算
 
 **常用 Prometheus 查询示例**：
+
 - HTTP QPS：`rate(http_request_duration_seconds_count[1m])`
 - HTTP P99：`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route))`
 - MQ QPS（按 subject）：`sum(rate({__name__="mq.consume_total"}[1m])) by (subject)`
@@ -176,23 +188,27 @@ LOAD_MAX_VUS=4000 \
 > 注意：这里的 “MQ Latency” 指的是“消费端 handler 处理耗时分布”（`mq_handle_duration_seconds`），不是“消息在队列里排队多久”。队列等待（queue delay）在纯 NATS Core 场景通常更建议用队列系统/应用侧指标做衡量。
 
 ### B. 链路（Tracing）
+
 **适合回答的问题**：
+
 - 这一次请求“慢在谁那里”？是 gateway、logic、DB、还是 task？
 - 一条链路跨服务的时间分布是什么（瀑布图）？
 
 **怎么找一条链路**：
+
 1. 进入 **Explore** → 数据源选择 **Tempo**
 2. 方式 A：按日志里的 `trace_id` 直接查 Trace
 3. 方式 B：按 `service.name=obs-gateway|obs-logic|obs-task` 搜索（采样足够时更好用）
 
 **怎么看瀑布图（waterfall）**：
+
 - 顶部的 `obs-gateway POST /orders`：用户一次 HTTP 请求的同步耗时（关键路径）
 - `proto.OrderService/CreateOrder`：gateway → logic 的 gRPC 调用（client/server 两端都会有 span）
 - `gorm.Create`：DB 写入
 - `mq.publish orders.created`：发布消息（Producer span）
 - `mq.consume orders.created`：消费消息（Consumer span）
-  - 本示例默认使用 **child-of** 串成单条 Trace，便于在 Tempo/Grafana 中直接看到完整瀑布图
-  - 如果你要适配批消费/多消费者组/重试等异步场景，可切换为 **Span Link** 模式
+    - 本示例默认使用 **child-of** 串成单条 Trace，便于在 Tempo/Grafana 中直接看到完整瀑布图
+    - 如果你要适配批消费/多消费者组/重试等异步场景，可切换为 **Span Link** 模式
 - `task.handle_order_created`：消费者内部业务处理
 - `proto.GatewayCallbackService/PushResult`：task → gateway 回调（gRPC client/server）
 
@@ -203,16 +219,20 @@ LOAD_MAX_VUS=4000 \
 > 重要：异步链路（MQ → task → 回调）不会影响 HTTP 的同步耗时；你会看到它在时间轴上“更晚”开始。
 
 ### C. 日志（Logging）
+
 **适合回答的问题**：
+
 - 这条请求/消息“发生了什么细节”？具体哪个 order_id、哪个错误栈？
 - Trace 已经告诉你“慢在 DB/MQ/某个 RPC”，日志用来补足细节上下文。
 
 **怎么用 `trace_id` 串全链路**：
+
 1. 进入 **Explore** → 数据源选择 **Loki**
 2. 查询所有服务的同一条链路日志：
-   - `{job="docker", service=~"gateway|logic|task"} | json | trace_id="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"`
+    - `{job="docker", service=~"gateway|logic|task"} | json | trace_id="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"`
 
 **常用查询**：
+
 - 看 gateway 日志：`{job="docker", service="gateway"} | json`
 - 看错误：`{job="docker", service=~"gateway|logic|task"} |= "level\":\"ERROR\""`
 - 看某个订单：`{job="docker", service=~"gateway|logic|task"} | json | order_id="ORD-..."`（如果该日志行带这个字段）

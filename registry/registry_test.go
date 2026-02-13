@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/testkit"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/testkit"
 )
 
 // setupEtcdConn 设置 Etcd 连接

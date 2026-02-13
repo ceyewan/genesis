@@ -133,32 +133,34 @@ ok, err := seq.SetIfNotExists(ctx, "conversation:1", 1000)
 
 ### UUID
 
-| 函数 | 说明 |
-| :--- | :--- |
+| 函数           | 说明                            |
+| :------------- | :------------------------------ |
 | `idgen.UUID()` | 生成 UUID v7 字符串（时间排序） |
 
 ### Generator (Snowflake)
 
-| 方法 | 说明 |
-| :--- | :--- |
+| 方法                               | 说明                                         |
+| :--------------------------------- | :------------------------------------------- |
 | `idgen.NewGenerator(cfg, opts...)` | 创建 Snowflake 生成器（返回 Generator 接口） |
-| `gen.Next()` | 获取下一个 ID (int64) |
-| `gen.NextString()` | 获取下一个 ID (string) |
+| `gen.Next()`                       | 获取下一个 ID (int64)                        |
+| `gen.NextString()`                 | 获取下一个 ID (string)                       |
 
 **GeneratorConfig**:
+
 - `WorkerID`: 工作节点 ID [0, 1023]（使用 DatacenterID 时范围缩减为 [0, 31]）
 - `DatacenterID`: 数据中心 ID [0, 31]，可选
 
 ### Allocator (WorkerID 分配器)
 
-| 方法 | 说明 |
-| :--- | :--- |
+| 方法                               | 说明                          |
+| :--------------------------------- | :---------------------------- |
 | `idgen.NewAllocator(cfg, opts...)` | 创建分配器（支持 Redis/Etcd） |
-| `allocator.Allocate(ctx)` | 分配 WorkerID |
-| `allocator.KeepAlive(ctx)` | 保持租约（返回 <-chan error） |
-| `allocator.Stop()` | 释放资源 |
+| `allocator.Allocate(ctx)`          | 分配 WorkerID                 |
+| `allocator.KeepAlive(ctx)`         | 保持租约（返回 <-chan error） |
+| `allocator.Stop()`                 | 释放资源                      |
 
 **AllocatorConfig**:
+
 - `Driver`: 后端类型，"redis" 或 "etcd"
 - `KeyPrefix`: 键前缀，默认 "genesis:idgen:worker"
 - `MaxID`: 最大 ID 范围 [0, maxID)，默认 1024
@@ -166,15 +168,16 @@ ok, err := seq.SetIfNotExists(ctx, "conversation:1", 1000)
 
 ### Sequencer (序列号生成器)
 
-| 方法 | 说明 |
-| :--- | :--- |
-| `idgen.NewSequencer(cfg, opts...)` | 创建序列号生成器（支持 Redis/Etcd） |
-| `seq.Next(ctx, key)` | 获取下一个序列号 |
-| `seq.NextBatch(ctx, key, count)` | 批量获取序列号 |
-| `seq.Set(ctx, key, value)` | 设置序列号值 |
-| `seq.SetIfNotExists(ctx, key, value)` | 仅当不存在时设置 |
+| 方法                                  | 说明                                |
+| :------------------------------------ | :---------------------------------- |
+| `idgen.NewSequencer(cfg, opts...)`    | 创建序列号生成器（支持 Redis/Etcd） |
+| `seq.Next(ctx, key)`                  | 获取下一个序列号                    |
+| `seq.NextBatch(ctx, key, count)`      | 批量获取序列号                      |
+| `seq.Set(ctx, key, value)`            | 设置序列号值                        |
+| `seq.SetIfNotExists(ctx, key, value)` | 仅当不存在时设置                    |
 
 **SequencerConfig**:
+
 - `Driver`: 后端类型，"redis" 或 "etcd"，默认 "redis"
 - `KeyPrefix`: 键前缀
 - `Step`: 步长，默认 1
@@ -185,35 +188,37 @@ ok, err := seq.SetIfNotExists(ctx, "conversation:1", 1000)
 
 所有组件支持统一的选项注入：
 
-| 选项 | 说明 |
-| :--- | :--- |
-| `idgen.WithLogger(logger)` | 设置 Logger |
+| 选项                             | 说明              |
+| :------------------------------- | :---------------- |
+| `idgen.WithLogger(logger)`       | 设置 Logger       |
 | `idgen.WithRedisConnector(conn)` | 注入 Redis 连接器 |
-| `idgen.WithEtcdConnector(conn)` | 注入 Etcd 连接器 |
+| `idgen.WithEtcdConnector(conn)`  | 注入 Etcd 连接器  |
 
 ## 最佳实践
 
 1. **WorkerID 管理**:
-   - K8s StatefulSet: 直接使用 Pod 序号作为 WorkerID
-   - 无状态 Deployment: 使用 Allocator 自动分配
+    - K8s StatefulSet: 直接使用 Pod 序号作为 WorkerID
+    - 无状态 Deployment: 使用 Allocator 自动分配
 
 2. **Allocator 保活监控**:
-   ```go
-   go func() {
-       if err := <-allocator.KeepAlive(ctx); err != nil {
-           // 租约丢失，停止服务以避免 ID 冲突
-           log.Fatal("WorkerID lease lost")
-       }
-   }()
-   ```
+
+    ```go
+    go func() {
+        if err := <-allocator.KeepAlive(ctx); err != nil {
+            // 租约丢失，停止服务以避免 ID 冲突
+            log.Fatal("WorkerID lease lost")
+        }
+    }()
+    ```
 
 3. **IM 系统序列号初始化**:
-   ```go
-   // 迁移历史消息后，初始化 seq_id
-   ok, _ := seq.SetIfNotExists(ctx, "conversation:1", maxHistorySeqID)
-   ```
+
+    ```go
+    // 迁移历史消息后，初始化 seq_id
+    ok, _ := seq.SetIfNotExists(ctx, "conversation:1", maxHistorySeqID)
+    ```
 
 4. **优雅退出**:
-   ```go
-   defer allocator.Stop()  // 释放 WorkerID
-   ```
+    ```go
+    defer allocator.Stop()  // 释放 WorkerID
+    ```

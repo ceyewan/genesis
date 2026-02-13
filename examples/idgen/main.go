@@ -171,7 +171,7 @@ func sequenceExample() {
 		Password:     os.Getenv("GENESIS_REDIS_PASSWORD"),
 		DialTimeout:  2 * time.Second,
 		ReadTimeout:  2 * time.Second,
-		WriteTimeout:  2 * time.Second,
+		WriteTimeout: 2 * time.Second,
 	}
 
 	logger, _ := clog.New(&clog.Config{

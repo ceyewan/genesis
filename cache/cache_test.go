@@ -272,13 +272,13 @@ func TestStandaloneConfig(t *testing.T) {
 		wantCap int
 	}{
 		{
-			name:   "nil config uses defaults",
-			cfg:    nil,
+			name:    "nil config uses defaults",
+			cfg:     nil,
 			wantCap: 10000,
 		},
 		{
-			name: "custom config",
-			cfg:  &StandaloneConfig{Capacity: 500},
+			name:    "custom config",
+			cfg:     &StandaloneConfig{Capacity: 500},
 			wantCap: 500,
 		},
 	}
@@ -294,12 +294,12 @@ func TestStandaloneConfig(t *testing.T) {
 			}
 			defer cache.Close()
 
-		// 验证缓存可用
-		ctx := context.Background()
-		err = cache.Set(ctx, "test", "value", time.Minute)
-		if err != nil {
-			t.Errorf("Cache operation failed: %v", err)
-		}
+			// 验证缓存可用
+			ctx := context.Background()
+			err = cache.Set(ctx, "test", "value", time.Minute)
+			if err != nil {
+				t.Errorf("Cache operation failed: %v", err)
+			}
 		})
 	}
 }

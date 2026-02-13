@@ -58,6 +58,7 @@ conn, _ := grpc.NewClient(
 ## MQ 传播与链路关系（推荐）
 
 组件提供统一的生产/消费 helper，消费侧可配置两种关系：
+
 - `link`（默认）：用 Span Link 关联上游，适合异步/批处理/多消费者组
 - `child_of`：用 parent/child 串成单条 Trace，适合端到端演示与排障
 
