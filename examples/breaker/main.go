@@ -105,7 +105,7 @@ func basicExample(ctx context.Context, logger clog.Logger, addr string) {
 
 	// 阶段 1: 正常请求
 	fmt.Println("阶段 1: 发送 3 个正常请求")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		resp, err := client.CreateOrder(ctx, &pb.CreateOrderRequest{
 			OrderId:     fmt.Sprintf("normal-%d", i+1),
 			Description: fmt.Sprintf("test order %d", i+1),
@@ -121,7 +121,7 @@ func basicExample(ctx context.Context, logger clog.Logger, addr string) {
 
 	// 阶段 2: 触发熔断（发送失败请求）
 	fmt.Println("\n阶段 2: 发送 10 个失败请求（触发熔断）")
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		resp, err := client.CreateOrder(ctx, &pb.CreateOrderRequest{
 			OrderId:     fmt.Sprintf("fail-%d", i+1),
 			Description: fmt.Sprintf("failing order %d", i+1),
@@ -153,7 +153,7 @@ func basicExample(ctx context.Context, logger clog.Logger, addr string) {
 
 	// 阶段 4: 半开状态探测（发送正常请求）
 	fmt.Println("\n阶段 4: 发送正常请求（探测恢复）")
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		resp, err := client.CreateOrder(ctx, &pb.CreateOrderRequest{
 			OrderId:     fmt.Sprintf("recovery-%d", i+1),
 			Description: fmt.Sprintf("recovery order %d", i+1),
@@ -210,7 +210,7 @@ func fallbackExample(ctx context.Context, logger clog.Logger, addr string) {
 
 	// 触发熔断
 	fmt.Println("阶段 1: 发送失败请求触发熔断")
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		_, err := client.CreateOrder(ctx, &pb.CreateOrderRequest{
 			OrderId:     fmt.Sprintf("fail-%d", i+1),
 			Description: fmt.Sprintf("failing order %d", i+1),
@@ -261,7 +261,7 @@ func halfOpenFailureExample(ctx context.Context, logger clog.Logger, _ string) {
 
 	// 阶段 1: 触发熔断
 	fmt.Println("阶段 1: 发送失败请求触发熔断")
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_, _ = client.CreateOrder(ctx, &pb.CreateOrderRequest{
 			OrderId:    fmt.Sprintf("fail-%d", i+1),
 			ShouldFail: true,
@@ -290,7 +290,7 @@ func halfOpenFailureExample(ctx context.Context, logger clog.Logger, _ string) {
 
 	// 阶段 4: 验证熔断器仍然是打开状态
 	fmt.Println("阶段 4: 验证熔断器仍然打开（后续请求被拒绝）")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, err := client.CreateOrder(ctx, &pb.CreateOrderRequest{
 			OrderId:    fmt.Sprintf("after-probe-%d", i+1),
 			ShouldFail: false,
@@ -347,7 +347,7 @@ func multiServiceExample(ctx context.Context, logger clog.Logger) {
 
 	// 只让服务 1 失败
 	fmt.Println("阶段 1: 服务 1 频繁失败，服务 2 正常")
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		// 服务 1 失败
 		_, err1 := client1.CreateOrder(ctx, &pb.CreateOrderRequest{
 			OrderId:     fmt.Sprintf("service1-fail-%d", i+1),

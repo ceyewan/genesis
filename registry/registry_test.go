@@ -549,7 +549,7 @@ func TestClose(t *testing.T) {
 	ctx := context.Background()
 
 	// 注册一些服务
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		service := &ServiceInstance{
 			ID:        fmt.Sprintf("close-%03d", i),
 			Name:      "close-test",

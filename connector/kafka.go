@@ -162,7 +162,7 @@ func (l *kgoLogger) Level() kgo.LogLevel {
 	return kgo.LogLevelInfo
 }
 
-func (l *kgoLogger) Log(level kgo.LogLevel, msg string, keyvals ...interface{}) {
+func (l *kgoLogger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
 	// 简单的键值对转换
 	var fields []clog.Field
 	for i := 0; i < len(keyvals); i += 2 {

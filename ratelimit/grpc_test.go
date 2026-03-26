@@ -78,8 +78,8 @@ func (s *stubServerStream) SetHeader(metadata.MD) error  { return nil }
 func (s *stubServerStream) SendHeader(metadata.MD) error { return nil }
 func (s *stubServerStream) SetTrailer(metadata.MD)       {}
 func (s *stubServerStream) Context() context.Context     { return s.ctx }
-func (s *stubServerStream) SendMsg(m interface{}) error  { return nil }
-func (s *stubServerStream) RecvMsg(m interface{}) error {
+func (s *stubServerStream) SendMsg(m any) error          { return nil }
+func (s *stubServerStream) RecvMsg(m any) error {
 	s.recvCount++
 	return nil
 }
@@ -95,8 +95,8 @@ func (s *stubClientStream) Header() (metadata.MD, error) { return nil, nil }
 func (s *stubClientStream) Trailer() metadata.MD         { return nil }
 func (s *stubClientStream) CloseSend() error             { return nil }
 func (s *stubClientStream) Context() context.Context     { return s.ctx }
-func (s *stubClientStream) RecvMsg(m interface{}) error  { return nil }
-func (s *stubClientStream) SendMsg(m interface{}) error {
+func (s *stubClientStream) RecvMsg(m any) error          { return nil }
+func (s *stubClientStream) SendMsg(m any) error {
 	s.sendCount++
 	return nil
 }
@@ -111,7 +111,7 @@ func TestUnaryServerInterceptor(t *testing.T) {
 	require.NoError(t, err)
 	defer limiter.Close()
 
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return "response", nil
 	}
 
@@ -176,7 +176,7 @@ func TestUnaryServerInterceptor(t *testing.T) {
 
 func TestUnaryServerInterceptor_EdgeCases(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "error"})
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return "response", nil
 	}
 
@@ -190,7 +190,7 @@ func TestUnaryServerInterceptor_EdgeCases(t *testing.T) {
 		info := &grpc.UnaryServerInfo{FullMethod: "/test/Method"}
 
 		// 所有请求都应该成功
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			resp, err := interceptor(ctx, "request", info, handler)
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
@@ -243,7 +243,7 @@ func TestUnaryClientInterceptor(t *testing.T) {
 	require.NoError(t, err)
 	defer limiter.Close()
 
-	invoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+	invoker := func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
 		return nil
 	}
 
@@ -316,7 +316,7 @@ func TestUnaryClientInterceptor(t *testing.T) {
 }
 
 func TestUnaryClientInterceptor_EdgeCases(t *testing.T) {
-	invoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+	invoker := func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
 		return nil
 	}
 
@@ -329,7 +329,7 @@ func TestUnaryClientInterceptor_EdgeCases(t *testing.T) {
 		ctx := context.Background()
 
 		// 所有请求都应该成功
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			err := interceptor(ctx, "/test/Method", "request", "reply", nil, invoker)
 			require.NoError(t, err)
 		}
@@ -353,7 +353,7 @@ func TestUnaryClientInterceptor_EdgeCases(t *testing.T) {
 // ============================================================
 
 func TestStreamServerInterceptor(t *testing.T) {
-	handler := func(srv interface{}, stream grpc.ServerStream) error {
+	handler := func(srv any, stream grpc.ServerStream) error {
 		return nil
 	}
 
@@ -383,7 +383,7 @@ func TestStreamServerInterceptor(t *testing.T) {
 		info := &grpc.StreamServerInfo{FullMethod: "/test/StreamMethod"}
 
 		handlerCalled := false
-		handler := func(srv interface{}, stream grpc.ServerStream) error {
+		handler := func(srv any, stream grpc.ServerStream) error {
 			handlerCalled = true
 			return nil
 		}
@@ -404,7 +404,7 @@ func TestStreamServerInterceptor(t *testing.T) {
 		stream := &stubServerStream{ctx: context.Background()}
 		info := &grpc.StreamServerInfo{FullMethod: "/test/StreamMethod"}
 
-		handler := func(srv interface{}, stream grpc.ServerStream) error {
+		handler := func(srv any, stream grpc.ServerStream) error {
 			return nil
 		}
 
@@ -424,7 +424,7 @@ func TestStreamServerInterceptor(t *testing.T) {
 		info := &grpc.StreamServerInfo{FullMethod: "/test/StreamMethod"}
 
 		handlerCalled := false
-		handler := func(srv interface{}, stream grpc.ServerStream) error {
+		handler := func(srv any, stream grpc.ServerStream) error {
 			handlerCalled = true
 			return nil
 		}
@@ -444,7 +444,7 @@ func TestStreamServerInterceptor(t *testing.T) {
 		info := &grpc.StreamServerInfo{FullMethod: "/test/StreamMethod"}
 
 		handlerCalled := false
-		handler := func(srv interface{}, stream grpc.ServerStream) error {
+		handler := func(srv any, stream grpc.ServerStream) error {
 			handlerCalled = true
 			return nil
 		}

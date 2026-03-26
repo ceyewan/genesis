@@ -53,7 +53,7 @@ func TestDistributedLimiter_Allow_Basic(t *testing.T) {
 		key := "test-key-rate-limit"
 
 		// 消耗所有 burst
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 10, Burst: 10})
 			require.NoError(t, err)
 			assert.True(t, allowed, "第 %d 次请求应该被允许", i+1)
@@ -214,11 +214,9 @@ func TestDistributedLimiter_Concurrency(t *testing.T) {
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 
-		for i := 0; i < goroutines; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for j := 0; j < requestsPerGoroutine; j++ {
+		for range goroutines {
+			wg.Go(func() {
+				for range requestsPerGoroutine {
 					allowed, _ := limiter.Allow(ctx, "concurrent-key", Limit{Rate: 100, Burst: 100})
 					mu.Lock()
 					if allowed {
@@ -228,7 +226,7 @@ func TestDistributedLimiter_Concurrency(t *testing.T) {
 					}
 					mu.Unlock()
 				}
-			}()
+			})
 		}
 
 		wg.Wait()
@@ -246,12 +244,12 @@ func TestDistributedLimiter_Concurrency(t *testing.T) {
 		var wg sync.WaitGroup
 		errors := make(chan error, goroutines)
 
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
 				key := "concurrent-diff-key-" + testkit.NewID()[:4] + string(rune('0'+idx))
-				for j := 0; j < requestsPerGoroutine; j++ {
+				for range requestsPerGoroutine {
 					_, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 1})
 					if err != nil {
 						errors <- err
@@ -303,7 +301,7 @@ func TestDistributedLimiter_Precision(t *testing.T) {
 		key := "burst-test-" + testkit.NewID()
 
 		// Burst=5 允许瞬间处理 5 个请求
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 5})
 			require.NoError(t, err)
 			assert.True(t, allowed, "Burst 应该允许前 %d 个请求", i+1)
@@ -320,7 +318,7 @@ func TestDistributedLimiter_Precision(t *testing.T) {
 
 		// Rate=100, Burst=100
 		successCount := 0
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 100, Burst: 100})
 			require.NoError(t, err)
 			if allowed {
@@ -399,7 +397,7 @@ func TestDistributedLimiter_MultipleInstances(t *testing.T) {
 
 	t.Run("多实例共享限流状态", func(t *testing.T) {
 		// 使用 limiter1 消耗所有 burst
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			allowed, err := limiter1.Allow(ctx, key, limit)
 			require.NoError(t, err)
 			assert.True(t, allowed)
@@ -419,28 +417,24 @@ func TestDistributedLimiter_MultipleInstances(t *testing.T) {
 		var totalCount int64
 
 		// limiter1 发送 50 个请求
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 50; i++ {
+		wg.Go(func() {
+			for range 50 {
 				allowed, _ := limiter1.Allow(ctx, key, limit)
 				if allowed {
 					totalCount++
 				}
 			}
-		}()
+		})
 
 		// limiter2 发送 50 个请求
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 50; i++ {
+		wg.Go(func() {
+			for range 50 {
 				allowed, _ := limiter2.Allow(ctx, key, limit)
 				if allowed {
 					totalCount++
 				}
 			}
-		}()
+		})
 
 		wg.Wait()
 

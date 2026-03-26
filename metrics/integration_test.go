@@ -106,11 +106,11 @@ func TestConcurrentMetricOperations(t *testing.T) {
 	// 启动多个 goroutine 并发操作指标
 	done := make(chan bool, numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(id int) {
 			defer func() { done <- true }()
 
-			for j := 0; j < numOperations; j++ {
+			for j := range numOperations {
 				// 操作计数器
 				counter.Inc(ctx, L("goroutine", string(rune('A'+id))))
 				counter.Add(ctx, 1, L("operation", "batch"))
@@ -126,7 +126,7 @@ func TestConcurrentMetricOperations(t *testing.T) {
 	}
 
 	// 等待所有 goroutine 完成
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		<-done
 	}
 }
@@ -189,7 +189,7 @@ func TestMetricsWithDifferentLabels(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// 多次操作以确保稳定性
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				counter.Inc(ctx, tc.labels...)
 				counter.Add(ctx, 2, tc.labels...)
 			}
@@ -244,7 +244,7 @@ func TestDiscardIntegration(t *testing.T) {
 	}
 
 	// 操作指标应该不会 panic
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		counter.Inc(ctx, L("test", "value"))
 		counter.Add(ctx, 1.5, L("batch", "true"))
 	}

@@ -205,10 +205,7 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 func (l *redisLocker) watchdog(entry *redisLockEntry, redisKey string) {
 	defer close(entry.renewDone)
 
-	renewInterval := entry.expiration / 3
-	if renewInterval < time.Second {
-		renewInterval = time.Second
-	}
+	renewInterval := max(entry.expiration/3, time.Second)
 	ticker := time.NewTicker(renewInterval)
 	defer ticker.Stop()
 

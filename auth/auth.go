@@ -17,6 +17,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -332,9 +333,7 @@ func cloneClaims(claims *Claims) *Claims {
 	}
 	if claims.Extra != nil {
 		copied.Extra = make(map[string]any, len(claims.Extra))
-		for k, v := range claims.Extra {
-			copied.Extra[k] = v
-		}
+		maps.Copy(copied.Extra, claims.Extra)
 	}
 	if claims.Audience != nil {
 		copied.Audience = append(jwt.ClaimStrings(nil), claims.Audience...)

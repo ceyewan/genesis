@@ -47,7 +47,7 @@ func snowflakeManualExample() {
 	}
 
 	fmt.Println("生成 5 个 Snowflake ID:")
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := sf.Next()
 		fmt.Printf("  ID %d: %d\n", i+1, id)
 		time.Sleep(time.Millisecond)
@@ -131,7 +131,7 @@ func snowflakeAllocatorExample() {
 	fmt.Printf("自动分配的 WorkerID: %d\n", workerID)
 
 	fmt.Println("生成 5 个 Snowflake ID:")
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := sf.Next()
 		fmt.Printf("  ID %d: %d\n", i+1, id)
 		time.Sleep(time.Millisecond)
@@ -148,7 +148,7 @@ func uuidExample() {
 
 	// 直接调用 UUID() 生成 v7 (时间排序)
 	fmt.Println("UUID v7 (时间排序，适合数据库主键):")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		fmt.Printf("  UUID #%d: %s\n", i+1, idgen.UUID())
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -216,7 +216,7 @@ func sequenceExample() {
 	users := []string{"alice", "bob", "charlie"}
 	for _, user := range users {
 		fmt.Printf("\n用户 %s 的消息序列号:\n", user)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			seq, err := imGen.Next(ctx, user)
 			if err != nil {
 				log.Printf("Failed to generate message sequence for %s: %v\n", user, err)

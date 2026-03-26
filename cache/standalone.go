@@ -210,7 +210,7 @@ func (c *standaloneCache) assignValue(val any, dest any) error {
 	// 用户应当将从缓存获取的对象视为"只读"，或者在修改前自行进行深拷贝。
 
 	dv := reflect.ValueOf(dest)
-	if dv.Kind() != reflect.Ptr || dv.IsNil() {
+	if dv.Kind() != reflect.Pointer || dv.IsNil() {
 		return fmt.Errorf("dest must be a non-nil pointer")
 	}
 

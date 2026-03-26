@@ -124,7 +124,7 @@ func demoBasicPubSub(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id
 
 	logger.Info("发送消息", clog.Int("count", 10))
 	for i := 1; i <= 10; i++ {
-		data := []byte(fmt.Sprintf("MSG-%d", i))
+		data := fmt.Appendf(nil, "MSG-%d", i)
 		if err := mqClient.Publish(ctx, topic, data); err != nil {
 			logger.Error("发布失败", clog.Error(err))
 		}
@@ -175,7 +175,7 @@ func demoQueueGroup(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id 
 
 	logger.Info("发送任务", clog.Int("count", 10))
 	for i := 1; i <= 10; i++ {
-		data := []byte(fmt.Sprintf("TASK-%d", i))
+		data := fmt.Appendf(nil, "TASK-%d", i)
 		_ = mqClient.Publish(ctx, topic, data)
 	}
 
@@ -250,7 +250,7 @@ func demoMiddleware(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id 
 	wg.Add(5)
 	logger.Info("发送任务（包含一条会失败的任务）")
 	for i := 1; i <= 5; i++ {
-		data := []byte(fmt.Sprintf("TASK-%d", i))
+		data := fmt.Appendf(nil, "TASK-%d", i)
 		_ = mqClient.Publish(ctx, topic, data)
 	}
 
@@ -304,7 +304,7 @@ func demoManualAck(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id s
 
 	logger.Info("发送任务")
 	for i := 1; i <= 5; i++ {
-		data := []byte(fmt.Sprintf("TASK-%d", i))
+		data := fmt.Appendf(nil, "TASK-%d", i)
 		_ = mqClient.Publish(ctx, topic, data)
 	}
 

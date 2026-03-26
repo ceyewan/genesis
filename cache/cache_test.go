@@ -230,7 +230,7 @@ func TestCache_Standalone_Unit(t *testing.T) {
 
 		cache.Set(ctx, key, value, time.Minute)
 
-		var result interface{}
+		var result any
 		err := cache.Get(ctx, key, &result)
 		if err != nil {
 			t.Fatalf("Failed to get interface: %v", err)

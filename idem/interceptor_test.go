@@ -34,14 +34,14 @@ func TestUnaryServerInterceptor(t *testing.T) {
 	// 模拟 Handler
 	var handlerExecCount int32
 	//nolint:unparam
-	handler := func(_ context.Context, _ interface{}) (interface{}, error) {
+	handler := func(_ context.Context, _ any) (any, error) {
 		atomic.AddInt32(&handlerExecCount, 1)
 		// 返回一个 proto.Message
 		return wrapperspb.String("success"), nil
 	}
 
 	//nolint:unparam
-	errorHandler := func(_ context.Context, _ interface{}) (interface{}, error) {
+	errorHandler := func(_ context.Context, _ any) (any, error) {
 		atomic.AddInt32(&handlerExecCount, 1)
 		return nil, errors.New("rpc error")
 	}
@@ -133,7 +133,7 @@ func TestUnaryServerInterceptor(t *testing.T) {
 
 	// 5. 测试非 Proto 消息返回（不缓存但成功返回）
 	t.Run("Non-Proto Response", func(t *testing.T) {
-		nonProtoHandler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		nonProtoHandler := func(ctx context.Context, req any) (any, error) {
 			atomic.AddInt32(&handlerExecCount, 1)
 			return "not-a-proto-message", nil
 		}

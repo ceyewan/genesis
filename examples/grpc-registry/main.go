@@ -117,7 +117,7 @@ func main() {
 
 	// 7. 测试连接
 	fmt.Println("\n3. 测试连接...")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		resp, err := healthClient.Check(ctx, &grpc_health_v1.HealthCheckRequest{})
 		if err != nil {
 			logger.Error("health check failed", clog.Error(err))
@@ -130,7 +130,7 @@ func main() {
 
 	// 调用 Echo 服务查看服务器信息
 	fmt.Println("\n调用 Echo 服务查看服务器信息:")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		echoResp, err := echoClient.Echo(ctx, &pb.EchoRequest{
 			Message: fmt.Sprintf("test-%d", i+1),
 		})
@@ -185,7 +185,7 @@ func main() {
 	}
 	fmt.Println()
 
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		// 调用 Echo 服务来观察负载均衡效果
 		echoResp, err := echoClient.Echo(ctx, &pb.EchoRequest{
 			Message: fmt.Sprintf("loadbalancer-test-%d", i+1),
@@ -214,7 +214,7 @@ func main() {
 
 	// 11. 验证连接仍然可用
 	fmt.Println("\n7. 验证连接仍然可用（只剩一个服务实例）...")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		echoResp, err := echoClient.Echo(ctx, &pb.EchoRequest{
 			Message: fmt.Sprintf("failover-test-%d", i+1),
 		})

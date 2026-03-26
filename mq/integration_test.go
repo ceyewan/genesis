@@ -112,7 +112,7 @@ func TestJetStreamQueueGroupIntegration(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(messageCount)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		sub, err := mq.Subscribe(ctx, subject, func(msg Message) error {
 			wg.Done()
 			return nil
@@ -122,8 +122,8 @@ func TestJetStreamQueueGroupIntegration(t *testing.T) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	for i := 0; i < messageCount; i++ {
-		require.NoError(t, mq.Publish(ctx, subject, []byte(fmt.Sprintf("msg-%d", i))))
+	for i := range messageCount {
+		require.NoError(t, mq.Publish(ctx, subject, fmt.Appendf(nil, "msg-%d", i)))
 	}
 
 	done := make(chan struct{})
@@ -164,8 +164,8 @@ func TestJetStreamMultiGroupBroadcastIntegration(t *testing.T) {
 	t.Cleanup(func() { _ = subB.Unsubscribe() })
 
 	time.Sleep(100 * time.Millisecond)
-	for i := 0; i < messageCount; i++ {
-		require.NoError(t, mq.Publish(ctx, subject, []byte(fmt.Sprintf("msg-%d", i))))
+	for i := range messageCount {
+		require.NoError(t, mq.Publish(ctx, subject, fmt.Appendf(nil, "msg-%d", i)))
 	}
 
 	doneA := make(chan struct{})

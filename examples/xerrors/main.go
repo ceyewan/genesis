@@ -213,7 +213,7 @@ func mustDemo() {
 	fmt.Printf("Parsed value: %d\n", value)
 
 	// 使用 MustOK 进行类型断言
-	var i interface{} = 100
+	var i any = 100
 	num := xerrors.MustOK(i.(int), true)
 	fmt.Printf("Type asserted value: %d\n", num)
 

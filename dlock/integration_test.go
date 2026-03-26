@@ -331,10 +331,8 @@ func TestRedisLocker_ConcurrentLock(t *testing.T) {
 	var wg sync.WaitGroup
 	numGoroutines := 10
 
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numGoroutines {
+		wg.Go(func() {
 
 			// 每个 goroutine 使用独立的 locker（模拟独立客户端）
 			locker := newRedisLockerWithConn(t, conn)
@@ -353,7 +351,7 @@ func TestRedisLocker_ConcurrentLock(t *testing.T) {
 			if err != nil {
 				t.Errorf("Unlock failed: %v", err)
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

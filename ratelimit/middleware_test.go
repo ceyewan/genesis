@@ -152,7 +152,7 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 		})
 
 		// 所有请求都应该成功
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			req := httptest.NewRequest("GET", "/test", nil)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
@@ -221,7 +221,7 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 		})
 
 		// 所有请求都应该成功
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			req := httptest.NewRequest("GET", "/test", nil)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
@@ -485,7 +485,7 @@ func TestGinMiddleware_CustomLimitFunc(t *testing.T) {
 		})
 
 		// 公开 API 可以发送更多请求
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			req := httptest.NewRequest("GET", "/api/public", nil)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
@@ -543,7 +543,7 @@ func TestGinMiddleware_CustomLimitFunc(t *testing.T) {
 		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
 
 		// Premium 用户不容易被限流
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			req := httptest.NewRequest("GET", "/api", nil)
 			req.Header.Set("X-Tier", "premium")
 			w := httptest.NewRecorder()

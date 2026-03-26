@@ -393,7 +393,7 @@ func TestSequencer_SetIfNotExists_Integration(t *testing.T) {
 		}
 
 		// 多次 Next
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			seq, err := gen.Next(ctx, key)
 			if err != nil {
 				t.Fatalf("Next failed: %v", err)
@@ -482,7 +482,7 @@ func TestRedisAllocator_Integration(t *testing.T) {
 
 		// 分配所有 ID
 		allocators := make([]Allocator, 0, maxID)
-		for i := 0; i < maxID; i++ {
+		for i := range maxID {
 			alloc, err := NewAllocator(&AllocatorConfig{
 				Driver:    "redis",
 				KeyPrefix: "test:exhaust",

@@ -105,10 +105,7 @@ func WithRetry(cfg RetryConfig, logger clog.Logger) Middleware {
 				}
 
 				// 计算下次退避时间
-				backoff = time.Duration(float64(backoff) * cfg.Multiplier)
-				if backoff > cfg.MaxBackoff {
-					backoff = cfg.MaxBackoff
-				}
+				backoff = min(time.Duration(float64(backoff)*cfg.Multiplier), cfg.MaxBackoff)
 			}
 
 			return err

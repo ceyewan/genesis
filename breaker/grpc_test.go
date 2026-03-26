@@ -22,14 +22,14 @@ type errorInvoker struct {
 	err error
 }
 
-func (e *errorInvoker) invoke(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+func (e *errorInvoker) invoke(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
 	return e.err
 }
 
 // successInvoker 成功的 invoker
 type successInvoker struct{}
 
-func (s *successInvoker) invoke(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+func (s *successInvoker) invoke(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
 	return nil
 }
 
@@ -121,7 +121,7 @@ func TestUnaryClientInterceptor_CircuitOpen(t *testing.T) {
 
 	// 触发足够多的失败来打开熔断器
 	t.Run("触发熔断器打开", func(t *testing.T) {
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			_ = interceptor(context.Background(), "/test/Service", "req", "reply", nil, invoker.invoke)
 		}
 
@@ -229,7 +229,7 @@ func TestUnaryClientInterceptor_WithFallback(t *testing.T) {
 
 	t.Run("触发熔断并验证降级", func(t *testing.T) {
 		// 触发足够多的失败
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			_ = interceptor(context.Background(), "/test/Method", "req", "reply", nil, invoker.invoke)
 		}
 
@@ -316,7 +316,7 @@ func TestUnaryClientInterceptor_HalfOpenState(t *testing.T) {
 
 	t.Run("半开状态后成功调用应该恢复熔断器", func(t *testing.T) {
 		// 1. 触发熔断器打开
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			_ = interceptor(context.Background(), "/test/Method", "req", "reply", nil, invoker.invoke)
 		}
 

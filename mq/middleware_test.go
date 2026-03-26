@@ -342,7 +342,7 @@ func TestWithRecover(t *testing.T) {
 	t.Run("捕获不同类型的 panic", func(t *testing.T) {
 		tests := []struct {
 			name     string
-			panicVal interface{}
+			panicVal any
 		}{
 			{"string panic", "panic string"},
 			{"error panic", errors.New("panic error")},

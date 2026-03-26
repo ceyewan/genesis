@@ -32,8 +32,8 @@ func TestExecuteSuccess(t *testing.T) {
 	key := "execute:success"
 
 	// 执行操作
-	result, err := idem.Execute(ctx, key, func(ctx context.Context) (interface{}, error) {
-		return map[string]interface{}{"status": "ok"}, nil
+	result, err := idem.Execute(ctx, key, func(ctx context.Context) (any, error) {
+		return map[string]any{"status": "ok"}, nil
 	})
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
@@ -65,8 +65,8 @@ func TestCacheHit(t *testing.T) {
 	key := "test:cache:hit"
 
 	// 第一次执行
-	result1, err := idem.Execute(ctx, key, func(ctx context.Context) (interface{}, error) {
-		return map[string]interface{}{"value": 42}, nil
+	result1, err := idem.Execute(ctx, key, func(ctx context.Context) (any, error) {
+		return map[string]any{"value": 42}, nil
 	})
 	if err != nil {
 		t.Fatalf("first execute failed: %v", err)
@@ -74,9 +74,9 @@ func TestCacheHit(t *testing.T) {
 
 	// 第二次执行（应该返回缓存）
 	executionCount := 0
-	result2, err := idem.Execute(ctx, key, func(ctx context.Context) (interface{}, error) {
+	result2, err := idem.Execute(ctx, key, func(ctx context.Context) (any, error) {
 		executionCount++
-		return map[string]interface{}{"value": 99}, nil
+		return map[string]any{"value": 99}, nil
 	})
 	if err != nil {
 		t.Fatalf("second execute failed: %v", err)
@@ -115,7 +115,7 @@ func TestEmptyKey(t *testing.T) {
 	ctx := context.Background()
 
 	// 执行空键操作
-	_, err = idem.Execute(ctx, "", func(ctx context.Context) (interface{}, error) {
+	_, err = idem.Execute(ctx, "", func(ctx context.Context) (any, error) {
 		return nil, nil
 	})
 
@@ -152,20 +152,20 @@ func TestExecuteConcurrent(t *testing.T) {
 	// 使用 channel 协调开始时间，尽可能模拟并发
 	startCh := make(chan struct{})
 	var wg sync.WaitGroup
-	results := make([]interface{}, concurrency)
+	results := make([]any, concurrency)
 	errs := make([]error, concurrency)
 
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 			<-startCh // 等待开始信号
 
-			res, err := idem.Execute(ctx, key, func(ctx context.Context) (interface{}, error) {
+			res, err := idem.Execute(ctx, key, func(ctx context.Context) (any, error) {
 				// 模拟耗时操作
 				time.Sleep(100 * time.Millisecond)
 				newVal := atomic.AddInt32(&execCount, 1)
-				return map[string]interface{}{"value": 42, "count": newVal}, nil
+				return map[string]any{"value": 42, "count": newVal}, nil
 			})
 			results[idx] = res
 			errs[idx] = err
@@ -184,7 +184,7 @@ func TestExecuteConcurrent(t *testing.T) {
 
 	// 2. 所有请求都应该成功且返回相同结果
 	firstResultBytes, _ := json.Marshal(results[0])
-	for i := 0; i < concurrency; i++ {
+	for i := range concurrency {
 		if errs[i] != nil {
 			t.Errorf("goroutine %d failed: %v", i, errs[i])
 		}
@@ -220,7 +220,7 @@ func TestExecuteFailure(t *testing.T) {
 	expectedErr := errors.New("business error")
 
 	// 第一次执行，返回错误
-	_, err = idem.Execute(ctx, key, func(ctx context.Context) (interface{}, error) {
+	_, err = idem.Execute(ctx, key, func(ctx context.Context) (any, error) {
 		return nil, expectedErr
 	})
 
@@ -229,8 +229,8 @@ func TestExecuteFailure(t *testing.T) {
 	}
 
 	// 第二次执行，应该能够重新获取锁并成功
-	result, err := idem.Execute(ctx, key, func(ctx context.Context) (interface{}, error) {
-		return map[string]interface{}{"status": "success"}, nil
+	result, err := idem.Execute(ctx, key, func(ctx context.Context) (any, error) {
+		return map[string]any{"status": "success"}, nil
 	})
 
 	if err != nil {

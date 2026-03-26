@@ -146,7 +146,7 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 	}
 
 	// 解析结果
-	resultSlice, ok := result.([]interface{})
+	resultSlice, ok := result.([]any)
 	if !ok || len(resultSlice) != 2 {
 		return false, xerrors.New("invalid lua script result")
 	}

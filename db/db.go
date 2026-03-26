@@ -151,7 +151,7 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 	// 注册分片中间件
 	if cfg.EnableSharding && len(cfg.ShardingRules) > 0 {
 		for _, rule := range cfg.ShardingRules {
-			tables := make([]interface{}, len(rule.Tables))
+			tables := make([]any, len(rule.Tables))
 			for i, v := range rule.Tables {
 				tables[i] = v
 			}

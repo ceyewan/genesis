@@ -193,7 +193,7 @@ func TestSnowflake_Monotonicity_Unit(t *testing.T) {
 
 	// 生成大量 ID 验证单调性
 	lastID := sf.Next()
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		id := sf.Next()
 		if id <= lastID {
 			t.Errorf("ID monotonicity violated at iteration %d: %d <= %d", i, id, lastID)
@@ -211,7 +211,7 @@ func TestSnowflake_Uniqueness_Unit(t *testing.T) {
 
 	// 使用 map 验证唯一性
 	seen := make(map[int64]bool)
-	for i := 0; i < 100000; i++ {
+	for i := range 100000 {
 		id := sf.Next()
 		if seen[id] {
 			t.Errorf("Duplicate ID generated at iteration %d: %d", i, id)

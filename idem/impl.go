@@ -28,7 +28,7 @@ func newIdempotency(cfg *Config, store Store, logger clog.Logger) Idempotency {
 }
 
 // Execute 执行幂等操作
-func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Context) (interface{}, error)) (interface{}, error) {
+func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error) {
 	if key == "" {
 		return nil, ErrKeyEmpty
 	}
@@ -206,10 +206,7 @@ func (i *idem) waitForResultOrLock(ctx context.Context, key string) ([]byte, Loc
 		case <-timer.C:
 		}
 		if interval < maxInterval {
-			interval = interval * 2
-			if interval > maxInterval {
-				interval = maxInterval
-			}
+			interval = min(interval*2, maxInterval)
 		}
 	}
 }
@@ -232,10 +229,7 @@ func (i *idem) startLockRefresh(key string, token LockToken) func() {
 		return func() {}
 	}
 
-	interval := i.cfg.LockTTL / 2
-	if interval < 500*time.Millisecond {
-		interval = 500 * time.Millisecond
-	}
+	interval := max(i.cfg.LockTTL/2, 500*time.Millisecond)
 
 	stopCtx, cancel := context.WithCancel(context.Background())
 	ticker := time.NewTicker(interval)
@@ -256,8 +250,8 @@ func (i *idem) startLockRefresh(key string, token LockToken) func() {
 	return cancel
 }
 
-func decodeJSONResult(cached []byte, logger clog.Logger, key string) (interface{}, error) {
-	var result interface{}
+func decodeJSONResult(cached []byte, logger clog.Logger, key string) (any, error) {
+	var result any
 	if err := json.Unmarshal(cached, &result); err != nil {
 		if logger != nil {
 			logger.Error("failed to unmarshal cached result", clog.Error(err), clog.String("key", key))

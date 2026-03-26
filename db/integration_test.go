@@ -541,7 +541,7 @@ func TestDBSharding_MySQL(t *testing.T) {
 	gormDB := database.DB(ctx)
 
 	// 创建分片表（需要创建 orders_0, orders_1, orders_2, orders_3）
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		tableName := fmt.Sprintf("orders_%d", i)
 		err := gormDB.Exec(fmt.Sprintf(`
 			CREATE TABLE IF NOT EXISTS %s (
@@ -557,7 +557,7 @@ func TestDBSharding_MySQL(t *testing.T) {
 
 	// 清理
 	defer func() {
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			gormDB.Exec(fmt.Sprintf("DROP TABLE IF EXISTS orders_%d", i))
 		}
 	}()
@@ -662,7 +662,7 @@ func TestDBSharding_SQLite(t *testing.T) {
 	gormDB := database.DB(ctx)
 
 	// 创建分片表
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		tableName := fmt.Sprintf("orders_%d", i)
 		err := gormDB.Exec(fmt.Sprintf(`
 			CREATE TABLE IF NOT EXISTS %s (

@@ -74,7 +74,7 @@ func main() {
 			return
 		}
 
-		response := map[string]interface{}{
+		response := map[string]any{
 			"token":      token,
 			"expires_in": int(cfg.AccessTokenTTL.Seconds()),
 		}
@@ -111,7 +111,7 @@ func main() {
 		}
 
 		// 返回用户信息
-		response := map[string]interface{}{
+		response := map[string]any{
 			"user_id":  claims.Subject,
 			"username": claims.Username,
 			"roles":    claims.Roles,
@@ -158,7 +158,7 @@ func runBasicTests(logger clog.Logger) {
 	defer resp.Body.Close()
 
 	data, _ := io.ReadAll(resp.Body)
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 	json.Unmarshal(data, &result)
 
 	if resp.StatusCode != http.StatusOK {

@@ -77,7 +77,7 @@ func standaloneExample(ctx context.Context, logger clog.Logger) {
 	fmt.Printf("测试限流规则: Rate=%.0f QPS, Burst=%d\n", limit.Rate, limit.Burst)
 	fmt.Println("快速发送 20 个请求...")
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		allowed, err := limiter.Allow(ctx, key, limit)
 		if err != nil {
 			logger.Error("allow failed", clog.Error(err))
@@ -162,7 +162,7 @@ func distributedExample(ctx context.Context, logger clog.Logger) {
 
 	successCount := 0
 	failedCount := 0
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		allowed, err := limiter.Allow(ctx, key, limit)
 		if err != nil {
 			logger.Error("allow failed", clog.Error(err))

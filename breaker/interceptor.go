@@ -25,7 +25,7 @@ func (cb *circuitBreaker) UnaryClientInterceptor(opts ...InterceptorOption) grpc
 		opt(cfg)
 	}
 
-	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		// 使用配置的 KeyFunc 生成熔断 Key
 		key := cfg.keyFunc(ctx, method, cc)
 
@@ -36,7 +36,7 @@ func (cb *circuitBreaker) UnaryClientInterceptor(opts ...InterceptorOption) grpc
 		}
 
 		// 使用熔断器执行调用
-		_, err := cb.Execute(ctx, key, func() (interface{}, error) {
+		_, err := cb.Execute(ctx, key, func() (any, error) {
 			err := invoker(ctx, method, req, reply, cc, opts...)
 			return nil, err
 		})

@@ -201,7 +201,7 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 
 	// 生成序列号数组
 	seqs := make([]int64, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		// 倒推每个序列号
 		seqs[i] = endSeq - int64(count-i-1)*r.cfg.Step
 	}

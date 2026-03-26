@@ -181,7 +181,7 @@ func (l *standaloneLimiter) cleanup(interval, idleTimeout time.Duration) {
 			now := time.Now()
 			count := 0
 
-			l.limiters.Range(func(key, value interface{}) bool {
+			l.limiters.Range(func(key, value any) bool {
 				wrapper := value.(*limiterWrapper)
 				wrapper.mu.Lock()
 				idle := now.Sub(wrapper.lastSeen)

@@ -190,7 +190,7 @@ func getStackTrace(skip int) string {
 	var builder strings.Builder
 	frames := runtime.CallersFrames(pcs[:n])
 
-	for i := 0; i < n; i++ {
+	for range n {
 		frame, more := frames.Next()
 
 		// 忽略 Go 运行时的入口点，保持堆栈信息清晰

@@ -108,7 +108,7 @@ func TestLoggerLevels(t *testing.T) {
 
 	// 验证每行都是有效的 JSON
 	for i, line := range lines {
-		var logEntry map[string]interface{}
+		var logEntry map[string]any
 		if err := json.Unmarshal([]byte(line), &logEntry); err != nil {
 			t.Errorf("Line %d is not valid JSON: %v", i, err)
 		}
@@ -153,7 +153,7 @@ func TestLoggerSetLevel(t *testing.T) {
 	}
 
 	// 第一行应该是 info 级别（debug 被过滤）
-	var firstEntry map[string]interface{}
+	var firstEntry map[string]any
 	if err := json.Unmarshal([]byte(lines[0]), &firstEntry); err != nil {
 		t.Fatalf("Failed to parse first log entry: %v", err)
 	}
@@ -184,13 +184,13 @@ func TestLoggerFields(t *testing.T) {
 	)
 
 	output := buf.String()
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
 
 	// 验证扁平字段
-	tests := map[string]interface{}{
+	tests := map[string]any{
 		"string_field": "test_value",
 		"int_field":    float64(42), // JSON 数字都是 float64
 		"float_field":  3.14,
@@ -215,7 +215,7 @@ func TestLoggerFields(t *testing.T) {
 	}
 
 	// ErrorWithStack 现在使用 Group 产生嵌套结构：error={msg="...", type="...", stack="..."}
-	errorGroup, ok := logEntry["error"].(map[string]interface{})
+	errorGroup, ok := logEntry["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected error field to be a group, got %T", logEntry["error"])
 	}
@@ -253,7 +253,7 @@ func TestLoggerWithContext(t *testing.T) {
 	logger.InfoContext(ctx, "message with context")
 
 	output := buf.String()
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestLoggerWithNamespace(t *testing.T) {
 	namespacedLogger.Info("namespaced message")
 
 	output := buf.String()
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestLoggerWith(t *testing.T) {
 	childLogger.Info("message with preset fields")
 
 	output := buf.String()
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
@@ -546,13 +546,13 @@ func TestFieldFunctions(t *testing.T) {
 	)
 
 	output := buf.String()
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
 
 	// 验证字段
-	tests := map[string]interface{}{
+	tests := map[string]any{
 		"key1": "value1",
 		"key2": float64(42), // JSON 数字都是 float64
 		"key3": 3.14,
@@ -577,7 +577,7 @@ func TestFieldFunctions(t *testing.T) {
 	// 验证 Any 字段
 	if anyField, ok := logEntry["key6"]; !ok {
 		t.Error("Missing any field")
-	} else if nested, ok := anyField.(map[string]interface{}); !ok {
+	} else if nested, ok := anyField.(map[string]any); !ok {
 		t.Errorf("Any field is not map[string]interface{}: %T", anyField)
 	} else if nested["nested"] != "value" {
 		t.Errorf("Nested value = %v, want value", nested["nested"])
@@ -597,12 +597,12 @@ func TestErrorField(t *testing.T) {
 	logger.Error("test error message", Error(err))
 
 	output := buf.String()
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
 
-	errorGroup, ok := logEntry["error"].(map[string]interface{})
+	errorGroup, ok := logEntry["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected error field to be a group, got %T", logEntry["error"])
 	}
@@ -633,13 +633,13 @@ func TestErrorWithCodeField(t *testing.T) {
 	logger.Error("test error with code", ErrorWithCode(err, "ERR_001"))
 
 	output := buf.String()
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
 
 	// ErrorWithCode 使用 Group 产生嵌套结构：error={code="...", msg="..."}
-	errorGroup, ok := logEntry["error"].(map[string]interface{})
+	errorGroup, ok := logEntry["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected error field to be a group, got %T", logEntry["error"])
 	}
@@ -673,13 +673,13 @@ func TestErrorWithStackField(t *testing.T) {
 	logger.Error("test error with stack", ErrorWithStack(err))
 
 	output := buf.String()
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
 
 	// ErrorWithStack 使用 Group 产生嵌套结构：error={msg="...", type="...", stack="..."}
-	errorGroup, ok := logEntry["error"].(map[string]interface{})
+	errorGroup, ok := logEntry["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected error field to be a group, got %T", logEntry["error"])
 	}
@@ -713,13 +713,13 @@ func TestErrorWithCodeStackField(t *testing.T) {
 	logger.Error("test error with code and stack", ErrorWithCodeStack(err, "ERR_001"))
 
 	output := buf.String()
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
 
 	// ErrorWithCodeStack 使用 Group 产生嵌套结构：error={msg="...", type="...", code="...", stack="..."}
-	errorGroup, ok := logEntry["error"].(map[string]interface{})
+	errorGroup, ok := logEntry["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected error field to be a group, got %T", logEntry["error"])
 	}
@@ -752,8 +752,8 @@ func TestErrorFieldWithNil(t *testing.T) {
 	logger.Error("nil error with code", ErrorWithCode(nil, "ERR_001"))
 
 	output := buf.String()
-	var logEntry1 map[string]interface{}
-	var logEntry2 map[string]interface{}
+	var logEntry1 map[string]any
+	var logEntry2 map[string]any
 
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 
@@ -770,7 +770,7 @@ func TestErrorFieldWithNil(t *testing.T) {
 	}
 
 	// ErrorWithCode(nil) 应该只返回 code
-	errGroup, ok := logEntry2["error"].(map[string]interface{})
+	errGroup, ok := logEntry2["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("Expected error field to be a group, got %T", logEntry2["error"])
 	}
@@ -826,7 +826,7 @@ func TestAddSource(t *testing.T) {
 	logger.Debug("message with source")
 
 	output := buf.String()
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &logEntry); err != nil {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}

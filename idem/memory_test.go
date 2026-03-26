@@ -24,17 +24,17 @@ func TestMemoryExecuteCache(t *testing.T) {
 	key := "execute:cache"
 	execCount := 0
 
-	result1, err := idem.Execute(ctx, key, func(ctx context.Context) (interface{}, error) {
+	result1, err := idem.Execute(ctx, key, func(ctx context.Context) (any, error) {
 		execCount++
-		return map[string]interface{}{"value": 42}, nil
+		return map[string]any{"value": 42}, nil
 	})
 	if err != nil {
 		t.Fatalf("first execute failed: %v", err)
 	}
 
-	result2, err := idem.Execute(ctx, key, func(ctx context.Context) (interface{}, error) {
+	result2, err := idem.Execute(ctx, key, func(ctx context.Context) (any, error) {
 		execCount++
-		return map[string]interface{}{"value": 99}, nil
+		return map[string]any{"value": 99}, nil
 	})
 	if err != nil {
 		t.Fatalf("second execute failed: %v", err)
@@ -109,18 +109,18 @@ func TestMemoryExecuteConcurrent(t *testing.T) {
 	defer cancel()
 
 	var execCount int32
-	results := make([]interface{}, 2)
+	results := make([]any, 2)
 	errs := make([]error, 2)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			res, err := idem.Execute(ctx, "execute:concurrent", func(ctx context.Context) (interface{}, error) {
+			res, err := idem.Execute(ctx, "execute:concurrent", func(ctx context.Context) (any, error) {
 				atomic.AddInt32(&execCount, 1)
 				time.Sleep(100 * time.Millisecond)
-				return map[string]interface{}{"value": 42}, nil
+				return map[string]any{"value": 42}, nil
 			})
 			results[idx] = res
 			errs[idx] = err

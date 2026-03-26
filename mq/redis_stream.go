@@ -35,7 +35,7 @@ func newRedisStreamTransport(conn connector.RedisConnector, logger clog.Logger) 
 
 // Publish 发布消息
 func (t *redisStreamTransport) Publish(ctx context.Context, topic string, data []byte, opts publishOptions) error {
-	values := map[string]interface{}{
+	values := map[string]any{
 		redisFieldPayload: data,
 	}
 
@@ -256,7 +256,7 @@ func (t *redisStreamTransport) processMessage(ctx context.Context, topic, group 
 }
 
 // decodeHeaders 解码 Headers
-func (t *redisStreamTransport) decodeHeaders(v interface{}) Headers {
+func (t *redisStreamTransport) decodeHeaders(v any) Headers {
 	if v == nil {
 		return nil
 	}

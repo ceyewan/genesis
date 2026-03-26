@@ -72,7 +72,7 @@ type Idempotency interface {
 	// 返回：
 	//   - 执行结果或缓存的结果
 	//   - 错误：ErrKeyEmpty, ErrConcurrentRequest 等
-	Execute(ctx context.Context, key string, fn func(ctx context.Context) (interface{}, error)) (interface{}, error)
+	Execute(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error)
 
 	// Consume 用于消息消费的幂等处理
 	//
@@ -109,7 +109,7 @@ type Idempotency interface {
 	//   返回类型为 interface{} 是为了避免强依赖 gin 包，
 	//   实际返回的是 func(*gin.Context) 类型。
 	//   传给 gin 的 router 时需要显式类型断言为 gin.HandlerFunc。
-	GinMiddleware(opts ...MiddlewareOption) interface{}
+	GinMiddleware(opts ...MiddlewareOption) any
 
 	// UnaryServerInterceptor 创建 gRPC 一元服务端拦截器
 	//

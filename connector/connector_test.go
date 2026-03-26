@@ -739,12 +739,10 @@ func TestConnectorConcurrency(t *testing.T) {
 
 		// Concurrent IsHealthy calls
 		var wg sync.WaitGroup
-		for i := 0; i < 100; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range 100 {
+			wg.Go(func() {
 				conn.IsHealthy()
-			}()
+			})
 		}
 		wg.Wait()
 
@@ -760,7 +758,7 @@ func TestConnectorConcurrency(t *testing.T) {
 
 		// This test verifies no race conditions occur
 		var wg sync.WaitGroup
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			wg.Add(2)
 			go func() {
 				defer wg.Done()

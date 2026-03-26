@@ -43,7 +43,7 @@ func newBreaker(
 }
 
 // Execute 执行受熔断保护的函数
-func (cb *circuitBreaker) Execute(ctx context.Context, key string, fn func() (interface{}, error)) (interface{}, error) {
+func (cb *circuitBreaker) Execute(ctx context.Context, key string, fn func() (any, error)) (any, error) {
 	if key == "" {
 		return nil, ErrKeyEmpty
 	}
@@ -86,7 +86,7 @@ func (cb *circuitBreaker) State(key string) (State, error) {
 		return StateClosed, nil
 	}
 
-	breaker := val.(*gobreaker.CircuitBreaker[interface{}])
+	breaker := val.(*gobreaker.CircuitBreaker[any])
 	state := breaker.State()
 
 	switch state {
@@ -102,10 +102,10 @@ func (cb *circuitBreaker) State(key string) (State, error) {
 }
 
 // getOrCreateBreaker 获取或创建指定键的熔断器
-func (cb *circuitBreaker) getOrCreateBreaker(key string) *gobreaker.CircuitBreaker[interface{}] {
+func (cb *circuitBreaker) getOrCreateBreaker(key string) *gobreaker.CircuitBreaker[any] {
 	val, ok := cb.breakers.Load(key)
 	if ok {
-		return val.(*gobreaker.CircuitBreaker[interface{}])
+		return val.(*gobreaker.CircuitBreaker[any])
 	}
 
 	// 创建新的熔断器
@@ -120,11 +120,11 @@ func (cb *circuitBreaker) getOrCreateBreaker(key string) *gobreaker.CircuitBreak
 		},
 	}
 
-	breaker := gobreaker.NewCircuitBreaker[interface{}](settings)
+	breaker := gobreaker.NewCircuitBreaker[any](settings)
 
 	// 存储熔断器（可能有并发创建，使用 LoadOrStore）
 	actual, _ := cb.breakers.LoadOrStore(key, breaker)
-	return actual.(*gobreaker.CircuitBreaker[interface{}])
+	return actual.(*gobreaker.CircuitBreaker[any])
 }
 
 // readyToTrip 判断是否应该触发熔断

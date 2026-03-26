@@ -123,7 +123,7 @@ func (c *redisCache) HGetAll(ctx context.Context, key string, destMap any) error
 	}
 
 	v := reflect.ValueOf(destMap)
-	if v.Kind() != reflect.Ptr {
+	if v.Kind() != reflect.Pointer {
 		return xerrors.New("destMap must be a pointer")
 	}
 	v = v.Elem()
@@ -296,7 +296,7 @@ func (c *redisCache) MGet(ctx context.Context, keys []string, destSlice any) err
 
 	// 验证 destSlice 必须是指向切片的指针
 	v := reflect.ValueOf(destSlice)
-	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Slice {
+	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Slice {
 		return xerrors.New("destSlice must be a pointer to slice")
 	}
 
@@ -331,7 +331,7 @@ func (c *redisCache) MGet(ctx context.Context, keys []string, destSlice any) err
 		}
 
 		var target any
-		if elemType.Kind() == reflect.Ptr {
+		if elemType.Kind() == reflect.Pointer {
 			val := reflect.New(elemType.Elem())
 			target = val.Interface()
 			if err := c.unmarshal([]byte(data), target); err != nil {
@@ -386,7 +386,7 @@ func (c *redisCache) Close() error {
 // 辅助函数：将字符串切片反序列化为对象切片
 func (c *redisCache) unmarshalSlice(data []string, destSlice any) error {
 	v := reflect.ValueOf(destSlice)
-	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Slice {
+	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Slice {
 		return xerrors.New("destSlice must be a pointer to slice")
 	}
 	sliceVal := v.Elem()
@@ -403,7 +403,7 @@ func (c *redisCache) unmarshalSlice(data []string, destSlice any) error {
 		// 我们需要分配 User
 
 		var target any
-		if elemType.Kind() == reflect.Ptr {
+		if elemType.Kind() == reflect.Pointer {
 			// elemType 是 *T
 			// 分配 T
 			val := reflect.New(elemType.Elem()) // val 是 *T

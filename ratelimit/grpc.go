@@ -99,7 +99,7 @@ func UnaryServerInterceptor(
 ) grpc.UnaryServerInterceptor {
 	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc)
 
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		allowed, passThrough := cfg.check(ctx, info.FullMethod)
 		if passThrough || allowed {
 			return handler(ctx, req)
@@ -138,7 +138,7 @@ func UnaryClientInterceptor(
 ) grpc.UnaryClientInterceptor {
 	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc)
 
-	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		allowed, passThrough := cfg.check(ctx, method)
 		if passThrough || allowed {
 			return invoker(ctx, method, req, reply, cc, opts...)
@@ -164,7 +164,7 @@ func StreamServerInterceptor(
 ) grpc.StreamServerInterceptor {
 	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc)
 
-	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		allowed, passThrough := cfg.check(stream.Context(), info.FullMethod)
 		if passThrough || allowed {
 			return handler(srv, stream)

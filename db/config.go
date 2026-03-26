@@ -1,5 +1,7 @@
 package db
 
+import "slices"
+
 import "github.com/ceyewan/genesis/xerrors"
 
 // Config DB 组件配置
@@ -41,10 +43,8 @@ func (c *Config) validate() error {
 		if len(rule.Tables) == 0 {
 			return xerrors.Wrap(ErrInvalidConfig, "sharding tables cannot be empty")
 		}
-		for _, table := range rule.Tables {
-			if table == "" {
-				return xerrors.Wrap(ErrInvalidConfig, "sharding table name cannot be empty")
-			}
+		if slices.Contains(rule.Tables, "") {
+			return xerrors.Wrap(ErrInvalidConfig, "sharding table name cannot be empty")
 		}
 	}
 

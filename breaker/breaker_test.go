@@ -58,7 +58,7 @@ func TestExecuteSuccess(t *testing.T) {
 	brk, _ := New(cfg, WithLogger(logger))
 
 	ctx := context.Background()
-	fn := func() (interface{}, error) {
+	fn := func() (any, error) {
 		return "success", nil
 	}
 
@@ -89,8 +89,8 @@ func TestExecuteFailure(t *testing.T) {
 	testErr := errors.New("test error")
 
 	// 触发足够的失败来打开熔断器
-	for i := 0; i < 5; i++ {
-		fn := func() (interface{}, error) {
+	for range 5 {
+		fn := func() (any, error) {
 			return nil, testErr
 		}
 		_, _ = brk.Execute(ctx, "test-service", fn)
@@ -239,8 +239,8 @@ func TestFallbackFunc(t *testing.T) {
 	testErr := errors.New("test error")
 
 	// 触发失败
-	for i := 0; i < 10; i++ {
-		fn := func() (interface{}, error) {
+	for range 10 {
+		fn := func() (any, error) {
 			return nil, testErr
 		}
 		_, _ = brk.Execute(ctx, "test-service", fn)
@@ -250,7 +250,7 @@ func TestFallbackFunc(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// 下一个调用应该触发降级
-	fn := func() (interface{}, error) {
+	fn := func() (any, error) {
 		return nil, testErr
 	}
 	_, _ = brk.Execute(ctx, "test-service", fn)

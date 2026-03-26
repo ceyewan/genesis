@@ -55,7 +55,7 @@ type Breaker interface {
 	// key: 熔断键（可以是服务名、后端地址、方法名等）
 	// fn: 要执行的函数
 	// 返回: 函数执行结果和错误
-	Execute(ctx context.Context, key string, fn func() (interface{}, error)) (interface{}, error)
+	Execute(ctx context.Context, key string, fn func() (any, error)) (any, error)
 
 	// UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器
 	// 支持 InterceptorOption 配置 Key 生成策略

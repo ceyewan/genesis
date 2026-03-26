@@ -79,7 +79,7 @@ func TestStandaloneLimiter_Allow_Basic(t *testing.T) {
 	})
 
 	t.Run("不同 key 独立限流", func(t *testing.T) {
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			key := "independent-key-" + string(rune('a'+i))
 			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 1})
 			require.NoError(t, err)
@@ -264,11 +264,9 @@ func TestStandaloneLimiter_Concurrency(t *testing.T) {
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 
-		for i := 0; i < goroutines; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for j := 0; j < requestsPerGoroutine; j++ {
+		for range goroutines {
+			wg.Go(func() {
+				for range requestsPerGoroutine {
 					allowed, _ := limiter.Allow(ctx, "concurrent-key", Limit{Rate: 100, Burst: 100})
 					mu.Lock()
 					if allowed {
@@ -278,7 +276,7 @@ func TestStandaloneLimiter_Concurrency(t *testing.T) {
 					}
 					mu.Unlock()
 				}
-			}()
+			})
 		}
 
 		wg.Wait()
@@ -300,12 +298,12 @@ func TestStandaloneLimiter_Concurrency(t *testing.T) {
 		var wg sync.WaitGroup
 		errors := make(chan error, goroutines)
 
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
 				key := "concurrent-diff-key-" + string(rune('0'+idx))
-				for j := 0; j < requestsPerGoroutine; j++ {
+				for range requestsPerGoroutine {
 					_, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 1})
 					if err != nil {
 						errors <- err
@@ -330,12 +328,10 @@ func TestStandaloneLimiter_Concurrency(t *testing.T) {
 		const goroutines = 5
 
 		var wg sync.WaitGroup
-		for i := 0; i < goroutines; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range goroutines {
+			wg.Go(func() {
 				_ = limiter.Wait(ctx, "wait-concurrent", Limit{Rate: 10, Burst: 1})
-			}()
+			})
 		}
 
 		wg.Wait()
@@ -395,7 +391,7 @@ func TestStandaloneLimiter_Cleanup(t *testing.T) {
 		_, _ = limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 1})
 
 		// 在超时前持续使用
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			time.Sleep(60 * time.Millisecond)
 			_, _ = limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 1})
 		}
@@ -493,7 +489,7 @@ func TestStandaloneLimiter_Precision(t *testing.T) {
 		key := "burst-test"
 
 		// Burst=5 允许瞬间处理 5 个请求
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 5})
 			require.NoError(t, err)
 			assert.True(t, allowed, "Burst 应该允许前 %d 个请求", i+1)
