@@ -45,6 +45,7 @@ func WithContextField(key any, fieldName string) Option {
 // WithTraceContext 开启 OpenTelemetry TraceID 自动提取
 //
 // 启用后，会自动从 Context 中提取 OTel 的 TraceID 和 SpanID。
+// 该能力依赖 OpenTelemetry trace 包。
 func WithTraceContext() Option {
 	return func(o *options) {
 		o.enableTraceExtraction = true

@@ -7,7 +7,8 @@ import "fmt"
 // config - 日志配置，如果为 nil 会使用默认配置
 // opts   - 函数式选项列表，用于命名空间、Context 字段等配置
 //
-// Logger - 日志实例
+// 返回的 Logger 可能持有底层文件句柄；当 Output 为文件路径时，
+// 调用方应在使用完成后执行 logger.Close() 释放资源。
 func New(config *Config, opts ...Option) (Logger, error) {
 	if config == nil {
 		config = NewDevDefaultConfig("genesis")

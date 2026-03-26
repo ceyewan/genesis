@@ -39,6 +39,12 @@ type orderCreatedEvent struct {
 	ProductID string `json:"product_id"`
 }
 
+func fatalAndExit(logger clog.Logger, msg string, fields ...clog.Field) {
+	logger.Fatal(msg, fields...)
+	_ = logger.Close()
+	os.Exit(1)
+}
+
 func main() {
 	ctx := context.Background()
 
@@ -52,16 +58,16 @@ func main() {
 
 	natsConn, err := connector.NewNATS(&connector.NATSConfig{URL: getenv("NATS_URL", natsEndpoint)}, connector.WithLogger(obs.Logger))
 	if err != nil {
-		obs.Logger.Fatal("new nats connector failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "new nats connector failed", clog.Error(err))
 	}
 	defer func() { _ = natsConn.Close() }()
 	if err := natsConn.Connect(ctx); err != nil {
-		obs.Logger.Fatal("connect nats failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "connect nats failed", clog.Error(err))
 	}
 
 	mqClient, err := mq.New(&mq.Config{Driver: mq.DriverNATSCore}, mq.WithNATSConnector(natsConn), mq.WithLogger(obs.Logger), mq.WithMeter(obs.Meter))
 	if err != nil {
-		obs.Logger.Fatal("new mq failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "new mq failed", clog.Error(err))
 	}
 	defer func() { _ = mqClient.Close() }()
 
@@ -71,7 +77,7 @@ func main() {
 		grpc.WithStatsHandler(trace.GRPCClientStatsHandler()),
 	)
 	if err != nil {
-		obs.Logger.Fatal("connect callback grpc failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "connect callback grpc failed", clog.Error(err))
 	}
 	defer func() { _ = cbConn.Close() }()
 	cbClient := proto.NewGatewayCallbackServiceClient(cbConn)
@@ -133,7 +139,7 @@ func main() {
 		return nil
 	}, mq.WithQueueGroup("order-task-workers"))
 	if err != nil {
-		obs.Logger.Fatal("subscribe failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "subscribe failed", clog.Error(err))
 	}
 	defer func() { _ = sub.Unsubscribe() }()
 

@@ -41,3 +41,6 @@ func (l *noopLogger) SetLevel(level Level) error {
 
 // Flush 是空操作（noopLogger 没有缓冲区）
 func (l *noopLogger) Flush() {}
+
+// Close 是空操作（noopLogger 不持有资源）
+func (l *noopLogger) Close() error { return nil }

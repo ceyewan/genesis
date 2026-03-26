@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Field 是 slog.Attr 的类型别名，实现零内存分配
+// Field 是 slog.Attr 的类型别名，减少字段适配开销。
 type Field = slog.Attr
 
 // String 创建字符串字段
@@ -62,31 +62,49 @@ func Group(k string, fields ...any) Field {
 }
 
 const (
-	errorKey          = "error"
-	errorMsgKey       = "msg"
-	errorMsgSimpleKey = "err_msg"
-	errorCodeKey      = "code"
-	errorTypeKey      = "type"
-	errorStackKey     = "stack"
+	errorKey      = "error"
+	errorMsgKey   = "msg"
+	errorCodeKey  = "code"
+	errorTypeKey  = "type"
+	errorStackKey = "stack"
 )
 
 // Error 将错误简化为仅包含错误消息
 //
-// 这是轻量级的错误字段，只输出错误消息，适用于大多数场景。
+// 这是轻量级的错误字段，输出统一的 error={msg="..."} 结构，
+// 适用于大多数业务场景。
 func Error(err error) Field {
 	if err == nil {
 		return slog.Attr{}
 	}
-	return slog.String(errorMsgSimpleKey, err.Error())
+	return slog.Group(errorKey,
+		slog.String(errorMsgKey, err.Error()),
+	)
 }
 
 // ErrorWithCode 包含错误代码的错误字段
 //
 // 添加业务错误码，适用于需要错误分类的场景。
-// 使用 slog.Group 产生嵌套结构：error={code="ERR_INVALID_INPUT", msg="invalid email"}
+// 使用 slog.Group 产生嵌套结构：error={msg="invalid email", code="ERR_INVALID_INPUT"}
+//
+// 边界行为：
+//   - err == nil 且 code == ""：返回空字段（不记录）
+//   - err == nil 且 code != ""：仅记录 error={code="..."}，适用于纯错误码场景
+//   - err != nil 且 code == ""：等同于 Error(err)，仅记录 error={msg="..."}
+//   - err != nil 且 code != ""：同时记录 msg 和 code
 func ErrorWithCode(err error, code string) Field {
 	if err == nil {
-		return slog.Attr{}
+		if code == "" {
+			return slog.Attr{}
+		}
+		return slog.Group(errorKey,
+			slog.String(errorCodeKey, code),
+		)
+	}
+	if code == "" {
+		return slog.Group(errorKey,
+			slog.String(errorMsgKey, err.Error()),
+		)
 	}
 	return slog.Group(errorKey,
 		slog.String(errorMsgKey, err.Error()),
@@ -123,9 +141,23 @@ func ErrorWithStack(err error) Field {
 // 最完整的错误字段，包含消息、类型、堆栈和错误码。
 // 仅在需要最详细调试信息时使用，如系统严重错误。
 // 使用 slog.Group 产生嵌套结构：error={msg="...", type="...", code="...", stack="..."}
+//
+// 边界行为：
+//   - err == nil 且 code == ""：返回空字段（不记录）
+//   - err == nil 且 code != ""：仅记录 error={code="..."}
+//   - err != nil 且 code == ""：等同于 ErrorWithStack(err)，包含 msg、type 和 stack
+//   - err != nil 且 code != ""：完整记录 msg、type、code 和 stack
 func ErrorWithCodeStack(err error, code string) Field {
 	if err == nil {
-		return slog.Attr{}
+		if code == "" {
+			return slog.Attr{}
+		}
+		return slog.Group(errorKey,
+			slog.String(errorCodeKey, code),
+		)
+	}
+	if code == "" {
+		return ErrorWithStack(err)
 	}
 	// skip=3: 跳过 runtime.Callers, getStackTrace, ErrorWithCodeStack
 	stack := getStackTrace(3)

@@ -55,6 +55,7 @@ func basicExample() {
 		Output:    "stdout", // 容器化环境中输出到 stdout
 		AddSource: true,     // 便于问题排查
 	})
+	defer logger.Close()
 
 	logger.Info("服务启动",
 		clog.String("version", "v1.0.0"),
@@ -77,6 +78,7 @@ func contextExample() {
 		clog.WithContextField("user_id", "user_id"),
 		clog.WithContextField("request_id", "request_id"),
 	)
+	defer logger.Close()
 
 	// 模拟微服务调用链
 	ctx := context.Background()
@@ -104,6 +106,7 @@ func namespaceExample() {
 	},
 		clog.WithNamespace("user-service"), // 服务级别命名空间
 	)
+	defer serviceLogger.Close()
 
 	// API 层
 	apiLogger := serviceLogger.WithNamespace("api")
@@ -129,6 +132,7 @@ func errorHandlingExample() {
 		Format: "json",
 		Output: "stdout",
 	})
+	defer logger.Close()
 
 	// 业务错误
 	err := ValidationError{
@@ -138,7 +142,7 @@ func errorHandlingExample() {
 
 	// 1. 轻量级错误处理 - 适用于大多数业务日志
 	logger.Error("用户验证失败",
-		clog.Error(err), // 仅包含错误消息
+		clog.Error(err), // 输出统一的 error={msg="..."} 结构
 		clog.String("operation", "create_user"),
 		clog.String("user_input", "invalid-email"),
 		clog.String("client_ip", "192.168.1.100"),
@@ -182,14 +186,15 @@ func coloredExample() {
 	},
 		clog.WithNamespace("my-app"), // 命名空间
 	)
+	defer logger.Close()
 
-	// Debug 级别 - 暗灰色
+	// Debug 级别 - 紫色
 	logger.Debug("调试信息",
 		clog.String("detail", "检查数据库连接"),
 		clog.Int("retry", 0),
 	)
 
-	// Info 级别 - 亮绿色
+	// Info 级别 - 绿色
 	logger.Info("用户登录成功",
 		clog.String("user_id", "12345"),
 		clog.String("username", "alice"),
@@ -221,6 +226,7 @@ func presetFieldsExample() {
 	},
 		clog.WithNamespace("user-service"),
 	)
+	defer logger.Close()
 
 	// 预设公共字段
 	base := logger.With(
@@ -253,6 +259,7 @@ func dynamicLevelExample() {
 		AddSource:   true,
 		SourceRoot:  "genesis",
 	})
+	defer logger.Close()
 
 	// 当前为 info，debug 不输出
 	logger.Debug("debug: 这条不会出现")

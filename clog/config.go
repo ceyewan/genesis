@@ -8,6 +8,9 @@ import (
 const timeFormat = "2006-01-02T15:04:05.000Z07:00"
 
 // Config 日志配置结构
+//
+// 当 Output 为文件路径时，Logger 会持有对应文件句柄，
+// 调用方应在不再使用时执行 logger.Close() 释放资源。
 type Config struct {
 	Level       string `json:"level" yaml:"level"`             // debug|info|warn|error|fatal
 	Format      string `json:"format" yaml:"format"`           // json|console

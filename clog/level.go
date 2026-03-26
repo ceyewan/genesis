@@ -13,7 +13,7 @@ import (
 //	InfoLevel:  一般信息，记录正常的业务流程
 //	WarnLevel:  警告信息，表示潜在问题
 //	ErrorLevel: 错误信息，表示程序出错但可恢复
-//	FatalLevel: 致命错误，程序会退出
+//	FatalLevel: 致命错误，需要人工介入或由应用层决定是否终止进程
 //
 // 级别数值越小优先级越高，DebugLevel 最低。
 type Level int

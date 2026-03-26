@@ -16,13 +16,14 @@ import (
 type clogHandler struct {
 	slog.Handler
 	levelVar *slog.LevelVar
+	closer   io.Closer
 }
 
 // newHandler 创建并返回一个适配 clog 配置的 slog.Handler（内部使用）。
 //
 // 构造顺序：writer -> handler options -> base handler -> (optional) color handler -> wrapper。
 func newHandler(config *Config, options *options) (slog.Handler, error) {
-	w, err := resolveWriter(config, options)
+	w, closer, err := resolveWriter(config, options)
 	if err != nil {
 		return nil, err
 	}
@@ -53,27 +54,27 @@ func newHandler(config *Config, options *options) (slog.Handler, error) {
 		}
 	}
 
-	return &clogHandler{Handler: handler, levelVar: levelVar}, nil
+	return &clogHandler{Handler: handler, levelVar: levelVar, closer: closer}, nil
 }
 
 // resolveWriter 根据配置创建输出 writer。
-func resolveWriter(config *Config, options *options) (io.Writer, error) {
+func resolveWriter(config *Config, options *options) (io.Writer, io.Closer, error) {
 	switch strings.ToLower(config.Output) {
 	case "stdout":
-		return os.Stdout, nil
+		return os.Stdout, nil, nil
 	case "stderr":
-		return os.Stderr, nil
+		return os.Stderr, nil, nil
 	case "buffer":
 		if options.buffer != nil {
-			return options.buffer, nil
+			return options.buffer, nil, nil
 		}
-		return nil, fmt.Errorf("buffer output requires options.buffer to be set")
+		return nil, nil, fmt.Errorf("buffer output requires options.buffer to be set")
 	default:
 		f, err := os.OpenFile(config.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return f, nil
+		return f, f, nil
 	}
 }
 
@@ -169,6 +170,14 @@ func (h *clogHandler) SetLevel(level Level) error {
 // Flush 强制同步所有缓冲区的日志 (slog 默认是同步的，这里留空)。
 func (h *clogHandler) Flush() {
 	// No-op for standard slog handlers
+}
+
+// Close 释放 handler 关联的底层资源。
+func (h *clogHandler) Close() error {
+	if h.closer != nil {
+		return h.closer.Close()
+	}
+	return nil
 }
 
 // ANSI 颜色常量

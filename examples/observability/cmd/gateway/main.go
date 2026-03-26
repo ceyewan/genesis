@@ -43,6 +43,12 @@ type callbackServer struct {
 	results map[string]string
 }
 
+func fatalAndExit(logger clog.Logger, msg string, fields ...clog.Field) {
+	logger.Fatal(msg, fields...)
+	_ = logger.Close()
+	os.Exit(1)
+}
+
 func (s *callbackServer) PushResult(ctx context.Context, req *proto.PushResultRequest) (*proto.PushResultResponse, error) {
 	if req.GetResult() == nil {
 		return nil, xerrors.New("missing result")
@@ -77,12 +83,12 @@ func main() {
 	httpMetricsCfg.RequestDurationName = "http_request_duration_seconds"
 	httpMetrics, err := metrics.NewHTTPServerMetrics(obs.Meter, httpMetricsCfg)
 	if err != nil {
-		obs.Logger.Fatal("create http metrics failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "create http metrics failed", clog.Error(err))
 	}
 
 	grpcMetrics, err := metrics.NewGRPCServerMetrics(obs.Meter, metrics.DefaultGRPCServerMetricsConfig("obs-gateway"))
 	if err != nil {
-		obs.Logger.Fatal("create grpc metrics failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "create grpc metrics failed", clog.Error(err))
 	}
 
 	logicConn, err := grpc.NewClient(
@@ -91,14 +97,14 @@ func main() {
 		grpc.WithStatsHandler(trace.GRPCClientStatsHandler()),
 	)
 	if err != nil {
-		obs.Logger.Fatal("connect logic failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "connect logic failed", clog.Error(err))
 	}
 	defer func() { _ = logicConn.Close() }()
 	logicClient := proto.NewOrderServiceClient(logicConn)
 
 	cbLis, err := net.Listen("tcp", getenv("GATEWAY_CALLBACK_GRPC_ADDR", callbackGRPCAddr))
 	if err != nil {
-		obs.Logger.Fatal("listen callback grpc failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "listen callback grpc failed", clog.Error(err))
 	}
 
 	cbSrv := grpc.NewServer(
@@ -167,6 +173,6 @@ func main() {
 
 	obs.Logger.Info("gateway http listening", clog.String("addr", httpAddr))
 	if err := srv.ListenAndServe(); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
-		obs.Logger.Fatal("gateway http failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "gateway http failed", clog.Error(err))
 	}
 }

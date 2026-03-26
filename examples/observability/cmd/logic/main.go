@@ -135,32 +135,32 @@ func main() {
 
 	grpcMetrics, err := metrics.NewGRPCServerMetrics(obs.Meter, metrics.DefaultGRPCServerMetricsConfig("obs-logic"))
 	if err != nil {
-		obs.Logger.Fatal("create grpc metrics failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "create grpc metrics failed", clog.Error(err))
 	}
 
 	natsConnCfg := &connector.NATSConfig{URL: getenv("NATS_URL", natsEndpoint)}
 	natsConn, err := connector.NewNATS(natsConnCfg, connector.WithLogger(obs.Logger))
 	if err != nil {
-		obs.Logger.Fatal("new nats connector failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "new nats connector failed", clog.Error(err))
 	}
 	defer func() { _ = natsConn.Close() }()
 	if err := natsConn.Connect(ctx); err != nil {
-		obs.Logger.Fatal("connect nats failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "connect nats failed", clog.Error(err))
 	}
 
 	mqClient, err := mq.New(&mq.Config{Driver: mq.DriverNATSCore}, mq.WithNATSConnector(natsConn), mq.WithLogger(obs.Logger), mq.WithMeter(obs.Meter))
 	if err != nil {
-		obs.Logger.Fatal("new mq failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "new mq failed", clog.Error(err))
 	}
 	defer func() { _ = mqClient.Close() }()
 
 	sqliteConn, err := connector.NewSQLite(&connector.SQLiteConfig{Path: getenv("SQLITE_PATH", sqlitePath)}, connector.WithLogger(obs.Logger))
 	if err != nil {
-		obs.Logger.Fatal("new sqlite connector failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "new sqlite connector failed", clog.Error(err))
 	}
 	defer func() { _ = sqliteConn.Close() }()
 	if err := sqliteConn.Connect(ctx); err != nil {
-		obs.Logger.Fatal("connect sqlite failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "connect sqlite failed", clog.Error(err))
 	}
 
 	database, err := db.New(&db.Config{Driver: "sqlite"},
@@ -169,16 +169,16 @@ func main() {
 		db.WithTracer(otel.GetTracerProvider()),
 	)
 	if err != nil {
-		obs.Logger.Fatal("new db failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "new db failed", clog.Error(err))
 	}
 
 	if err := database.DB(ctx).AutoMigrate(&order.Order{}); err != nil {
-		obs.Logger.Fatal("auto migrate failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "auto migrate failed", clog.Error(err))
 	}
 
 	lis, err := net.Listen("tcp", getenv("LOGIC_GRPC_ADDR", grpcAddr))
 	if err != nil {
-		obs.Logger.Fatal("listen grpc failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "listen grpc failed", clog.Error(err))
 	}
 
 	srv := grpc.NewServer(
@@ -193,6 +193,12 @@ func main() {
 
 	obs.Logger.Info("logic grpc listening", clog.String("addr", lis.Addr().String()))
 	if err := srv.Serve(lis); err != nil {
-		obs.Logger.Fatal("logic grpc serve failed", clog.Error(err))
+		fatalAndExit(obs.Logger, "logic grpc serve failed", clog.Error(err))
 	}
+}
+
+func fatalAndExit(logger clog.Logger, msg string, fields ...clog.Field) {
+	logger.Fatal(msg, fields...)
+	_ = logger.Close()
+	os.Exit(1)
 }

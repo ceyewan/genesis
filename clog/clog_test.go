@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -296,6 +298,48 @@ func TestLoggerWithNamespace(t *testing.T) {
 	}
 }
 
+func TestLoggerWithNamespace_DerivedLoggerDoesNotMutateSiblings(t *testing.T) {
+	var buf bytes.Buffer
+
+	logger, _ := New(&Config{
+		Level:  "debug",
+		Format: "json",
+		Output: "buffer",
+	},
+		withBuffer(&buf),
+		WithNamespace(
+			"p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8",
+			"p9", "p10", "p11", "p12", "p13", "p14", "p15", "p16",
+		),
+	)
+
+	a := logger.WithNamespace("api")
+	_ = logger.WithNamespace("repo")
+
+	a.Info("namespaced message")
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("Expected 1 log line, got %d: %q", len(lines), buf.String())
+	}
+
+	var logEntry map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &logEntry); err != nil {
+		t.Fatalf("Failed to parse log entry: %v", err)
+	}
+
+	namespace, ok := logEntry["namespace"].(string)
+	if !ok {
+		t.Fatalf("Expected namespace to be string, got %T", logEntry["namespace"])
+	}
+	if strings.HasSuffix(namespace, ".repo") {
+		t.Fatalf("Expected sibling namespace isolation, got %q", namespace)
+	}
+	if !strings.HasSuffix(namespace, ".api") {
+		t.Fatalf("Expected namespace to end with .api, got %q", namespace)
+	}
+}
+
 // TestLoggerWith 测试 With 功能
 func TestLoggerWith(t *testing.T) {
 	var buf bytes.Buffer
@@ -558,19 +602,21 @@ func TestErrorField(t *testing.T) {
 		t.Fatalf("Failed to parse log entry: %v", err)
 	}
 
-	// 验证错误字段 - 只应该包含 err_msg
-	if logEntry["err_msg"] != "test error" {
-		t.Errorf("err_msg = %v, want test error", logEntry["err_msg"])
+	errorGroup, ok := logEntry["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected error field to be a group, got %T", logEntry["error"])
 	}
-	// 确保不包含其他字段
-	if _, ok := logEntry["err_type"]; ok {
-		t.Error("Error() should not include err_type field")
+	if errorGroup["msg"] != "test error" {
+		t.Errorf("error.msg = %v, want test error", errorGroup["msg"])
 	}
-	if _, ok := logEntry["err_stack"]; ok {
-		t.Error("Error() should not include err_stack field")
+	if _, ok := errorGroup["type"]; ok {
+		t.Error("Error() should not include type field")
 	}
-	if _, ok := logEntry["error"]; ok {
-		t.Error("Error() should not include error group field")
+	if _, ok := errorGroup["stack"]; ok {
+		t.Error("Error() should not include stack field")
+	}
+	if _, ok := errorGroup["code"]; ok {
+		t.Error("Error() should not include code field")
 	}
 }
 
@@ -718,19 +764,21 @@ func TestErrorFieldWithNil(t *testing.T) {
 		t.Fatalf("Failed to parse second log entry: %v", err)
 	}
 
-	// Error(nil) 应该返回空的 key="" 字段，不影响日志
-	if _, ok := logEntry1["err_msg"]; ok {
-		t.Error("Error(nil) should not add err_msg field")
+	// Error(nil) 不应追加 error 字段
+	if _, ok := logEntry1["error"]; ok {
+		t.Error("Error(nil) should not add error field")
 	}
 
 	// ErrorWithCode(nil) 应该只返回 code
-	if errGroup, ok := logEntry2["error"].(map[string]interface{}); ok {
-		if errGroup["code"] != "ERR_001" {
-			t.Errorf("ErrorWithCode(nil) should have code = ERR_001, got %v", errGroup["code"])
-		}
-		if _, ok := errGroup["msg"]; ok {
-			t.Error("ErrorWithCode(nil) should not have msg field")
-		}
+	errGroup, ok := logEntry2["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected error field to be a group, got %T", logEntry2["error"])
+	}
+	if errGroup["code"] != "ERR_001" {
+		t.Errorf("ErrorWithCode(nil) should have code = ERR_001, got %v", errGroup["code"])
+	}
+	if _, ok := errGroup["msg"]; ok {
+		t.Error("ErrorWithCode(nil) should not have msg field")
 	}
 }
 
@@ -808,4 +856,73 @@ func TestLoggerFlush(t *testing.T) {
 	if output == "" {
 		t.Error("Expected log output after flush")
 	}
+}
+
+func TestLoggerFatalDoesNotExit(t *testing.T) {
+	var buf bytes.Buffer
+	logger, _ := New(&Config{
+		Level:  "debug",
+		Format: "json",
+		Output: "buffer",
+	}, withBuffer(&buf))
+
+	logger.Fatal("fatal message", String("component", "test"))
+	logger.Info("still running")
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("Expected 2 log lines, got %d: %q", len(lines), buf.String())
+	}
+
+	var fatalEntry map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &fatalEntry); err != nil {
+		t.Fatalf("Failed to parse fatal log entry: %v", err)
+	}
+	if fatalEntry["level"] != "FATAL" {
+		t.Fatalf("Expected fatal level, got %v", fatalEntry["level"])
+	}
+	if fatalEntry["msg"] != "fatal message" {
+		t.Fatalf("Expected fatal message, got %v", fatalEntry["msg"])
+	}
+}
+
+func TestLoggerClose(t *testing.T) {
+	t.Run("buffer output", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger, _ := New(&Config{
+			Level:  "info",
+			Format: "json",
+			Output: "buffer",
+		}, withBuffer(&buf))
+
+		if err := logger.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	t.Run("file output", func(t *testing.T) {
+		logFile := filepath.Join(t.TempDir(), "clog.log")
+		logger, err := New(&Config{
+			Level:  "info",
+			Format: "json",
+			Output: logFile,
+		})
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		logger.Info("message before close")
+
+		if err := logger.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		data, err := os.ReadFile(logFile)
+		if err != nil {
+			t.Fatalf("ReadFile() error = %v", err)
+		}
+		if !strings.Contains(string(data), "message before close") {
+			t.Fatalf("Expected log file to contain message, got %q", string(data))
+		}
+	})
 }

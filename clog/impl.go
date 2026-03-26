@@ -3,7 +3,6 @@ package clog
 import (
 	"context"
 	"log/slog"
-	"os"
 	"runtime"
 	"time"
 )
@@ -76,7 +75,8 @@ func (l *loggerImpl) FatalContext(ctx context.Context, msg string, fields ...Fie
 
 func (l *loggerImpl) WithNamespace(parts ...string) Logger {
 	newOptions := *l.options
-	newOptions.namespaceParts = append(l.options.namespaceParts, parts...)
+	newOptions.namespaceParts = append([]string(nil), l.options.namespaceParts...)
+	newOptions.namespaceParts = append(newOptions.namespaceParts, parts...)
 
 	newLogger := &loggerImpl{
 		handler:   l.handler,
@@ -155,9 +155,6 @@ func (l *loggerImpl) log(ctx context.Context, level Level, msg string, fields ..
 		return
 	}
 
-	if level == FatalLevel {
-		os.Exit(1)
-	}
 }
 
 // SetLevel 动态调整日志级别
@@ -175,6 +172,14 @@ func (l *loggerImpl) Flush() {
 	if h, ok := l.handler.(interface{ Flush() }); ok {
 		h.Flush()
 	}
+}
+
+// Close 释放 Logger 持有的底层资源。
+func (l *loggerImpl) Close() error {
+	if h, ok := l.handler.(interface{ Close() error }); ok {
+		return h.Close()
+	}
+	return nil
 }
 
 // setupBaseAttrs 初始化 logger 的基础属性
