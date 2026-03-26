@@ -15,10 +15,12 @@
 - [DLock 设计与实现](./genesis-dlock-blog.md) - Redis/Etcd 双后端分布式锁、续期机制与所有权保护
 - [IDGen 设计与实现](./genesis-idgen-blog.md) - 序列号与雪花 ID 生成机制、边界与选型建议
 - [Idem 设计与实现](./genesis-idem-blog.md) - 幂等执行、消息去重与 Gin/gRPC 集成策略
+- [Metrics 设计与取舍](./genesis-metrics-blog.md) - 全局指标组件、Prometheus 暴露与 HTTP/gRPC RED 埋点
 - [MQ 设计与实践](./genesis-mq-blog.md) - NATS/Redis Stream/Kafka 对比、消费者组与死信策略
 - [Observability 全栈实践](./genesis-observability-blog.md) - 基于 OpenTelemetry 的 LGTM 栈集成与 Trace/Log 联动
 - [RateLimit 核心原理](./genesis-ratelimit-blog.md) - 令牌桶算法、单机/分布式实现与接入语义
 - [Registry 核心原理](./genesis-registry-blog.md) - 服务注册发现、Watch 增量同步与 gRPC Resolver 机制
+- [Trace 设计与取舍](./genesis-trace-blog.md) - 全局链路追踪初始化、传播与 MQ 关系建模
 
 ## 架构概览
 

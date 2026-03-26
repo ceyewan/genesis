@@ -1,6 +1,9 @@
 package trace
 
-// Config 配置
+// Config 定义全局 tracing 初始化参数。
+//
+// 当前实现是一个最小 OTLP gRPC 初始化器，不包含 TLS、认证头和附加 resource
+// 属性等更复杂的 exporter 配置能力。
 type Config struct {
 	ServiceName string  `mapstructure:"service_name"`
 	Endpoint    string  `mapstructure:"endpoint"`

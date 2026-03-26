@@ -1,37 +1,30 @@
-# Genesis Observability：基于 OpenTelemetry 的可观测性实践
+# Genesis observability：Metrics、Trace 与 Logging 的综合实践
 
-在微服务架构中，服务数量的爆炸式增长使得传统的监控和调试手段捉襟见肘。"请求在哪里失败了？"、"为什么这个 API 响应突然变慢？"、"各个服务之间的调用关系是怎样的？" 这些问题如果不具备完善的可观测性体系，将成为开发者的噩梦。
-
-Genesis 提供了一套基于 OpenTelemetry 标准的开箱即用的可观测性解决方案，将 **Metrics（指标）**、**Logging（日志）** 和 **Tracing（链路追踪）** 三大支柱无缝集成，特别是结合 **LGTM** (Loki, Grafana, Tempo, Mimir/Prometheus) 技术栈，为开发者提供上帝视角的系统洞察力。
+Genesis 的可观测性体系不是一个单独组件，而是 `clog`、`metrics` 和 `trace` 三个 L0 组件协同工作的结果。它面向微服务和组件库场景，重点解决三类问题：如何在应用启动时稳定初始化可观测性、如何在 HTTP / gRPC / MQ / DB 场景中保持上下文一致，以及如何把日志、指标和链路串成一条可执行的排障路径。这篇文章不是组件源码讲解，而是一篇面向落地的综合实践文。
 
 ---
 
 ## 0 摘要
 
-Genesis 可观测性方案的核心在于**标准化**与**一体化**。它基于 CNCF 的 OpenTelemetry 标准，确保了数据的通用性和未来的扩展性。通过 `clog`、`metrics` 和 `trace` 三个基础组件的协同工作，实现了：
-
-- **自动关联**：日志自动携带 TraceID，实现 Log 与 Trace 的无缝跳转。
-- **统一接入**：只需简单的初始化配置，即可接入 OTLP 标准的后端（如 Tempo, Jaeger）。
-- **全链路追踪**：覆盖 HTTP、gRPC、Database、Redis、MQ 等多种组件。
-- **开箱即用**：推荐使用轻量级、低成本的 LGTM 栈，适合从单体到微服务的全阶段。
-
----
-
-## 1 背景：打破数据孤岛
-
-在传统监控体系中，日志、指标和追踪往往是分离的：
-
-- **Logs**：存储在 ELK 或文件中，只能看到离散的报错信息。
-- **Metrics**：存储在 Prometheus 中，只能看到聚合后的数值曲线。
-- **Traces**：存储在 Jaeger/Zipkin 中，只能看到调用链的时间条。
-
-当生产环境出现问题时，开发者需要在三个系统之间来回切换，试图通过时间戳人工关联数据，效率极低。Genesis 的目标是打破这些数据孤岛，通过 **TraceID** 这根红线，将 Logs、Metrics 和 Traces 串联起来，实现"发现告警 -> 查看链路 -> 定位日志"的顺滑排查流程。
+- `trace` 负责安装全局 tracing 状态，并为 HTTP、gRPC、MQ 提供统一传播路径
+- `clog` 负责把 `trace_id`、`span_id` 等上下文字段稳定注入结构化日志
+- `metrics` 负责统一服务端指标接口、Prometheus 暴露与 RED 埋点约定
+- 三者通过 `context.Context` 协同，而不是靠手工拼时间戳或人工比对日志
+- 推荐后端是 LGTM 栈，但 Genesis 的重点不是绑定某套后端，而是先把接入方式标准化
 
 ---
 
-## 2 核心设计：基于 OpenTelemetry 的 LGTM 栈
+## 1 背景与目标
 
-Genesis 强烈推荐使用 Grafana Labs 推出的 **LGTM** 技术栈作为可观测性后端，它与 Genesis 组件配合完美：
+可观测性最容易陷入的误区，是把日志、指标和 trace 当作三套互不相干的工具。结果通常是：日志里有报错但缺少上下文，指标能看到异常但不知道是哪类请求造成的，trace 能看到链路但跳不到对应日志。真正的生产排障并不是三套系统分别“可用”，而是三者能否围绕同一条请求上下文协同。
+
+Genesis 的目标不是再发明一套可观测性平台，而是给出一套统一接入和统一实践：应用启动时明确初始化 tracing 和 metrics，业务日志通过 `context.Context` 自动关联 trace 字段，HTTP / gRPC / MQ / DB 等路径都尽量复用同一套上下文传播方式。最终让“发现异常 -> 找到具体链路 -> 查看相关日志 -> 回看指标波动”这条路径尽量顺滑。
+
+---
+
+## 2 Genesis 可观测性的整体分工
+
+Genesis 推荐把可观测性拆成三个明确角色，而不是堆成一个大模块：
 
 | 支柱                   | 作用             | 工具栈                        | Genesis 组件      |
 | :--------------------- | :--------------- | :---------------------------- | :---------------- |
@@ -40,46 +33,46 @@ Genesis 强烈推荐使用 Grafana Labs 推出的 **LGTM** 技术栈作为可观
 | **Logging** (日志)     | 记录事件和错误   | **Loki** (轻量级，无索引内容) | `genesis/clog`    |
 | **Visualization**      | 统一展示界面     | **Grafana**                   | -                 |
 
-### 2.1 组件协同
+这里最关键的不是工具名字，而是分工边界：
 
-Genesis 的三个 L0 组件并非独立存在，而是深度耦合的：
+- `trace` 负责安装全局 `TracerProvider` 和传播器，并把 HTTP、gRPC、MQ 的传播路径接起来
+- `clog` 负责把上下文里的 trace 字段稳定打进日志，让日志和链路之间能互相跳转
+- `metrics` 负责暴露服务端指标和统一指标标签，使聚合查询和告警规则更稳定
 
-1.  **Trace 组件**：负责初始化 OpenTelemetry SDK，配置采样率和 Exporter（通常是 OTLP gRPC）。
-2.  **Clog 组件**：通过 `WithTraceContext` 选项，自动从 `context.Context` 中提取 `TraceID` 和 `SpanID`，注入到每条日志的字段中。
-3.  **Metrics 组件**：提供标准的 Prometheus 指标暴露接口，并支持关联 Trace 上下文（Exemplar）。
+这三者之间真正的连接点是 `context.Context`。只要上下文能从入口一路传到下游，trace 可以延续，日志可以带上 `trace_id`，业务埋点和服务端指标也可以在同一个请求范围内组织起来。
 
 ---
 
-## 3 实战落地：构建可观测的微服务
+## 3 启动顺序与初始化方式
 
-本节将基于 `examples/observability` 中的示例，展示如何在一个包含 HTTP 网关、gRPC 服务和 MQ 的微服务系统中落地可观测性。
+可观测性最容易出问题的地方不是“某个 API 不会用”，而是初始化顺序不一致。Genesis 推荐把它收敛成固定的 bootstrap 流程：先初始化 tracing，再初始化 metrics，再初始化 logger，最后把这三者注入到业务组件。
 
-### 3.1 统一初始化 (Bootstrap)
+原因很直接：
 
-在 `main.go` 中，建议封装一个统一的初始化函数，一次性启动所有可观测性组件：
+- `trace` 当前采用全局模式，应该尽早安装 provider 和 propagator
+- `metrics` 当前也采用全局模式，适合在应用 bootstrap 阶段只初始化一次
+- `clog` 只有在 tracing 状态已经就位后，`WithTraceContext` 才能稳定提取 trace 字段
+
+推荐初始化模式如下：
 
 ```go
 func InitObservability(serviceName string) (func(context.Context) error, error) {
-    // 1. 初始化 Trace (上报到 Tempo/Jaeger)
     shutdownTrace, err := trace.Init(&trace.Config{
         ServiceName: serviceName,
-        Endpoint:    "localhost:4317", // OTLP gRPC
-        Sampler:     1.0,              // 全量采集（生产环境建议降低）
+        Endpoint:    "localhost:4317",
+        Sampler:     1.0,
         Insecure:    true,
     })
     if err != nil { return nil, err }
 
-    // 2. 初始化 Metrics (暴露 /metrics 供 Prometheus 拉取)
     meter, err := metrics.New(metrics.NewDevDefaultConfig(serviceName))
     if err != nil { return nil, err }
 
-    // 3. 初始化 Logger (关键：开启 Trace 关联)
     logger, _ := clog.New(
         &clog.Config{Level: "info", Format: "json"},
-        clog.WithTraceContext(), // 自动注入 TraceID
+        clog.WithTraceContext(),
     )
 
-    // 返回统一的清理函数
     return func(ctx context.Context) error {
         _ = meter.Shutdown(ctx)
         return shutdownTrace(ctx)
@@ -87,105 +80,159 @@ func InitObservability(serviceName string) (func(context.Context) error, error) 
 }
 ```
 
-### 3.2 链路追踪：HTTP 与 gRPC
+这里的重点不是把三段代码写在一起，而是把它们纳入统一生命周期。应用退出时，`trace` 和 `metrics` 的 shutdown 都应该被显式调用；logger 则按各自组件约定释放资源。
 
-Genesis 推荐使用 OpenTelemetry 官方中间件来实现自动的链路追踪。
+---
 
-**HTTP Gateway (Gin):**
+## 4 HTTP 场景实践
+
+HTTP 通常是请求进入系统的第一站，因此它既是 tracing 的入口，也是日志和服务端指标最自然的汇合点。
+
+推荐做法是：
+
+- 用 `trace.GinMiddleware()` 建立请求级 span
+- 用 `metrics.GinHTTPMiddleware()` 记录服务端 RED 指标
+- 用 `clog.WithTraceContext()` 让日志自动带 `trace_id`
+- 在业务处理函数里坚持把 `ctx` 往下传，而不是重新起 `context.Background()`
+
+示例：
 
 ```go
-import "go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
-
 r := gin.New()
-// 使用 otelgin 中间件，自动提取 HTTP Header 中的 TraceParent
-r.Use(otelgin.Middleware("gateway-service"))
+r.Use(trace.GinMiddleware("gateway-service"))
+r.Use(metrics.GinHTTPMiddleware(httpMetrics))
 ```
 
-**gRPC Server:**
+这样做的结果是：
+
+- trace 里能看到入口 span
+- 指标里能看到按路由聚合的请求量和耗时
+- 日志里能直接带出对应的 `trace_id`
+
+如果这三者缺一个，排障链路都会断一截。
+
+---
+
+## 5 gRPC 场景实践
+
+gRPC 和 HTTP 的思路一样，关键仍然是统一传播和统一埋点，而不是每个 client / server 自己决定要不要带 tracing。
+
+服务端：
 
 ```go
-import "go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-
 s := grpc.NewServer(
-    // 使用 otelgrpc Handler，自动创建 Span 并传播 Context
-    grpc.StatsHandler(otelgrpc.NewServerHandler()),
+    grpc.StatsHandler(trace.GRPCServerStatsHandler()),
+    grpc.UnaryInterceptor(grpcMetrics.UnaryServerInterceptor()),
 )
 ```
 
-**gRPC Client:**
+客户端：
 
 ```go
-conn, err := grpc.NewClient("target:9090",
-    // 客户端也需要注入 Handler，将 Context 传给服务端
-    grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+conn, err := grpc.NewClient(
+    "target:9090",
+    grpc.WithStatsHandler(trace.GRPCClientStatsHandler()),
 )
 ```
 
-### 3.3 跨进程传播：MQ 消息队列
+这里最容易忽略的是：**gRPC client 也要装 tracing handler**。很多团队只在 server 侧装，结果链路在服务边界处断掉，或者只能看到 server span，看不到上游 client span。
 
-对于消息队列（如 NATS, Kafka），通常不支持自动透传 Header，需要手动进行 **Inject（注入）** 和 **Extract（提取）**。
+---
 
-**生产者 (Producer):**
+## 6 MQ 场景实践
 
-```go
-// 将当前 Context (含 TraceID) 注入到 Carrier (如 Header)
-carrier := propagation.MapCarrier{}
-otel.GetTextMapPropagator().Inject(ctx, carrier)
+异步消息是可观测性最容易断链的地方，因为它不像 HTTP 和 gRPC 那样天然有标准传播路径。Genesis 在这里给出的实践不是“自动魔法”，而是显式 helper：生产端注入，消费端提取，再显式选择关系建模。
 
-// 发送消息，将 carrier 作为元数据随消息发送
-publish(topic, message, carrier)
-```
-
-**消费者 (Consumer):**
+生产端：
 
 ```go
-// 从消息元数据中提取 Context
-carrier := propagation.MapCarrier(msg.Header)
-parentCtx := otel.GetTextMapPropagator().Extract(context.Background(), carrier)
-
-// 基于父 Context 开启新的 Span
-tracer := otel.Tracer("consumer-service")
-ctx, span := tracer.Start(parentCtx, "process_message")
-defer span.End()
-
-// 在新的 Context 下记录日志，会自动带上 TraceID
-clog.InfoContext(ctx, "processing message", clog.String("msg_id", msg.ID))
+pubCtx, pubSpan, headers := trace.StartProducerSpan(
+    ctx,
+    tracer,
+    trace.SpanNameMQPublish("orders.created"),
+    trace.MessagingMeta{
+        System:      trace.MessagingSystemNATS,
+        Destination: "orders.created",
+        Operation:   trace.MessagingOperationPublish,
+    },
+)
+defer pubSpan.End()
 ```
 
 ---
 
-## 4 可视化：Grafana 面板
+消费端：
 
-一旦数据通过上述方式上报，Grafana 就能展现其强大的关联能力：
+```go
+consumeCtx, consumeSpan := trace.StartConsumerSpanFromHeaders(
+    msg.Context(),
+    tracer,
+    trace.SpanNameMQConsume("orders.created"),
+    msg.Headers(),
+    trace.MessagingMeta{
+        System:        trace.MessagingSystemNATS,
+        Destination:   "orders.created",
+        Operation:     trace.MessagingOperationProcess,
+        ConsumerGroup: "workers",
+        TraceRelation: trace.MessagingTraceRelationLink,
+    },
+)
+defer consumeSpan.End()
+```
 
-1.  **Trace View (Tempo)**: 查看请求的完整瀑布图。点击任意一个 Span，可以直接跳转到该时间段的 Logs。
-2.  **Log View (Loki)**: 在查看日志时，每条日志旁边都有一个 "TraceID" 链接，点击即可跳转到对应的 Trace 视图。
-3.  **Service Graph**: 基于 Trace 数据自动生成服务拓扑图，展示服务间的依赖关系、调用次数和延迟。
-
----
-
-## 5 最佳实践
-
-### 5.1 采样率控制
-
-在生产环境中，全量采集 Trace 会带来巨大的存储成本和性能开销。建议：
-
-- **开发/测试环境**：`Sampler: 1.0` (100%)，方便全量排查。
-- **生产环境**：`Sampler: 0.01` (1%) 或更低，仅采集部分请求作为样本。
-- **尾部采样 (Tail Sampling)**：这是更高级的策略（需在 OTel Collector 中配置），即"只保留出错或慢请求的 Trace"，丢弃正常的 Trace。
-
-### 5.2 Context 传播是核心
-
-Context 是 Go 语言并发编程的核心，也是可观测性的基石。**必须**确保 `context.Context` 在函数调用链中从头传到尾。一旦中断（例如使用了 `context.Background()` 替代了父 Context），Trace 链路就会断裂，日志也就失去了 TraceID 的关联。
-
-### 5.3 结构化日志
-
-坚持使用 `clog` 的结构化 API（如 `clog.String`, `clog.Int`），而不是拼接字符串。结构化日志让 Loki 能够高效地进行索引和查询，例如：`{service="order"} |= "error" | json | latency > 1s`。
+默认推荐用 `link`，因为它更符合真实异步系统。只有在确实想把整条路径串成一条线性 trace 用于演示或特定排障时，才考虑 `child_of`。
 
 ---
 
-## 6 总结
+## 7 日志、指标与链路如何联动排障
 
-Genesis 的可观测性方案不是简单的工具堆砌，而是一套经过生产验证的方法论。通过标准化 OpenTelemetry 和 LGTM 栈，我们将原本复杂的监控体系简化为几个标准组件的组合。
+真正的生产排障通常不是“先看哪个系统”，而是从异常入口开始不断缩小范围。一个更实用的顺序通常是：
 
-对于开发者而言，只需要做两件事：**初始化组件** 和 **传递 Context**。剩下的——全链路追踪、指标聚合、日志关联——Genesis 都会自动帮你完成。
+1. 先从指标发现异常，例如接口耗时升高、错误率上升、某个 gRPC 方法超时增多
+2. 再进入对应 trace，看问题集中在哪个 span、哪个下游依赖、哪个异步处理环节
+3. 最后通过 `trace_id` 去日志里拿到更细的业务上下文和错误字段
+
+这条链路能否成立，依赖三个前提：
+
+- tracing 已经在入口和跨进程边界上接起来
+- 日志已经稳定带上 `trace_id`
+- 指标标签足够统一，能把异常聚合到正确的服务、方法和路由维度
+
+Genesis 的作用不是替你做诊断，而是把这三条路径的接入方式标准化，让你在出问题时不必再先解决“数据为什么对不上”。
+
+---
+
+## 8 推荐部署方式与运行建议
+
+Genesis 推荐使用 LGTM 栈承载这三类数据：
+
+- Loki 存日志
+- Prometheus 或 Mimir 存指标
+- Tempo 存 trace
+- Grafana 统一看板和跳转
+
+但这并不意味着 Genesis 绑定某一套后端。真正重要的是：无论后端换不换，前端接入仍然基于 OpenTelemetry 和稳定的日志字段契约。后端可以替换，接入方式不应每个服务都重写。
+
+运行上有三条建议：
+
+- 开发环境可以提高 trace 采样率，方便完整排查
+- 生产环境应把 trace 采样率控制在可接受范围内，不要默认全量
+- 把 `/metrics`、tracing 初始化失败和 logger 资源关闭都纳入统一 bootstrap / shutdown 流程
+
+---
+
+## 9 常见误区
+
+- 只初始化 tracing，不把 `trace_id` 打进日志
+- 只装服务端中间件，不装客户端传播
+- 在 MQ 场景里默认把所有消费都建模成 `child_of`
+- 把原始 URL path 或用户 ID 直接打成指标标签
+- 在业务中途随意重建全局 `metrics` 或 `trace` 状态
+
+---
+
+## 10 总结
+
+Genesis 的可观测性实践不是把日志、指标和 trace 三套工具简单堆在一起，而是通过统一初始化、统一上下文传播和统一字段约定，把它们组织成一套可以真正支持排障的工程体系。
+
+如果要用一句话总结这套实践的核心，那就是：**先让三类数据围绕同一条请求上下文对齐，再谈平台、看板和高级分析能力。**

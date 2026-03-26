@@ -2,8 +2,11 @@ package metrics
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel"
 )
 
 // TestNew 测试创建 Meter 实例
@@ -25,6 +28,29 @@ func TestNew(t *testing.T) {
 				Version:     "v1.0.0",
 			},
 			wantErr: false,
+		},
+		{
+			name: "missing service name",
+			cfg: &Config{
+				Version: "v1.0.0",
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative port",
+			cfg: &Config{
+				ServiceName: "test-service",
+				Port:        -1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid path",
+			cfg: &Config{
+				ServiceName: "test-service",
+				Path:        "metrics",
+			},
+			wantErr: true,
 		},
 		{
 			name: "full config",
@@ -61,6 +87,53 @@ func TestNew(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNewFailsWhenMetricsPortIsInUse(t *testing.T) {
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("listen failed: %v", err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	_, err = New(&Config{
+		ServiceName: "test-service",
+		Version:     "v1.0.0",
+		Port:        port,
+		Path:        "/metrics",
+	})
+	if err == nil {
+		t.Fatalf("New() error = nil, want listen failure")
+	}
+}
+
+func TestNewInstallsGlobalMeterProvider(t *testing.T) {
+	before := otel.GetMeterProvider()
+
+	meter, err := New(&Config{
+		ServiceName: "test-service",
+		Version:     "v1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	after := otel.GetMeterProvider()
+	if before == after {
+		t.Fatalf("global meter provider was not replaced")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := meter.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	reset := otel.GetMeterProvider()
+	if reset == after {
+		t.Fatalf("global meter provider was not reset after shutdown")
 	}
 }
 

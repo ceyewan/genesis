@@ -21,6 +21,7 @@ vendor/
 # IDE specific files
 .idea/
 .vscode/
+.qwen/
 *.swp
 *.swo
 *~

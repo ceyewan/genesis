@@ -1,9 +1,17 @@
-// Package metrics 提供 OpenTelemetry 指标收集，内置 Prometheus HTTP 服务器。
+// Package metrics 提供 Genesis 的 OpenTelemetry 指标封装与 Prometheus 暴露能力。
+//
+// 这个组件当前采用“全局模式”工作：New 在创建 Meter 的同时，也会安装
+// OpenTelemetry 全局 MeterProvider。这样做的好处是仓库内依赖全局 provider
+// 的埋点库可以立即生效；代价是重复调用 New 会覆盖之前安装的全局 provider。
+//
+// 因此推荐的使用方式是：应用启动时初始化一次 metrics，并在应用退出时调用
+// Shutdown 释放其持有的 HTTP 服务和 MeterProvider 资源。
 package metrics
 
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -19,6 +27,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
@@ -30,9 +39,15 @@ func Discard() Meter {
 }
 
 // New 创建 Meter 实例
+//
+// New 当前采用全局模式：它会创建一个新的 MeterProvider，并安装为 OpenTelemetry
+// 全局 MeterProvider。调用方通常应在应用启动阶段只调用一次。
+//
+// 当 Config 指定了 Port 和 Path 时，New 还会启动一个 Prometheus HTTP 暴露端点。
+// 若监听端口失败，New 会直接返回错误，而不是在后台异步失败。
 func New(cfg *Config) (Meter, error) {
-	if cfg == nil {
-		return nil, xerrors.New("config is required")
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	logger := defaultLogger()
@@ -64,11 +79,16 @@ func New(cfg *Config) (Meter, error) {
 		mux := http.NewServeMux()
 		mux.Handle(cfg.Path, promhttp.Handler())
 		httpServer = &http.Server{Addr: addr, Handler: mux}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			_ = mp.Shutdown(context.Background())
+			return nil, xerrors.Wrap(err, "listen metrics server")
+		}
 		go func() {
 			logger.Info("metrics server started",
-				clog.String("addr", addr),
+				clog.String("addr", ln.Addr().String()),
 				clog.String("path", cfg.Path))
-			if err := httpServer.ListenAndServe(); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
+			if err := httpServer.Serve(ln); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
 				logger.Error("metrics server error", clog.Error(err))
 			}
 		}()
@@ -165,6 +185,10 @@ func (m *meterImpl) Shutdown(ctx context.Context) error {
 	providerErr := m.provider.Shutdown(ctx)
 	if providerErr != nil {
 		providerErr = xerrors.Wrap(providerErr, "shutdown provider")
+	}
+
+	if otel.GetMeterProvider() == m.provider {
+		otel.SetMeterProvider(metricnoop.NewMeterProvider())
 	}
 	return xerrors.Combine(serverErr, providerErr)
 }

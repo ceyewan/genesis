@@ -25,6 +25,11 @@ type Meter interface {
 	Counter(name string, desc string, opts ...MetricOption) (Counter, error)
 	Gauge(name string, desc string, opts ...MetricOption) (Gauge, error)
 	Histogram(name string, desc string, opts ...MetricOption) (Histogram, error)
+	// Shutdown 释放 Meter 持有的资源。
+	//
+	// 当前实现会关闭内部 HTTP 服务并关闭底层 MeterProvider。
+	// 若当前全局 MeterProvider 仍指向该实例，Shutdown 还会将其重置为 no-op provider。
+	// 它不是幂等承诺接口，调用方应按“谁创建，谁关闭”原则调用一次。
 	Shutdown(ctx context.Context) error
 }
 
