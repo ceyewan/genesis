@@ -97,11 +97,12 @@ func sentinelErrorsDemo() {
 		fmt.Println("✓ 检测到 ErrConflict")
 	}
 
-	// 使用 errors.As 提取具体错误
-	var sentinel error
-	wrappedErr := xerrors.Wrap(ErrUnavailable, "service temporarily unavailable")
-	if xerrors.As(wrappedErr, &sentinel) {
-		fmt.Printf("✓ 提取底层错误: %v\n", sentinel)
+	// 使用 errors.As 提取具体错误类型
+	codedErr := xerrors.WithCode(ErrUnavailable, "SERVICE_UNAVAILABLE")
+	wrappedErr := xerrors.Wrap(codedErr, "service temporarily unavailable")
+	var coded *xerrors.CodedError
+	if xerrors.As(wrappedErr, &coded) {
+		fmt.Printf("✓ 提取错误码: %s\n", coded.Code)
 	}
 }
 

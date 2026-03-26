@@ -1,16 +1,19 @@
-# xerrors - Genesis 统一错误处理组件
+# xerrors
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/xerrors.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/xerrors)
 
-`xerrors` 是 Genesis 框架的统一错误处理组件，提供标准化的错误创建、包装和检查能力。
+`xerrors` 是 Genesis 的 Level 0 基础组件，提供一组与标准库 `errors` 完全兼容的轻量错误辅助工具。它的目标不是替代 `errors`，也不是构建一套复杂的错误框架，而是在不改变 Go 错误链语义的前提下，补齐几个高频且稳定的工程能力。
 
-## 特性
+## 组件定位
 
-- **零依赖设计**：不依赖任何 Genesis 组件，避免循环依赖
-- **错误链兼容**：完全兼容 Go 1.13+ 的 `errors.Is`、`errors.As`、`errors.Unwrap`
-- **错误码支持**：机器可读的错误码，便于 API 错误映射
-- **泛型支持**：Go 1.18+ 的泛型 `Must` 函数
-- **智能错误聚合**：Collector 和 Combine 支持多错误处理
+`xerrors` 主要解决四类问题：
+
+- 给错误追加上下文，同时保留 `errors.Is` / `errors.As`
+- 给错误附加一个轻量的机器可读错误码
+- 在初始化阶段提供 `Must` / `MustOK` 这类“失败即 panic”的辅助函数
+- 在顺序校验流程里简化“保留第一个错误”与“合并多个错误”的写法
+
+它**不**提供 stack trace、错误分类体系、并发安全的聚合器，也不负责统一 HTTP / gRPC / MQ 的协议层错误模型。
 
 ## 快速开始
 
@@ -18,101 +21,88 @@
 import "github.com/ceyewan/genesis/xerrors"
 ```
 
-### 基础错误包装
+最常见的用法仍然是围绕标准库错误链做轻量封装：
 
 ```go
-// 使用 Wrap 添加上下文
-file, err := os.Open("config.yaml")
-if err != nil {
-    return nil, xerrors.Wrap(err, "open config file")
+func loadConfig(path string) error {
+    file, err := os.Open(path)
+    if err != nil {
+        return xerrors.Wrap(err, "open config file")
+    }
+    defer file.Close()
+    return nil
 }
+```
 
-// 使用 Wrapf 格式化上下文
-user, err := db.FindByID(ctx, userID)
+## 核心能力
+
+### 1. 错误包装
+
+`Wrap` 和 `Wrapf` 用于给底层错误追加上下文，同时保留原始错误链：
+
+```go
+user, err := repo.FindByID(ctx, userID)
 if err != nil {
     return nil, xerrors.Wrapf(err, "find user %d", userID)
 }
 ```
 
-### 带错误码的错误
+### 2. 轻量错误码
+
+`WithCode` 和 `GetCode` 适合做轻量的机器可读错误码传递：
 
 ```go
-// API 错误处理
-user, err := getUserFromDB(123)
-if err != nil {
-    code := xerrors.GetCode(err)
-    switch code {
-    case "USER_NOT_FOUND":
-        return HTTPError(404, code)
-    case "DB_ERROR":
-        return HTTPError(500, code)
-    }
+err := xerrors.WithCode(ErrUserNotFound, "USER_NOT_FOUND")
+
+if code := xerrors.GetCode(err); code == "USER_NOT_FOUND" {
+    // 映射到上层协议错误
 }
 ```
 
-### 初始化时使用 Must
+这里的 `code` 只是一个字符串，不承担更复杂的错误元数据职责。
+
+### 3. 初始化断言
+
+`Must` 和 `MustOK` 只建议用于应用启动、依赖装配或测试辅助代码：
 
 ```go
-func main() {
-    // 仅在初始化阶段使用 Must
-    cfg := xerrors.Must(config.Load("config.yaml"))
-    logger := xerrors.Must(clog.New(&cfg.Log))
-    conn := xerrors.Must(connector.NewRedis(&cfg.Redis))
-    defer conn.Close()
-}
+cfg := xerrors.Must(config.Load("config.yaml"))
+logger := xerrors.Must(clog.New(&cfg.Log))
 ```
 
-## API 参考
+运行时业务逻辑不应该依赖 `Must`，否则会把普通错误处理升级成进程级 panic。
 
-```go
-// 错误包装
-func Wrap(err error, msg string) error
-func Wrapf(err error, format string, args ...any) error
+### 4. 顺序错误收集与合并
 
-// 错误码
-func WithCode(err error, code string) error
-func GetCode(err error) string
+`Collector` 的语义很窄：它只保留**第一个**非 `nil` 错误，适合顺序校验流程。它不是并发安全容器，也不是“收集所有错误”的聚合器。
 
-// 初始化时使用
-func Must[T any](v T, err error) T
-func MustOK[T any](v T, ok bool) T
+`Combine` 则用于把多个错误合并成一个返回值：
 
-// 错误聚合
-type Collector struct
-func (c *Collector) Collect(err error)
-func (c *Collector) Err() error
-func Combine(errs ...error) error
+- 全为 `nil` 时返回 `nil`
+- 只有一个非 `nil` 错误时直接返回该错误
+- 多个非 `nil` 错误时返回 `*MultiError`
 
-// 标准库再导出
-var New, Is, As, Unwrap, Join
-```
+## 推荐实践
 
-## 组件错误定义
+- 业务代码里优先使用 `Wrap` / `Wrapf` 追加上下文，而不是重新丢失错误链。
+- Sentinel error 仍然使用 `xerrors.New(...)` 定义，再通过 `errors.Is` / `xerrors.Is` 判断。
+- 只有在确实需要协议映射或稳定机器码时，才使用 `WithCode`。
+- `Collector` 适合“顺序校验多个字段，返回第一个错误”的场景；如果需要保留所有错误，应直接使用 `Combine` 或在上层定义更明确的数据结构。
+- `Must` 仅用于初始化和测试，不应进入运行时业务分支。
 
-各组件应在自己的 `errors.go` 中定义错误：
+## 能力边界
 
-```go
-// pkg/cache/errors.go
-var (
-    ErrCacheMiss = xerrors.New("cache: miss")
-    ErrKeyTooLong = xerrors.New("cache: key too long")
-)
-```
+如果你的需求是：
 
-## 最佳实践
+- 自动采集 stack trace
+- 统一建模公共错误结构
+- 为 HTTP / gRPC / GraphQL 等协议自动生成错误响应
+- 提供并发安全的错误聚合器
 
-| 场景       | 推荐做法                                                |
-| ---------- | ------------------------------------------------------- |
-| 业务逻辑   | `if err != nil { return xerrors.Wrap(err, "context") }` |
-| 初始化     | `cfg := xerrors.Must(load())`                           |
-| 多步骤验证 | 使用 `Collector` 收集第一个错误                         |
-| API 错误   | 使用 `WithCode` 添加机器可读码                          |
+那么 `xerrors` 不是合适的组件。它的设计重点是**保持与标准库一致、接口极小、行为可预测**。
 
-## 注意事项
+## 相关文档
 
-1. **Must 仅用于初始化**：在运行时业务逻辑中使用会导致服务 panic
-2. **组件定义自己的错误**：每个组件在 `errors.go` 中定义自己的 Sentinel Errors
-
-## License
-
-[MIT License](../../LICENSE)
+- `go doc -all ./xerrors`
+- [Genesis xerrors：轻量错误封装组件的设计与取舍](../docs/genesis-xerrors-blog.md)
+- [示例代码](../examples/xerrors/main.go)

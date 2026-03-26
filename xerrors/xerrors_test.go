@@ -66,6 +66,26 @@ func TestWithCode(t *testing.T) {
 	}
 }
 
+func TestAsCodedError(t *testing.T) {
+	base := errors.New("service unavailable")
+	coded := WithCode(base, "SERVICE_UNAVAILABLE")
+	wrapped := Wrap(coded, "call downstream")
+
+	var ce *CodedError
+	if !errors.As(wrapped, &ce) {
+		t.Fatal("errors.As(wrapped, &ce) = false，期望 true")
+	}
+	if ce == nil {
+		t.Fatal("errors.As 提取出的 *CodedError 为 nil")
+	}
+	if ce.Code != "SERVICE_UNAVAILABLE" {
+		t.Errorf("ce.Code = %q，期望 %q", ce.Code, "SERVICE_UNAVAILABLE")
+	}
+	if !errors.Is(ce, base) {
+		t.Error("errors.Is(ce, base) = false，期望 true")
+	}
+}
+
 func TestMust(t *testing.T) {
 	// 无错误应返回值
 	v := Must(42, nil)
@@ -161,6 +181,22 @@ func TestCombine(t *testing.T) {
 	}
 	if !errors.Is(combined, err2) {
 		t.Error("errors.Is(combined, err2) = false，期望 true")
+	}
+}
+
+func TestGetCodeFromCombinedAndJoinedErrors(t *testing.T) {
+	plain := errors.New("plain")
+	codedA := WithCode(errors.New("cache miss"), "CACHE_MISS")
+	codedB := WithCode(errors.New("user not found"), "USER_NOT_FOUND")
+
+	combined := Combine(plain, codedA, codedB)
+	if code := GetCode(combined); code != "CACHE_MISS" {
+		t.Errorf("GetCode(combined) = %q，期望 %q", code, "CACHE_MISS")
+	}
+
+	joined := Join(plain, codedB)
+	if code := GetCode(joined); code != "USER_NOT_FOUND" {
+		t.Errorf("GetCode(joined) = %q，期望 %q", code, "USER_NOT_FOUND")
 	}
 }
 

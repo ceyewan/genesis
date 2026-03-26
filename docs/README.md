@@ -21,6 +21,7 @@
 - [RateLimit 核心原理](./genesis-ratelimit-blog.md) - 令牌桶算法、单机/分布式实现与接入语义
 - [Registry 核心原理](./genesis-registry-blog.md) - 服务注册发现、Watch 增量同步与 gRPC Resolver 机制
 - [Trace 设计与取舍](./genesis-trace-blog.md) - 全局链路追踪初始化、传播与 MQ 关系建模
+- [XErrors 设计与取舍](./genesis-xerrors-blog.md) - 轻量错误封装、错误链兼容与能力边界
 
 ## 架构概览
 
