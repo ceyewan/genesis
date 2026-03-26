@@ -153,7 +153,7 @@ func basicConfigExample() {
 	fmt.Printf("✓ .env 文件: 只设置 LOG 配置组\n")
 	fmt.Printf("✓ config.dev.yaml: 只设置 REDIS 配置组\n")
 	fmt.Printf("✓ config.yaml: 设置 MYSQL 配置组（及其他默认值）\n")
-	fmt.Printf("\n完美展示了：环境变量 > .env 文件 > 环境特定配置 > 基础配置\n")
+	fmt.Printf("\n展示了：环境变量 > .env 文件 > 环境特定配置 > 基础配置\n")
 	fmt.Println()
 }
 
@@ -251,7 +251,7 @@ func configWatchExample() {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
-	// 注意：文件监听在 Load() 时自动启动，无需手动 Start()
+	// 注意：Load() 只负责加载配置；第一次调用 Watch() 时才会启动文件监听
 
 	// 监听多个配置项的变化
 	mysqlHostCh, err := loader.Watch(ctx, "mysql.host")

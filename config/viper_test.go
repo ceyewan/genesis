@@ -2,11 +2,55 @@ package config
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/ceyewan/genesis/clog"
 )
+
+type spyLogger struct {
+	mu       sync.Mutex
+	warnMsgs []string
+	base     clog.Logger
+}
+
+func newSpyLogger() *spyLogger {
+	return &spyLogger{base: clog.Discard()}
+}
+
+func (l *spyLogger) warnings() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.warnMsgs...)
+}
+
+func (l *spyLogger) recordWarn(msg string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warnMsgs = append(l.warnMsgs, msg)
+}
+
+func (l *spyLogger) Debug(msg string, fields ...clog.Field)                             {}
+func (l *spyLogger) Info(msg string, fields ...clog.Field)                              {}
+func (l *spyLogger) Warn(msg string, fields ...clog.Field)                              { l.recordWarn(msg) }
+func (l *spyLogger) Error(msg string, fields ...clog.Field)                             {}
+func (l *spyLogger) Fatal(msg string, fields ...clog.Field)                             {}
+func (l *spyLogger) DebugContext(ctx context.Context, msg string, fields ...clog.Field) {}
+func (l *spyLogger) InfoContext(ctx context.Context, msg string, fields ...clog.Field)  {}
+func (l *spyLogger) WarnContext(ctx context.Context, msg string, fields ...clog.Field) {
+	l.recordWarn(msg)
+}
+func (l *spyLogger) ErrorContext(ctx context.Context, msg string, fields ...clog.Field) {}
+func (l *spyLogger) FatalContext(ctx context.Context, msg string, fields ...clog.Field) {}
+func (l *spyLogger) With(fields ...clog.Field) clog.Logger                              { return l }
+func (l *spyLogger) WithNamespace(parts ...string) clog.Logger                          { return l }
+func (l *spyLogger) SetLevel(level clog.Level) error                                    { return nil }
+func (l *spyLogger) Flush()                                                             {}
+func (l *spyLogger) Close() error                                                       { return nil }
 
 // TestLoaderLoad 测试配置加载的完整流程
 func TestLoaderLoad(t *testing.T) {
@@ -241,8 +285,8 @@ test:
 			if event.OldValue != "initial" {
 				t.Errorf("Event oldValue = %v, want initial", event.OldValue)
 			}
-			if event.Source != "file" {
-				t.Errorf("Event source = %v, want file", event.Source)
+			if event.Source != EventSourceFile {
+				t.Errorf("Event source = %v, want %v", event.Source, EventSourceFile)
 			}
 			eventCount++
 
@@ -441,5 +485,171 @@ func TestLoaderEnvLoading(t *testing.T) {
 
 	if redisAddr := loader.Get("redis.addr"); redisAddr != "env-redis:6380" {
 		t.Errorf("redis.addr = %v, want env-redis:6380", redisAddr)
+	}
+}
+
+func TestLoaderDotEnvDoesNotOverrideProcessEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configFile, []byte("app: {name: file-app}\n"), 0644); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	envFile := filepath.Join(tmpDir, ".env")
+	envContent := "TEST_APP_NAME=dotenv-app\nTEST_APP_DEBUG=true\n"
+	if err := os.WriteFile(envFile, []byte(envContent), 0644); err != nil {
+		t.Fatalf("Failed to create .env file: %v", err)
+	}
+
+	os.Setenv("TEST_APP_NAME", "process-app")
+	defer os.Unsetenv("TEST_APP_NAME")
+	defer os.Unsetenv("TEST_APP_DEBUG")
+
+	loader, err := New(&Config{
+		Name:      "config",
+		Paths:     []string{tmpDir},
+		EnvPrefix: "TEST",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create loader: %v", err)
+	}
+
+	if err := loader.Load(context.Background()); err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	if appName := loader.Get("app.name"); appName != "process-app" {
+		t.Fatalf("app.name = %v, want process-app", appName)
+	}
+	if appDebug := loader.Get("app.debug"); appDebug != "true" {
+		t.Fatalf("app.debug = %v, want true", appDebug)
+	}
+}
+
+func TestLoaderWatchBeforeLoad(t *testing.T) {
+	loader, err := New(&Config{})
+	if err != nil {
+		t.Fatalf("Failed to create loader: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err = loader.Watch(ctx, "app.debug")
+	if !errors.Is(err, ErrNotLoaded) {
+		t.Fatalf("Watch() error = %v, want ErrNotLoaded", err)
+	}
+}
+
+func TestLoaderLoadIsIdempotent(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	if err := os.WriteFile(configFile, []byte("app: {name: first}\n"), 0644); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	loader, err := New(&Config{
+		Name:  "config",
+		Paths: []string{tmpDir},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create loader: %v", err)
+	}
+
+	if err := loader.Load(context.Background()); err != nil {
+		t.Fatalf("First Load() error = %v", err)
+	}
+	if name := loader.Get("app.name"); name != "first" {
+		t.Fatalf("app.name after first load = %v, want first", name)
+	}
+
+	if err := os.WriteFile(configFile, []byte("app: {name: second}\n"), 0644); err != nil {
+		t.Fatalf("Failed to update config file: %v", err)
+	}
+
+	if err := loader.Load(context.Background()); err != nil {
+		t.Fatalf("Second Load() error = %v", err)
+	}
+	if name := loader.Get("app.name"); name != "second" {
+		t.Fatalf("app.name after second load = %v, want second", name)
+	}
+}
+
+func TestLoaderReloadValidationFailureLogsWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	if err := os.WriteFile(configFile, []byte("app: {name: valid}\n"), 0644); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	logger := newSpyLogger()
+	loader, err := New(&Config{
+		Name:      "config",
+		Paths:     []string{tmpDir},
+		EnvPrefix: "CONFIG_RELOAD_VALIDATION_TEST",
+	}, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("Failed to create loader: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := loader.Load(ctx); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	ch, err := loader.Watch(ctx, "app.name")
+	if err != nil {
+		t.Fatalf("Watch() error = %v", err)
+	}
+
+	if err := os.WriteFile(configFile, []byte("{}\n"), 0644); err != nil {
+		t.Fatalf("Failed to update config file: %v", err)
+	}
+
+	select {
+	case event := <-ch:
+		t.Fatalf("unexpected event after invalid reload: %+v", event)
+	case <-time.After(800 * time.Millisecond):
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(logger.warnings()) > 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("expected reload warning log, got none")
+}
+
+func TestLoaderDotEnvReadFailureReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configFile, []byte("app: {name: file-app}\n"), 0644); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	envFile := filepath.Join(tmpDir, ".env")
+	if err := os.WriteFile(envFile, []byte("INVALID LINE\n"), 0644); err != nil {
+		t.Fatalf("Failed to create .env file: %v", err)
+	}
+
+	loader, err := New(&Config{
+		Name:      "config",
+		Paths:     []string{tmpDir},
+		EnvPrefix: "TEST",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create loader: %v", err)
+	}
+
+	if err := loader.Load(context.Background()); err == nil {
+		t.Fatalf("Load() error = nil, want read .env error")
 	}
 }

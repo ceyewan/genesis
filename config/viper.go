@@ -14,89 +14,99 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 
+	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
 const defaultWatchDebounce = 250 * time.Millisecond
 
+var envLoadMu sync.Mutex
+
 // loader 实现 Loader 接口
 type loader struct {
-	v         *viper.Viper
 	cfg       *Config
+	v         *viper.Viper
+	logger    clog.Logger
 	mu        sync.RWMutex
+	loaded    bool
 	watches   map[string][]chan Event
-	oldValues map[string]interface{}
+	oldValues map[string]any
 
 	watchOnce sync.Once
 	watchErr  error
 }
 
 // newLoader 创建一个新的配置加载器（内部使用）
-func newLoader(cfg *Config) (Loader, error) {
-	v := viper.New()
-	return &loader{
-		v:         v,
+func newLoader(cfg *Config, opts ...Option) (Loader, error) {
+	l := &loader{
+		v:         viper.New(),
 		cfg:       cfg,
+		logger:    clog.Discard(),
 		watches:   make(map[string][]chan Event),
-		oldValues: make(map[string]interface{}),
-	}, nil
+		oldValues: make(map[string]any),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(l)
+		}
+	}
+	return l, nil
 }
 
-// Load 初始化并从所有来源加载配置
-func (l *loader) Load(ctx context.Context) error {
-	// 1. 配置 Viper
-	l.mu.Lock()
-	l.v.SetConfigName(l.cfg.Name)
-	l.v.SetConfigType(l.cfg.FileType)
+func (l *loader) newConfiguredViper() *viper.Viper {
+	v := viper.New()
+	v.SetConfigName(l.cfg.Name)
+	v.SetConfigType(l.cfg.FileType)
 
 	for _, path := range l.cfg.Paths {
-		l.v.AddConfigPath(path)
+		v.AddConfigPath(path)
 	}
 
-	// 2. 环境变量设置（最高优先级）- 先设置，确保能捕获所有环境变量
-	l.v.SetEnvPrefix(l.cfg.EnvPrefix)
-	l.v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
-	l.v.AutomaticEnv()
+	v.SetEnvPrefix(l.cfg.EnvPrefix)
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
+	v.AutomaticEnv()
 
-	// 3. 尝试加载 .env 文件（高优先级）- 在配置文件之前加载
+	return v
+}
+
+// Load 初始化并从所有来源加载配置。
+func (l *loader) Load(ctx context.Context) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.v = l.newConfiguredViper()
+
 	if err := l.loadDotEnv(); err != nil {
-		l.mu.Unlock()
 		return err
 	}
 
-	// 4. 加载基础配置（最低优先级）
 	if err := l.v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			l.mu.Unlock()
 			return xerrors.Wrapf(err, "failed to read config file %s", l.cfg.Name)
 		}
 	}
 
-	// 5. 加载环境特定配置（中等优先级）
-	if err := l.loadEnvironmentConfig(); err != nil {
-		l.mu.Unlock()
+	if err := l.loadEnvironmentConfig(l.v); err != nil {
 		return err
 	}
 
-	// 6. 验证配置
-	if err := l.validateLocked(); err != nil {
-		l.mu.Unlock()
+	if err := l.validateViper(l.v); err != nil {
 		return err
 	}
 
-	// 7. 保存当前值作为基线
+	l.loaded = true
 	l.captureCurrentValues()
-
-	l.mu.Unlock()
 
 	return nil
 }
 
-// loadDotEnv 尝试从项目目录加载 .env 文件
-// 注意：godotenv.Load 会覆盖已有环境变量，但 Viper 的 AutomaticEnv 会在 Get 时
-// 优先读取运行时环境变量，因此实际效果仍是"运行时环境变量 > 文件配置"。
+// loadDotEnv 尝试从项目目录加载 .env 文件。
+// .env 只补齐缺失的环境变量，不覆盖当前进程里已经存在的同名变量。
+// 由于进程环境变量是全局状态，这里使用包级锁串行化 .env 处理，避免多个 Loader
+// 在并发场景下出现 LookupEnv/Setenv 之间的竞态。
 func (l *loader) loadDotEnv() error {
-	var lastErr error
+	envLoadMu.Lock()
+	defer envLoadMu.Unlock()
 
 	for _, path := range l.cfg.Paths {
 		envPath := filepath.Join(path, ".env")
@@ -107,16 +117,26 @@ func (l *loader) loadDotEnv() error {
 			return xerrors.Wrapf(err, "failed to stat .env file %s", envPath)
 		}
 
-		if err := godotenv.Load(envPath); err != nil {
-			lastErr = err
+		values, err := godotenv.Read(envPath)
+		if err != nil {
+			return xerrors.Wrapf(err, "failed to read .env file %s", envPath)
+		}
+
+		for key, value := range values {
+			if _, exists := os.LookupEnv(key); exists {
+				continue
+			}
+			if err := os.Setenv(key, value); err != nil {
+				return xerrors.Wrapf(err, "failed to set env from .env file %s", envPath)
+			}
 		}
 	}
 
-	return lastErr
+	return nil
 }
 
 // loadEnvironmentConfig 加载环境特定配置文件
-func (l *loader) loadEnvironmentConfig() error {
+func (l *loader) loadEnvironmentConfig(v *viper.Viper) error {
 	env := os.Getenv(fmt.Sprintf("%s_ENV", l.cfg.EnvPrefix))
 	if env == "" {
 		return nil
@@ -124,15 +144,15 @@ func (l *loader) loadEnvironmentConfig() error {
 
 	originalName := l.cfg.Name
 	envConfigName := fmt.Sprintf("%s.%s", l.cfg.Name, env)
-	l.v.SetConfigName(envConfigName)
+	v.SetConfigName(envConfigName)
 
-	if err := l.v.MergeInConfig(); err != nil {
+	if err := v.MergeInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return xerrors.Wrapf(err, "failed to merge environment config %s", envConfigName)
 		}
 	}
 
-	l.v.SetConfigName(originalName)
+	v.SetConfigName(originalName)
 	return nil
 }
 
@@ -164,8 +184,15 @@ func (l *loader) UnmarshalKey(key string, v any) error {
 	return l.v.UnmarshalKey(key, v)
 }
 
-// Watch 订阅特定配置 key 的变更
+// Watch 订阅特定配置 key 的变更。
 func (l *loader) Watch(ctx context.Context, key string) (<-chan Event, error) {
+	l.mu.RLock()
+	loaded := l.loaded
+	l.mu.RUnlock()
+	if !loaded {
+		return nil, xerrors.Wrapf(ErrNotLoaded, "call Load before Watch")
+	}
+
 	if err := l.ensureWatching(); err != nil {
 		return nil, err
 	}
@@ -211,11 +238,11 @@ func (l *loader) Validate() error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.validateLocked()
+	return l.validateViper(l.v)
 }
 
-func (l *loader) validateLocked() error {
-	if len(l.v.AllSettings()) > 0 {
+func (l *loader) validateViper(v *viper.Viper) error {
+	if len(v.AllSettings()) > 0 {
 		return nil
 	}
 
@@ -357,26 +384,56 @@ func (l *loader) watchLoop(watcher *fsnotify.Watcher, targets map[string]struct{
 	}
 }
 
-func (l *loader) reloadAndNotify(_ fsnotify.Event) {
+func (l *loader) reloadAndNotify(event fsnotify.Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// 重新读取基础配置（Viper ReadInConfig 自带“找文件”的逻辑）
-	if err := l.v.ReadInConfig(); err != nil {
+	next := l.newConfiguredViper()
+
+	if err := l.loadDotEnv(); err != nil {
+		l.logger.Warn("配置热更新失败：处理 .env 失败",
+			clog.String("event", event.Op.String()),
+			clog.String("path", event.Name),
+			clog.Error(err),
+		)
+		return
+	}
+
+	if err := next.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			// 配置文件读取失败时，不广播变更（避免把不一致状态推给业务）。
+			l.logger.Warn("配置热更新失败：读取基础配置失败",
+				clog.String("event", event.Op.String()),
+				clog.String("path", event.Name),
+				clog.Error(err),
+			)
 			return
 		}
 	}
 
-	// 先刷新 .env，保证 ENV 等选择逻辑能拿到最新值
-	_ = l.loadDotEnv()
-	_ = l.loadEnvironmentConfig()
-	l.notifyWatches(fsnotify.Event{})
+	if err := l.loadEnvironmentConfig(next); err != nil {
+		l.logger.Warn("配置热更新失败：合并环境配置失败",
+			clog.String("event", event.Op.String()),
+			clog.String("path", event.Name),
+			clog.Error(err),
+		)
+		return
+	}
+
+	if err := l.validateViper(next); err != nil {
+		l.logger.Warn("配置热更新失败：配置校验失败",
+			clog.String("event", event.Op.String()),
+			clog.String("path", event.Name),
+			clog.Error(err),
+		)
+		return
+	}
+
+	l.v = next
+	l.notifyWatches()
 }
 
 // notifyWatches 通知所有监听者
-func (l *loader) notifyWatches(_ fsnotify.Event) {
+func (l *loader) notifyWatches() {
 	for key, channels := range l.watches {
 		newValue := l.v.Get(key)
 		oldValue := l.oldValues[key]
@@ -386,7 +443,7 @@ func (l *loader) notifyWatches(_ fsnotify.Event) {
 				Key:       key,
 				Value:     newValue,
 				OldValue:  oldValue,
-				Source:    "file",
+				Source:    EventSourceFile,
 				Timestamp: time.Now(),
 			}
 
