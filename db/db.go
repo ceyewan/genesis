@@ -1,55 +1,42 @@
-// Package db 提供了基于 GORM 的数据库组件。
+// Package db 提供基于 GORM 的数据库组件，是 Genesis L1 基础设施层的一部分。
 //
-// db 组件是 Genesis 基础设施层的核心组件，它在连接器的基础上提供了：
-//   - GORM ORM 功能封装
-//   - 事务管理支持
-//   - 与 L0 基础组件（日志、链路追踪、错误）的深度集成
+// db 在 connector 提供的连接之上封装 GORM 的初始化、事务管理与可观测性接入。
+// 业务代码通过 DB(ctx) 获得 *gorm.DB，继续使用原生 GORM API，
+// 同时自动获得 clog SQL 日志与 OpenTelemetry trace 能力。
 //
-// ## 基本使用（MySQL）
-//
-//	mysqlConn, _ := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
-//	defer mysqlConn.Close()
-//	mysqlConn.Connect(ctx)
-//
-//	database, _ := db.New(&db.Config{Driver: "mysql"},
-//		db.WithLogger(logger),
-//		db.WithTracer(otel.GetTracerProvider()),
-//		db.WithMySQLConnector(mysqlConn),
-//	)
-//
-// ## 使用 PostgreSQL
+// # 基本用法
 //
 //	pgConn, _ := connector.NewPostgreSQL(&cfg.PostgreSQL, connector.WithLogger(logger))
 //	defer pgConn.Close()
 //	pgConn.Connect(ctx)
 //
-//	database, _ := db.New(&db.Config{Driver: "postgresql"},
+//	database, err := db.New(&db.Config{Driver: "postgresql"},
+//		db.WithPostgreSQLConnector(pgConn),
 //		db.WithLogger(logger),
 //		db.WithTracer(otel.GetTracerProvider()),
-//		db.WithPostgreSQLConnector(pgConn),
 //	)
+//	if err != nil {
+//		return err
+//	}
 //
-//	// 使用 GORM 进行数据库操作
+//	// GORM 操作
 //	gormDB := database.DB(ctx)
-//	var users []User
 //	gormDB.Where("status = ?", "active").Find(&users)
 //
-//	// 事务操作
-//	err := database.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
-//		return tx.Create(&User{Name: "test"}).Error
+//	// 事务
+//	err = database.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
+//		return tx.Create(&Order{UserID: 1001}).Error
 //	})
 //
-// ## 设计原则
+// # 资源所有权
 //
-//   - 借用模型：db 组件借用连接器的连接，不负责连接的生命周期
-//   - 配置驱动：通过 Config.Driver 字段控制底层实现（mysql/postgresql/sqlite）
-//   - 显式依赖：通过构造函数显式注入连接器和选项
-//   - 可观测性：集成 clog 和 OpenTelemetry trace，提供完整的日志和链路追踪能力
+// db 采用借用模型：connector 负责连接生命周期，db.Close() 为 no-op。
+// 应用层只需 defer connector.Close()，无需管理 db 的生命周期。
 //
-// ## 分表说明
+// # 分表
 //
-// 分表属于数据库层面的能力，推荐使用数据库原生分区功能：
-//   - PostgreSQL：PARTITION BY HASH / RANGE / LIST（PG10+）
+// 分表属于数据库层面的能力，推荐使用数据库原生分区：
+//   - PostgreSQL 10+：PARTITION BY HASH / RANGE / LIST
 //   - MySQL：PARTITION BY HASH / RANGE / LIST
 //
 // 原生分区对应用层完全透明，无需任何应用代码改动。
