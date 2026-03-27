@@ -89,7 +89,11 @@ func (c *sqliteConnector) Close() error {
 		return nil
 	}
 
-	sqlDB, err := c.db.DB()
+	// 先置 nil，防止 Close 失败后重复关闭
+	db := c.db
+	c.db = nil
+
+	sqlDB, err := db.DB()
 	if err != nil {
 		c.logger.Error("failed to get sqlite db instance for closing", clog.Error(err))
 		return err
@@ -100,7 +104,6 @@ func (c *sqliteConnector) Close() error {
 		return err
 	}
 
-	c.db = nil
 	c.logger.Info("sqlite connection closed successfully")
 	return nil
 }

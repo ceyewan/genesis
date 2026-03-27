@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
@@ -123,7 +122,7 @@ func (c *etcdConnector) HealthCheck(ctx context.Context) error {
 		return xerrors.Wrapf(ErrClientNil, "etcd connector[%s]", c.cfg.Name)
 	}
 
-	testCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	testCtx, cancel := context.WithTimeout(ctx, c.cfg.DialTimeout)
 	defer cancel()
 
 	_, err := client.Get(testCtx, "health-check")

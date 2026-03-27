@@ -56,7 +56,9 @@ func (c *kafkaConnector) Connect(ctx context.Context) error {
 		kgo.SeedBrokers(c.cfg.Seed...),
 		kgo.ClientID(c.cfg.ClientID),
 		kgo.WithLogger(&kgoLogger{logger: c.logger}),
-		kgo.AllowAutoTopicCreation(),
+	}
+	if c.cfg.AllowAutoTopicCreate {
+		opts = append(opts, kgo.AllowAutoTopicCreation())
 	}
 
 	// SASL/PLAIN 认证
@@ -159,7 +161,8 @@ type kgoLogger struct {
 }
 
 func (l *kgoLogger) Level() kgo.LogLevel {
-	return kgo.LogLevelInfo
+	// 返回 Debug 让所有日志通过，由底层 clog 决定过滤级别
+	return kgo.LogLevelDebug
 }
 
 func (l *kgoLogger) Log(level kgo.LogLevel, msg string, keyvals ...any) {

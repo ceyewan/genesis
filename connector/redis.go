@@ -96,12 +96,13 @@ func (c *redisConnector) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.logger.Info("closing redis connection", clog.String("addr", c.cfg.Addr))
 	c.healthy.Store(false)
 
 	if c.client == nil {
 		return nil
 	}
+
+	c.logger.Info("closing redis connection", clog.String("addr", c.cfg.Addr))
 
 	if err := c.client.Close(); err != nil {
 		c.logger.Error("failed to close redis connection", clog.Error(err))

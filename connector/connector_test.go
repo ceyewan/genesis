@@ -2,11 +2,9 @@ package connector
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
@@ -16,6 +14,7 @@ import (
 
 // TestRedisConfigValidation 测试 Redis 配置验证
 func TestRedisConfigValidation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		cfg     *RedisConfig
@@ -69,15 +68,16 @@ func TestRedisConfigValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.ErrorIs(t, err, tt.isErr)
+				require.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 				// Verify defaults are set
-				assert.NotEmpty(t, tt.cfg.Name)
-				assert.Greater(t, tt.cfg.PoolSize, 0)
+				require.NotEmpty(t, tt.cfg.Name)
+				require.Greater(t, tt.cfg.PoolSize, 0)
 			}
 		})
 	}
@@ -85,6 +85,7 @@ func TestRedisConfigValidation(t *testing.T) {
 
 // TestMySQLConfigValidation 测试 MySQL 配置验证
 func TestMySQLConfigValidation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		cfg     *MySQLConfig
@@ -163,7 +164,7 @@ func TestMySQLConfigValidation(t *testing.T) {
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.ErrorIs(t, err, tt.isErr)
+				require.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 			}
@@ -173,6 +174,7 @@ func TestMySQLConfigValidation(t *testing.T) {
 
 // TestPostgreSQLConfigValidation 测试 PostgreSQL 配置验证
 func TestPostgreSQLConfigValidation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		cfg     *PostgreSQLConfig
@@ -268,15 +270,15 @@ func TestPostgreSQLConfigValidation(t *testing.T) {
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.ErrorIs(t, err, tt.isErr)
+				require.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 				// 验证默认值
 				if tt.cfg.Port == 0 {
-					assert.Equal(t, 5432, tt.cfg.Port)
+					require.Equal(t, 5432, tt.cfg.Port)
 				}
 				if tt.cfg.Name == "" {
-					assert.Equal(t, "default", tt.cfg.Name)
+					require.Equal(t, "default", tt.cfg.Name)
 				}
 			}
 		})
@@ -285,6 +287,7 @@ func TestPostgreSQLConfigValidation(t *testing.T) {
 
 // TestEtcdConfigValidation 测试 Etcd 配置验证
 func TestEtcdConfigValidation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		cfg     *EtcdConfig
@@ -328,7 +331,7 @@ func TestEtcdConfigValidation(t *testing.T) {
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.ErrorIs(t, err, tt.isErr)
+				require.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 			}
@@ -338,6 +341,7 @@ func TestEtcdConfigValidation(t *testing.T) {
 
 // TestNATSConfigValidation 测试 NATS 配置验证
 func TestNATSConfigValidation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		cfg     *NATSConfig
@@ -383,7 +387,7 @@ func TestNATSConfigValidation(t *testing.T) {
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.ErrorIs(t, err, tt.isErr)
+				require.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 			}
@@ -393,6 +397,7 @@ func TestNATSConfigValidation(t *testing.T) {
 
 // TestKafkaConfigValidation 测试 Kafka 配置验证
 func TestKafkaConfigValidation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		cfg     *KafkaConfig
@@ -445,7 +450,7 @@ func TestKafkaConfigValidation(t *testing.T) {
 			err := tt.cfg.validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.ErrorIs(t, err, tt.isErr)
+				require.ErrorIs(t, err, tt.isErr)
 			} else {
 				require.NoError(t, err)
 			}
@@ -455,13 +460,14 @@ func TestKafkaConfigValidation(t *testing.T) {
 
 // TestSQLiteConfigValidation 测试 SQLite 配置验证
 func TestSQLiteConfigValidation(t *testing.T) {
+	t.Parallel()
 	t.Run("valid in-memory config", func(t *testing.T) {
 		cfg := &SQLiteConfig{
 			Path: "file::memory:?cache=shared",
 		}
 		conn, err := NewSQLite(cfg)
 		require.NoError(t, err)
-		assert.NotNil(t, conn)
+		require.NotNil(t, conn)
 		conn.Close()
 	})
 
@@ -471,7 +477,7 @@ func TestSQLiteConfigValidation(t *testing.T) {
 		}
 		conn, err := NewSQLite(cfg)
 		require.NoError(t, err)
-		assert.NotNil(t, conn)
+		require.NotNil(t, conn)
 		conn.Close()
 	})
 
@@ -479,13 +485,14 @@ func TestSQLiteConfigValidation(t *testing.T) {
 		cfg := &SQLiteConfig{}
 		conn, err := NewSQLite(cfg)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrConfig)
-		assert.Nil(t, conn)
+		require.ErrorIs(t, err, ErrConfig)
+		require.Nil(t, conn)
 	})
 }
 
 // TestConnectorOptions 测试连接器选项
 func TestConnectorOptions(t *testing.T) {
+	t.Parallel()
 	t.Run("WithLogger", func(t *testing.T) {
 		cfg := &RedisConfig{
 			Addr: "localhost:6379",
@@ -494,13 +501,14 @@ func TestConnectorOptions(t *testing.T) {
 
 		conn, err := NewRedis(cfg, WithLogger(logger))
 		require.NoError(t, err)
-		assert.NotNil(t, conn)
+		require.NotNil(t, conn)
 		conn.Close()
 	})
 }
 
 // TestConnectorInterface 测试连接器接口实现
 func TestConnectorInterface(t *testing.T) {
+	t.Parallel()
 	t.Run("Redis connector implements interface", func(t *testing.T) {
 		cfg := &RedisConfig{Addr: "localhost:6379"}
 		conn, err := NewRedis(cfg)
@@ -511,9 +519,9 @@ func TestConnectorInterface(t *testing.T) {
 		var _ RedisConnector = conn
 
 		// Test basic interface methods
-		assert.Equal(t, "default", conn.Name())
-		assert.False(t, conn.IsHealthy()) // Not connected yet
-		assert.Nil(t, conn.GetClient())   // Not connected yet
+		require.Equal(t, "default", conn.Name())
+		require.False(t, conn.IsHealthy()) // Not connected yet
+		require.Nil(t, conn.GetClient())   // Not connected yet
 
 		conn.Close()
 	})
@@ -534,8 +542,8 @@ func TestConnectorInterface(t *testing.T) {
 		var _ MySQLConnector = conn
 		var _ TypedConnector[*gorm.DB] = conn
 
-		assert.Equal(t, "default", conn.Name())
-		assert.Nil(t, conn.GetClient()) // Not connected yet
+		require.Equal(t, "default", conn.Name())
+		require.Nil(t, conn.GetClient()) // Not connected yet
 	})
 
 	t.Run("Etcd connector implements interface", func(t *testing.T) {
@@ -549,8 +557,8 @@ func TestConnectorInterface(t *testing.T) {
 		var _ Connector = conn
 		var _ EtcdConnector = conn
 
-		assert.Equal(t, "default", conn.Name())
-		assert.Nil(t, conn.GetClient()) // Not connected yet
+		require.Equal(t, "default", conn.Name())
+		require.Nil(t, conn.GetClient()) // Not connected yet
 	})
 
 	t.Run("NATS connector implements interface", func(t *testing.T) {
@@ -563,8 +571,8 @@ func TestConnectorInterface(t *testing.T) {
 		var _ Connector = conn
 		var _ NATSConnector = conn
 
-		assert.Equal(t, "default", conn.Name())
-		assert.Nil(t, conn.GetClient()) // Not connected yet
+		require.Equal(t, "default", conn.Name())
+		require.Nil(t, conn.GetClient()) // Not connected yet
 	})
 
 	t.Run("Kafka connector implements interface", func(t *testing.T) {
@@ -577,8 +585,8 @@ func TestConnectorInterface(t *testing.T) {
 		var _ Connector = conn
 		var _ KafkaConnector = conn
 
-		assert.Equal(t, "default", conn.Name())
-		assert.Nil(t, conn.GetClient()) // Not connected yet
+		require.Equal(t, "default", conn.Name())
+		require.Nil(t, conn.GetClient()) // Not connected yet
 	})
 
 	t.Run("SQLite connector implements interface", func(t *testing.T) {
@@ -593,13 +601,14 @@ func TestConnectorInterface(t *testing.T) {
 		var _ SQLiteConnector = conn
 		var _ TypedConnector[*gorm.DB] = conn
 
-		assert.Equal(t, "default", conn.Name())
-		assert.Nil(t, conn.GetClient()) // Not connected yet
+		require.Equal(t, "default", conn.Name())
+		require.Nil(t, conn.GetClient()) // Not connected yet
 	})
 }
 
 // TestConnectorName 测试连接器名称设置
 func TestConnectorName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		connName string
@@ -617,7 +626,7 @@ func TestConnectorName(t *testing.T) {
 			}
 			conn, err := NewRedis(cfg)
 			require.NoError(t, err)
-			assert.Equal(t, tt.connName, conn.Name())
+			require.Equal(t, tt.connName, conn.Name())
 			conn.Close()
 		})
 	}
@@ -625,6 +634,7 @@ func TestConnectorName(t *testing.T) {
 
 // TestHealthCheckWithoutConnect 测试未连接时的健康检查
 func TestHealthCheckWithoutConnect(t *testing.T) {
+	t.Parallel()
 	t.Run("Redis health check before connect", func(t *testing.T) {
 		cfg := &RedisConfig{Addr: "localhost:6379"}
 		conn, err := NewRedis(cfg)
@@ -632,7 +642,7 @@ func TestHealthCheckWithoutConnect(t *testing.T) {
 		defer conn.Close()
 
 		// Before Connect, IsHealthy should return false
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 
 		// HealthCheck behavior varies:
 		// - If Redis server is running: will succeed and set IsHealthy to true
@@ -642,9 +652,9 @@ func TestHealthCheckWithoutConnect(t *testing.T) {
 		// Don't assert error since Redis might be available
 		// Just verify IsHealthy is updated appropriately
 		if err == nil {
-			assert.True(t, conn.IsHealthy())
+			require.True(t, conn.IsHealthy())
 		} else {
-			assert.False(t, conn.IsHealthy())
+			require.False(t, conn.IsHealthy())
 		}
 	})
 
@@ -654,7 +664,7 @@ func TestHealthCheckWithoutConnect(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.Close()
 
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 
 		// SQLite needs explicit Connect to work
 		ctx := context.Background()
@@ -666,6 +676,7 @@ func TestHealthCheckWithoutConnect(t *testing.T) {
 
 // TestCloseWithoutConnect 测试未连接时关闭
 func TestCloseWithoutConnect(t *testing.T) {
+	t.Parallel()
 	t.Run("Redis close without connect", func(t *testing.T) {
 		cfg := &RedisConfig{Addr: "localhost:6379"}
 		conn, err := NewRedis(cfg)
@@ -673,8 +684,8 @@ func TestCloseWithoutConnect(t *testing.T) {
 
 		// Close without Connect should work
 		err = conn.Close()
-		assert.NoError(t, err)
-		assert.False(t, conn.IsHealthy())
+		require.NoError(t, err)
+		require.False(t, conn.IsHealthy())
 	})
 
 	t.Run("MySQL close without connect", func(t *testing.T) {
@@ -689,7 +700,7 @@ func TestCloseWithoutConnect(t *testing.T) {
 		require.NoError(t, err)
 
 		err = conn.Close()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	t.Run("Etcd close without connect", func(t *testing.T) {
@@ -700,12 +711,13 @@ func TestCloseWithoutConnect(t *testing.T) {
 		require.NoError(t, err)
 
 		err = conn.Close()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 }
 
 // TestDoubleClose 测试重复关闭
 func TestDoubleClose(t *testing.T) {
+	t.Parallel()
 	t.Run("SQLite double close", func(t *testing.T) {
 		cfg := &SQLiteConfig{Path: "file::memory:?cache=shared"}
 		conn, err := NewSQLite(cfg)
@@ -722,12 +734,13 @@ func TestDoubleClose(t *testing.T) {
 		// Second close should also work or at least not panic
 		err = conn.Close()
 		require.NoError(t, err)
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 	})
 }
 
 // TestConnectorConcurrency 测试连接器并发安全性
 func TestConnectorConcurrency(t *testing.T) {
+	t.Parallel()
 	t.Run("concurrent IsHealthy calls", func(t *testing.T) {
 		cfg := &SQLiteConfig{Path: "file::memory:?cache=shared"}
 		conn, err := NewSQLite(cfg)
@@ -776,34 +789,32 @@ func TestConnectorConcurrency(t *testing.T) {
 	})
 }
 
-// TestSentinelErrors 测试哨兵错误
+// TestSentinelErrors 测试哨兵错误的 xerrors.Is 包装语义
 func TestSentinelErrors(t *testing.T) {
-	tests := []struct {
-		name  string
-		err   error
-		isErr bool
-	}{
-		{"ErrNotConnected", ErrNotConnected, true},
-		{"ErrAlreadyClosed", ErrAlreadyClosed, true},
-		{"ErrConnection", ErrConnection, true},
-		{"ErrTimeout", ErrTimeout, true},
-		{"ErrConfig", ErrConfig, true},
-		{"ErrHealthCheck", ErrHealthCheck, true},
-		{"wrapped error", xerrors.Wrap(ErrNotConnected, "test"), true},
-		{"different error", fmt.Errorf("different"), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.isErr {
-				assert.Error(t, tt.err)
-			}
-		})
-	}
+	t.Parallel()
+	t.Run("wrapped error matches sentinel", func(t *testing.T) {
+		t.Parallel()
+		wrapped := xerrors.Wrap(ErrConnection, "test context")
+		require.True(t, xerrors.Is(wrapped, ErrConnection))
+		require.False(t, xerrors.Is(wrapped, ErrConfig))
+	})
+	t.Run("Wrapf preserves sentinel", func(t *testing.T) {
+		t.Parallel()
+		wrapped := xerrors.Wrapf(ErrHealthCheck, "connector[%s]: %v", "test", "detail")
+		require.True(t, xerrors.Is(wrapped, ErrHealthCheck))
+		require.False(t, xerrors.Is(wrapped, ErrClientNil))
+	})
+	t.Run("unrelated errors do not match", func(t *testing.T) {
+		t.Parallel()
+		other := xerrors.New("some other error")
+		require.False(t, xerrors.Is(other, ErrConnection))
+		require.False(t, xerrors.Is(other, ErrConfig))
+	})
 }
 
 // TestContextCancellation 测试上下文取消
 func TestContextCancellation(t *testing.T) {
+	t.Parallel()
 	t.Run("connect with cancelled context", func(t *testing.T) {
 		cfg := &SQLiteConfig{Path: "file::memory:?cache=shared"}
 		conn, err := NewSQLite(cfg)

@@ -126,6 +126,11 @@ type TypedConnector[T any] interface {
 // 具体连接器接口
 // =============================================================================
 
+// 注意：以下具体接口的 GetClient() 返回值直接暴露第三方库类型（*redis.Client、*gorm.DB 等）。
+// 这是一个刻意的设计取舍：connector 层的职责是连接管理，而不是抽象底层 API。
+// 上层组件（cache、dlock 等）应依赖 connector 接口而非直接使用客户端类型，
+// 只有需要 Pipeline、事务、Lua 脚本等高级特性时才通过 GetClient() 获取原始客户端。
+
 // RedisConnector Redis 连接器接口。
 //
 // 提供对 Redis 服务器的连接管理，支持连接池、Pipeline、事务等特性。

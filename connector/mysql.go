@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	mysqldrv "github.com/go-sql-driver/mysql"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
-
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
 )
 
 type mysqlConnector struct {
@@ -56,13 +58,23 @@ func (c *mysqlConnector) Connect(ctx context.Context) error {
 		clog.String("host", c.cfg.Host),
 		clog.Int("port", c.cfg.Port))
 
-	// 构建 DSN：优先使用 cfg.DSN，否则从各字段拼接
+	// 构建 DSN：优先使用 cfg.DSN，否则用驱动 Config 安全构造（避免密码含特殊字符导致解析错误）
 	var dsn string
 	if c.cfg.DSN != "" {
 		dsn = c.cfg.DSN
 	} else {
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=True&loc=Local&timeout=%s",
-			c.cfg.Username, c.cfg.Password, c.cfg.Host, c.cfg.Port, c.cfg.Database, c.cfg.Charset, c.cfg.ConnectTimeout)
+		myCfg := &mysqldrv.Config{
+			User:      c.cfg.Username,
+			Passwd:    c.cfg.Password,
+			Net:       "tcp",
+			Addr:      fmt.Sprintf("%s:%d", c.cfg.Host, c.cfg.Port),
+			DBName:    c.cfg.Database,
+			Params:    map[string]string{"charset": c.cfg.Charset},
+			ParseTime: true,
+			Loc:       time.Local,
+			Timeout:   c.cfg.ConnectTimeout,
+		}
+		dsn = myCfg.FormatDSN()
 	}
 
 	// 创建 GORM 实例
@@ -111,7 +123,11 @@ func (c *mysqlConnector) Close() error {
 		return nil
 	}
 
-	sqlDB, err := c.db.DB()
+	// 先置 nil，防止 Close 失败后重复关闭
+	db := c.db
+	c.db = nil
+
+	sqlDB, err := db.DB()
 	if err != nil {
 		c.logger.Error("failed to get mysql db instance for closing", clog.Error(err))
 		return err
@@ -122,7 +138,6 @@ func (c *mysqlConnector) Close() error {
 		return err
 	}
 
-	c.db = nil
 	c.logger.Info("mysql connection closed successfully")
 	return nil
 }

@@ -52,6 +52,7 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 
 	c.logger.Info("attempting to connect to nats", clog.String("url", c.cfg.URL))
 
+	// 注意：nats.Connect 不接受 context，取消语义通过 nats.Timeout(cfg.ConnectTimeout) 实现
 	// 创建 NATS 连接选项
 	natsOpts := []nats.Option{
 		nats.Name(c.cfg.Name),
@@ -88,12 +89,13 @@ func (c *natsConnector) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.logger.Info("closing nats connection", clog.String("url", c.cfg.URL))
 	c.healthy.Store(false)
 
 	if c.conn == nil {
 		return nil
 	}
+
+	c.logger.Info("closing nats connection", clog.String("url", c.cfg.URL))
 
 	// Drain 确保消息完全处理后再关闭（仅在已连接状态下）
 	if c.conn.Status() == nats.CONNECTED {

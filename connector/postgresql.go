@@ -3,14 +3,15 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sync"
 	"sync/atomic"
 
-	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/xerrors"
-
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 type postgresqlConnector struct {
@@ -56,13 +57,22 @@ func (c *postgresqlConnector) Connect(ctx context.Context) error {
 		clog.String("host", c.cfg.Host),
 		clog.Int("port", c.cfg.Port))
 
-	// 构建 DSN：优先使用 cfg.DSN，否则从各字段拼接
+	// 构建 DSN：优先使用 cfg.DSN，否则用 URL 格式安全构造（url.UserPassword 会正确编码密码中的特殊字符）
 	var dsn string
 	if c.cfg.DSN != "" {
 		dsn = c.cfg.DSN
 	} else {
-		dsn = fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s TimeZone=%s",
-			c.cfg.Host, c.cfg.Port, c.cfg.Username, c.cfg.Password, c.cfg.Database, c.cfg.SSLMode, c.cfg.Timezone)
+		u := &url.URL{
+			Scheme: "postgres",
+			User:   url.UserPassword(c.cfg.Username, c.cfg.Password),
+			Host:   fmt.Sprintf("%s:%d", c.cfg.Host, c.cfg.Port),
+			Path:   "/" + c.cfg.Database,
+		}
+		params := url.Values{}
+		params.Set("sslmode", c.cfg.SSLMode)
+		params.Set("TimeZone", c.cfg.Timezone)
+		u.RawQuery = params.Encode()
+		dsn = u.String()
 	}
 
 	// 创建 GORM 实例
@@ -111,7 +121,11 @@ func (c *postgresqlConnector) Close() error {
 		return nil
 	}
 
-	sqlDB, err := c.db.DB()
+	// 先置 nil，防止 Close 失败后重复关闭
+	db := c.db
+	c.db = nil
+
+	sqlDB, err := db.DB()
 	if err != nil {
 		c.logger.Error("failed to get postgresql db instance for closing", clog.Error(err))
 		return err
@@ -122,7 +136,6 @@ func (c *postgresqlConnector) Close() error {
 		return err
 	}
 
-	c.db = nil
 	c.logger.Info("postgresql connection closed successfully")
 	return nil
 }
