@@ -120,7 +120,8 @@ os.Getenv("CACHE_PREFIX")           // ❌ 使用 config
 详见 [测试指南](testkit/testing-guide.md)。核心要求：
 
 - 优先使用 `testkit`：`testkit.GetRedisClient(t)` 等方法获取基础设施连接
-- 真实集成测试：依赖 Redis、MySQL 等的测试连接本地环境，不使用 mock
+- 真实集成测试：依赖 Redis、MySQL 等的测试通过 `testkit` 内置的 **testcontainers** 自动启动容器，无需手动执行 `make up`
+- **`make up` / `make status` 只用于运行 `examples`**，AI 不应在运行测试前执行这些命令
 - 可复用的测试代码写在 `testkit` 包，供全局复用
 - 业务核心逻辑覆盖率 > 80%
 - 使用 `testify/require` 包做断言（不用 `assert`，失败立即停止）

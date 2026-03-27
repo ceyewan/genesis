@@ -67,14 +67,14 @@ func main() {
 	// 示例 3: Sorted Set 排行榜
 	sortedSetExample(logger, redisConn)
 
-	// 示例 4: List 定长队列
-	listExample(logger, redisConn)
-
-	// 示例 5: 批量操作
+	// 示例 4: 批量操作
 	batchExample(logger, redisConn)
 
-	// 示例 6: 单机内存缓存
-	standaloneExample(logger)
+	// 示例 5: 本地缓存
+	localExample(logger)
+
+	// 示例 6: 多级缓存
+	multiExample(logger, redisConn)
 }
 
 // setupRedis 创建并连接 Redis
@@ -100,14 +100,14 @@ func setupRedis(logger clog.Logger) connector.RedisConnector {
 	return redisConn
 }
 
-// newCache 创建 Redis 缓存实例
-func newCache(conn connector.RedisConnector, prefix string, logger clog.Logger) cache.Cache {
-	cfg := &cache.Config{
+// newCache 创建分布式缓存实例
+func newCache(conn connector.RedisConnector, prefix string, logger clog.Logger) cache.Distributed {
+	cfg := &cache.DistributedConfig{
 		Driver:     cache.DriverRedis,
-		Prefix:     prefix,
+		KeyPrefix:  prefix,
 		Serializer: "json",
 	}
-	c, err := cache.New(cfg, cache.WithRedisConnector(conn), cache.WithLogger(logger))
+	c, err := cache.NewDistributed(cfg, cache.WithRedisConnector(conn), cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建缓存失败", clog.Error(err))
 		return nil
@@ -240,50 +240,8 @@ func sortedSetExample(logger clog.Logger, redisConn connector.RedisConnector) {
 	c.ZRem(ctx, key, "player_alice", "player_bob", "player_charlie", "player_david")
 }
 
-func listExample(logger clog.Logger, redisConn connector.RedisConnector) {
-	logger.Info("--- 示例 4: List 定长队列 ---")
-
-	if redisConn == nil {
-		logger.Warn("跳过：Redis 未连接")
-		return
-	}
-
-	c := newCache(redisConn, "demo:list:", logger)
-	if c == nil {
-		return
-	}
-
-	ctx := context.Background()
-	key := "recent_logs"
-
-	// 清空旧数据
-	c.Delete(ctx, key)
-
-	// 添加多条日志（只保留最新 5 条）
-	logs := []string{"log1", "log2", "log3", "log4", "log5", "log6", "log7"}
-	values := make([]any, len(logs))
-	for i, v := range logs {
-		values[i] = v
-	}
-	c.LPushCapped(ctx, key, 5, values...)
-	logger.Info("已添加日志（保留最新 5 条）")
-
-	// 获取所有日志
-	var allLogs []string
-	c.LRange(ctx, key, 0, -1, &allLogs)
-	logger.Info("当前日志列表", clog.Any("logs", allLogs))
-
-	// 从左侧弹出
-	var firstLog string
-	c.LPop(ctx, key, &firstLog)
-	logger.Info("弹出的日志", clog.String("log", firstLog))
-
-	// 清理
-	c.Delete(ctx, key)
-}
-
 func batchExample(logger clog.Logger, redisConn connector.RedisConnector) {
-	logger.Info("--- 示例 5: 批量操作 ---")
+	logger.Info("--- 示例 4: 批量操作 ---")
 
 	if redisConn == nil {
 		logger.Warn("跳过：Redis 未连接")
@@ -317,9 +275,9 @@ func batchExample(logger clog.Logger, redisConn connector.RedisConnector) {
 	c.Delete(ctx, "user:2")
 	c.Delete(ctx, "user:3")
 
-	// 演示 Client() 方法：访问底层 Redis 客户执行 Pipeline
+	// 演示 RawClient() 方法：访问底层 Redis 客户端执行 Pipeline。
 	logger.Info("--- 使用底层客户端执行 Pipeline ---")
-	client := c.Client()
+	client := c.RawClient()
 	if client != nil {
 		pipe := client.(*redis.Client).Pipeline()
 		pipe.Set(ctx, "demo:batch:pipe:1", "value1", 0)
@@ -332,17 +290,14 @@ func batchExample(logger clog.Logger, redisConn connector.RedisConnector) {
 	}
 }
 
-func standaloneExample(logger clog.Logger) {
-	logger.Info("--- 示例 6: 单机内存缓存 ---")
+func localExample(logger clog.Logger) {
+	logger.Info("--- 示例 5: 本地缓存 ---")
 
-	cfg := &cache.Config{
-		Driver: cache.DriverMemory,
-		Standalone: &cache.StandaloneConfig{
-			Capacity: 1000,
-		},
-	}
-
-	c, err := cache.New(cfg, cache.WithLogger(logger))
+	c, err := cache.NewLocal(&cache.LocalConfig{
+		Driver:     cache.DriverOtter,
+		MaxEntries: 1000,
+		Serializer: "json",
+	}, cache.WithLogger(logger))
 	if err != nil {
 		logger.Error("创建内存缓存失败", clog.Error(err))
 		return
@@ -359,8 +314,54 @@ func standaloneExample(logger clog.Logger) {
 	var value map[string]string
 	c.Get(ctx, "local_key", &value)
 	logger.Info("获取到本地缓存", clog.Any("value", value))
+}
 
-	// 验证不支持的操作
-	err = c.HSet(ctx, "hash_key", "field", "value")
-	logger.Info("Hash 操作预期返回错误", clog.String("error", err.Error()))
+func multiExample(logger clog.Logger, redisConn connector.RedisConnector) {
+	logger.Info("--- 示例 6: 多级缓存 ---")
+
+	if redisConn == nil {
+		logger.Warn("跳过：Redis 未连接")
+		return
+	}
+
+	local, err := cache.NewLocal(&cache.LocalConfig{
+		Driver:     cache.DriverOtter,
+		MaxEntries: 1000,
+		Serializer: "json",
+	}, cache.WithLogger(logger))
+	if err != nil {
+		logger.Error("创建本地缓存失败", clog.Error(err))
+		return
+	}
+	defer local.Close()
+
+	dist := newCache(redisConn, "demo:multi:", logger)
+	if dist == nil {
+		return
+	}
+
+	multi, err := cache.NewMulti(local, dist, &cache.MultiConfig{
+		BackfillTTL: time.Minute,
+	})
+	if err != nil {
+		logger.Error("创建多级缓存失败", clog.Error(err))
+		return
+	}
+
+	ctx := context.Background()
+	if err := multi.Set(ctx, "user:1001", UserRoute{
+		UserID:    "user_1001",
+		GatewayID: "gateway_02",
+		ServerID:  "server_02",
+	}, 10*time.Minute); err != nil {
+		logger.Error("设置多级缓存失败", clog.Error(err))
+		return
+	}
+
+	var value UserRoute
+	if err := multi.Get(ctx, "user:1001", &value); err != nil {
+		logger.Error("获取多级缓存失败", clog.Error(err))
+		return
+	}
+	logger.Info("获取到多级缓存", clog.String("server", value.ServerID))
 }

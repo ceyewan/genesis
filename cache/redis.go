@@ -2,8 +2,8 @@ package cache
 
 import (
 	"context"
-	"fmt"
 	"reflect"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -19,23 +19,23 @@ type redisCache struct {
 	client     *redis.Client
 	serializer serializer.Serializer
 	prefix     string
+	defaultTTL time.Duration
 	logger     clog.Logger
 	meter      metrics.Meter
 }
 
 // newRedis 创建 Redis 缓存实例
-func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger, meter metrics.Meter) (Cache, error) {
+func newRedis(conn connector.RedisConnector, cfg *DistributedConfig, logger clog.Logger, meter metrics.Meter) (Distributed, error) {
 	if conn == nil {
-		return nil, xerrors.New("redis connector is nil")
+		return nil, ErrRedisConnectorRequired
 	}
 	if cfg == nil {
-		return nil, xerrors.New("config is nil")
+		return nil, xerrors.New("cache: distributed config is nil")
 	}
 
-	// 设置默认序列化器
 	serializerType := cfg.Serializer
 	if serializerType == "" {
-		serializerType = "json" // 默认使用 JSON
+		serializerType = "json"
 	}
 
 	s, err := serializer.New(serializerType)
@@ -46,7 +46,8 @@ func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger, me
 	return &redisCache{
 		client:     conn.GetClient(),
 		serializer: s,
-		prefix:     cfg.Prefix,
+		prefix:     cfg.KeyPrefix,
+		defaultTTL: cfg.DefaultTTL,
 		logger:     logger,
 		meter:      meter,
 	}, nil
@@ -71,12 +72,23 @@ func (c *redisCache) Set(ctx context.Context, key string, value any, ttl time.Du
 	if err != nil {
 		return err
 	}
-	return c.client.Set(ctx, c.getKey(key), data, ttl).Err()
+	if ttl <= 0 {
+		ttl = c.defaultTTL
+	}
+	if err := c.client.Set(ctx, c.getKey(key), data, ttl).Err(); err != nil {
+		c.logger.ErrorContext(ctx, "Cache set failed", clog.String("key", key), clog.Error(err))
+		return err
+	}
+	return nil
 }
 
 func (c *redisCache) Get(ctx context.Context, key string, dest any) error {
 	data, err := c.client.Get(ctx, c.getKey(key)).Bytes()
 	if err != nil {
+		err = normalizeRedisError(err)
+		if !xerrors.Is(err, ErrMiss) {
+			c.logger.ErrorContext(ctx, "Cache get failed", clog.String("key", key), clog.Error(err))
+		}
 		return err
 	}
 	return c.unmarshal(data, dest)
@@ -94,8 +106,15 @@ func (c *redisCache) Has(ctx context.Context, key string) (bool, error) {
 	return n > 0, nil
 }
 
-func (c *redisCache) Expire(ctx context.Context, key string, ttl time.Duration) error {
-	return c.client.Expire(ctx, c.getKey(key), ttl).Err()
+func (c *redisCache) Expire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		ttl = c.defaultTTL
+	}
+	ok, err := c.client.Expire(ctx, c.getKey(key), ttl).Result()
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
 }
 
 // --- 哈希（Hash） ---
@@ -111,7 +130,7 @@ func (c *redisCache) HSet(ctx context.Context, key string, field string, value a
 func (c *redisCache) HGet(ctx context.Context, key string, field string, dest any) error {
 	data, err := c.client.HGet(ctx, c.getKey(key), field).Bytes()
 	if err != nil {
-		return err
+		return normalizeRedisError(err)
 	}
 	return c.unmarshal(data, dest)
 }
@@ -128,31 +147,22 @@ func (c *redisCache) HGetAll(ctx context.Context, key string, destMap any) error
 	}
 	v = v.Elem()
 
-	if v.Kind() == reflect.Map {
-		// destMap 是 *map[string]T
-		if v.IsNil() {
-			v.Set(reflect.MakeMap(v.Type()))
-		}
-		elemType := v.Type().Elem()
-		for k, valStr := range result {
-			newElem := reflect.New(elemType)
-			if err := c.unmarshal([]byte(valStr), newElem.Interface()); err != nil {
-				return err
-			}
-			v.SetMapIndex(reflect.ValueOf(k), newElem.Elem())
-		}
-		return nil
-	} else if v.Kind() == reflect.Struct {
-		// destMap 是 *struct
-		// 这里采用简化实现：假设结构体字段名与哈希键一致，
-		// 并把哈希的值反序列化到对应的结构体字段中。
-		// 更健壮的实现应使用 struct tag 来映射字段名与键名。
-		// 目前为保证安全和简单性，优先支持 map（示例使用 map[string]string），
-		// 若要完整支持 struct 需要更复杂的映射逻辑，因此这里返回错误。
-		return xerrors.New("HGetAll currently only supports pointer to map")
+	if v.Kind() != reflect.Map {
+		return xerrors.New("destMap must be a pointer to a map")
 	}
 
-	return xerrors.New("destMap must be a pointer to a map")
+	if v.IsNil() {
+		v.Set(reflect.MakeMap(v.Type()))
+	}
+	elemType := v.Type().Elem()
+	for k, valStr := range result {
+		newElem := reflect.New(elemType)
+		if err := c.unmarshal([]byte(valStr), newElem.Interface()); err != nil {
+			return err
+		}
+		v.SetMapIndex(reflect.ValueOf(k), newElem.Elem())
+	}
+	return nil
 }
 
 func (c *redisCache) HDel(ctx context.Context, key string, fields ...string) error {
@@ -180,7 +190,7 @@ func (c *redisCache) ZRem(ctx context.Context, key string, members ...any) error
 		if err != nil {
 			return err
 		}
-		serializedMembers[i] = data
+		serializedMembers[i] = string(data)
 	}
 	return c.client.ZRem(ctx, c.getKey(key), serializedMembers...).Err()
 }
@@ -190,7 +200,11 @@ func (c *redisCache) ZScore(ctx context.Context, key string, member any) (float6
 	if err != nil {
 		return 0, err
 	}
-	return c.client.ZScore(ctx, c.getKey(key), string(data)).Result()
+	score, err := c.client.ZScore(ctx, c.getKey(key), string(data)).Result()
+	if err != nil {
+		return 0, normalizeRedisError(err)
+	}
+	return score, nil
 }
 
 func (c *redisCache) ZRange(ctx context.Context, key string, start, stop int64, destSlice any) error {
@@ -211,80 +225,13 @@ func (c *redisCache) ZRevRange(ctx context.Context, key string, start, stop int6
 
 func (c *redisCache) ZRangeByScore(ctx context.Context, key string, min, max float64, destSlice any) error {
 	result, err := c.client.ZRangeByScore(ctx, c.getKey(key), &redis.ZRangeBy{
-		Min: fmt.Sprintf("%f", min),
-		Max: fmt.Sprintf("%f", max),
+		Min: strconv.FormatFloat(min, 'f', -1, 64),
+		Max: strconv.FormatFloat(max, 'f', -1, 64),
 	}).Result()
 	if err != nil {
 		return err
 	}
 	return c.unmarshalSlice(result, destSlice)
-}
-
-// --- 列表（List） ---
-
-func (c *redisCache) LPush(ctx context.Context, key string, values ...any) error {
-	serializedValues := make([]any, len(values))
-	for i, v := range values {
-		data, err := c.marshal(v)
-		if err != nil {
-			return err
-		}
-		serializedValues[i] = data
-	}
-	return c.client.LPush(ctx, c.getKey(key), serializedValues...).Err()
-}
-
-func (c *redisCache) RPush(ctx context.Context, key string, values ...any) error {
-	serializedValues := make([]any, len(values))
-	for i, v := range values {
-		data, err := c.marshal(v)
-		if err != nil {
-			return err
-		}
-		serializedValues[i] = data
-	}
-	return c.client.RPush(ctx, c.getKey(key), serializedValues...).Err()
-}
-
-func (c *redisCache) LPop(ctx context.Context, key string, dest any) error {
-	data, err := c.client.LPop(ctx, c.getKey(key)).Bytes()
-	if err != nil {
-		return err
-	}
-	return c.unmarshal(data, dest)
-}
-
-func (c *redisCache) RPop(ctx context.Context, key string, dest any) error {
-	data, err := c.client.RPop(ctx, c.getKey(key)).Bytes()
-	if err != nil {
-		return err
-	}
-	return c.unmarshal(data, dest)
-}
-
-func (c *redisCache) LRange(ctx context.Context, key string, start, stop int64, destSlice any) error {
-	result, err := c.client.LRange(ctx, c.getKey(key), start, stop).Result()
-	if err != nil {
-		return err
-	}
-	return c.unmarshalSlice(result, destSlice)
-}
-
-func (c *redisCache) LPushCapped(ctx context.Context, key string, limit int64, values ...any) error {
-	serializedValues := make([]any, len(values))
-	for i, v := range values {
-		data, err := c.marshal(v)
-		if err != nil {
-			return err
-		}
-		serializedValues[i] = data
-	}
-
-	pipe := c.client.Pipeline()
-	pipe.LPush(ctx, c.getKey(key), serializedValues...)
-	pipe.LTrim(ctx, c.getKey(key), 0, limit-1)
-	_, err := pipe.Exec(ctx)
-	return err
 }
 
 // --- 批量操作（Batch Operations） ---
@@ -294,25 +241,21 @@ func (c *redisCache) MGet(ctx context.Context, keys []string, destSlice any) err
 		return nil
 	}
 
-	// 验证 destSlice 必须是指向切片的指针
 	v := reflect.ValueOf(destSlice)
 	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Slice {
 		return xerrors.New("destSlice must be a pointer to slice")
 	}
 
-	// 添加前缀
 	prefixedKeys := make([]string, len(keys))
 	for i, k := range keys {
 		prefixedKeys[i] = c.getKey(k)
 	}
 
-	// 执行 MGET
 	results, err := c.client.MGet(ctx, prefixedKeys...).Result()
 	if err != nil {
 		return err
 	}
 
-	// 反序列化结果
 	sliceVal := v.Elem()
 	elemType := sliceVal.Type().Elem()
 	newSlice := reflect.MakeSlice(sliceVal.Type(), len(results), len(results))
@@ -320,11 +263,9 @@ func (c *redisCache) MGet(ctx context.Context, keys []string, destSlice any) err
 	for i, result := range results {
 		elem := newSlice.Index(i)
 		if result == nil {
-			// key 不存在，保留零值
 			continue
 		}
 
-		// result 是 string 类型
 		data, ok := result.(string)
 		if !ok {
 			return xerrors.New("unexpected result type from MGET")
@@ -355,6 +296,10 @@ func (c *redisCache) MSet(ctx context.Context, items map[string]any, ttl time.Du
 		return nil
 	}
 
+	if ttl <= 0 {
+		ttl = c.defaultTTL
+	}
+
 	pipe := c.client.Pipeline()
 	for k, v := range items {
 		data, err := c.marshal(v)
@@ -370,20 +315,28 @@ func (c *redisCache) MSet(ctx context.Context, items map[string]any, ttl time.Du
 
 // --- 高级操作（Advanced） ---
 
-// Client 返回底层 Redis 客户端，用于执行 Pipeline、Lua 脚本等高级操作
-func (c *redisCache) Client() any {
+// RawClient 返回底层 Redis 客户端，用于执行 Pipeline、Lua 脚本等高级操作。
+func (c *redisCache) RawClient() any {
 	return c.client
 }
 
 // --- 工具与辅助函数 ---
 
+// Close 是 no-op：Cache 不拥有 Redis 连接，由 Connector 管理。
 func (c *redisCache) Close() error {
-	// No-op: Cache 不拥有 Redis 连接，由 Connector 管理
-	// 调用方应关闭 Connector 而非 Cache
 	return nil
 }
 
-// 辅助函数：将字符串切片反序列化为对象切片
+func normalizeRedisError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if err == redis.Nil {
+		return ErrMiss
+	}
+	return err
+}
+
 func (c *redisCache) unmarshalSlice(data []string, destSlice any) error {
 	v := reflect.ValueOf(destSlice)
 	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Slice {
@@ -392,27 +345,17 @@ func (c *redisCache) unmarshalSlice(data []string, destSlice any) error {
 	sliceVal := v.Elem()
 	elemType := sliceVal.Type().Elem()
 
-	// 创建新切片来保存结果
 	newSlice := reflect.MakeSlice(sliceVal.Type(), len(data), len(data))
 
 	for i, s := range data {
 		elem := newSlice.Index(i)
 
-		// 我们需要传递指针给 Unmarshal
-		// 如果 elem 是指针类型（例如 *User），elem.Interface() 是 nil *User
-		// 我们需要分配 User
-
 		var target any
 		if elemType.Kind() == reflect.Pointer {
-			// elemType 是 *T
-			// 分配 T
-			val := reflect.New(elemType.Elem()) // val 是 *T
+			val := reflect.New(elemType.Elem())
 			target = val.Interface()
-			// 设置 elem 为 val
 			elem.Set(val)
 		} else {
-			// elemType 是 T
-			// elem.Addr() 是 *T
 			target = elem.Addr().Interface()
 		}
 

@@ -2,15 +2,16 @@ package serializer
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"github.com/vmihailenco/msgpack/v5"
+
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // 错误定义
 var (
-	// ErrUnsupportedSerializer 不支持的序列化器类型
-	ErrUnsupportedSerializer = fmt.Errorf("unsupported serializer type")
+	// ErrUnsupportedSerializer 不支持的序列化器类型。
+	ErrUnsupportedSerializer = xerrors.New("unsupported serializer type")
 )
 
 // Serializer 定义序列化接口
