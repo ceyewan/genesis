@@ -1,9 +1,47 @@
 package idgen
 
 import (
+	"context"
 	"strconv"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/ceyewan/genesis/metrics"
 )
+
+type testCounter struct {
+	incCount int
+	addTotal float64
+}
+
+func (c *testCounter) Inc(_ context.Context, _ ...metrics.Label) {
+	c.incCount++
+}
+
+func (c *testCounter) Add(_ context.Context, val float64, _ ...metrics.Label) {
+	c.addTotal += val
+}
+
+type testMeter struct {
+	counter metrics.Counter
+}
+
+func (m *testMeter) Counter(name string, desc string, opts ...metrics.MetricOption) (metrics.Counter, error) {
+	return m.counter, nil
+}
+
+func (m *testMeter) Gauge(name string, desc string, opts ...metrics.MetricOption) (metrics.Gauge, error) {
+	return nil, nil
+}
+
+func (m *testMeter) Histogram(name string, desc string, opts ...metrics.MetricOption) (metrics.Histogram, error) {
+	return nil, nil
+}
+
+func (m *testMeter) Shutdown(ctx context.Context) error {
+	return nil
+}
 
 // ========================================
 // UUID 单元测试
@@ -53,6 +91,7 @@ func TestNewGenerator_Unit(t *testing.T) {
 		{
 			name: "valid workerID",
 			cfg: &GeneratorConfig{
+				Mode:     GeneratorModeMultiDC,
 				WorkerID: 1,
 			},
 			expectError: false,
@@ -60,13 +99,23 @@ func TestNewGenerator_Unit(t *testing.T) {
 		{
 			name: "workerID zero",
 			cfg: &GeneratorConfig{
+				Mode:     GeneratorModeMultiDC,
 				WorkerID: 0,
 			},
 			expectError: false,
 		},
 		{
-			name: "workerID max",
+			name: "workerID max in multi dc",
 			cfg: &GeneratorConfig{
+				Mode:     GeneratorModeMultiDC,
+				WorkerID: 31,
+			},
+			expectError: false,
+		},
+		{
+			name: "workerID max in single dc",
+			cfg: &GeneratorConfig{
+				Mode:     GeneratorModeSingleDC,
 				WorkerID: 1023,
 			},
 			expectError: false,
@@ -74,6 +123,7 @@ func TestNewGenerator_Unit(t *testing.T) {
 		{
 			name: "with datacenterID",
 			cfg: &GeneratorConfig{
+				Mode:         GeneratorModeMultiDC,
 				WorkerID:     30, // Must be <= 31 when using DatacenterID
 				DatacenterID: 1,
 			},
@@ -87,21 +137,32 @@ func TestNewGenerator_Unit(t *testing.T) {
 		{
 			name: "negative workerID",
 			cfg: &GeneratorConfig{
+				Mode:     GeneratorModeMultiDC,
 				WorkerID: -1,
 			},
 			expectError: true,
 		},
 		{
-			name: "workerID too large",
+			name: "workerID too large in multi dc",
 			cfg: &GeneratorConfig{
+				Mode:     GeneratorModeMultiDC,
+				WorkerID: 32,
+			},
+			expectError: true,
+		},
+		{
+			name: "workerID too large in single dc",
+			cfg: &GeneratorConfig{
+				Mode:     GeneratorModeSingleDC,
 				WorkerID: 1024,
 			},
 			expectError: true,
 		},
 		{
-			name: "workerID overflow with datacenterID",
+			name: "single dc requires zero datacenter",
 			cfg: &GeneratorConfig{
-				WorkerID:     100, // > 31
+				Mode:         GeneratorModeSingleDC,
+				WorkerID:     1,
 				DatacenterID: 1,
 			},
 			expectError: true,
@@ -129,13 +190,14 @@ func TestNewGenerator_Unit(t *testing.T) {
 }
 
 func TestSnowflake_Next_Unit(t *testing.T) {
-	sf, err := NewGenerator(&GeneratorConfig{WorkerID: 1})
+	sf, err := NewGenerator(&GeneratorConfig{Mode: GeneratorModeMultiDC, WorkerID: 1})
 	if err != nil {
 		t.Fatalf("Failed to create Snowflake: %v", err)
 	}
 
 	t.Run("Generate Snowflake ID", func(t *testing.T) {
-		id := sf.Next()
+		id, err := sf.Next()
+		require.NoError(t, err)
 
 		if id == 0 {
 			t.Error("Expected non-zero ID")
@@ -146,9 +208,11 @@ func TestSnowflake_Next_Unit(t *testing.T) {
 	})
 
 	t.Run("Generate unique IDs", func(t *testing.T) {
-		id1 := sf.Next()
+		id1, err := sf.Next()
+		require.NoError(t, err)
 
-		id2 := sf.Next()
+		id2, err := sf.Next()
+		require.NoError(t, err)
 
 		if id1 == id2 {
 			t.Error("Expected different IDs")
@@ -159,19 +223,21 @@ func TestSnowflake_Next_Unit(t *testing.T) {
 	})
 
 	t.Run("NextString returns string", func(t *testing.T) {
-		idStr := sf.NextString()
+		idStr, err := sf.NextString()
+		require.NoError(t, err)
 		if idStr == "" {
 			t.Error("Expected non-empty string")
 		}
 		// Should be parseable as int64
-		if _, err := strconv.ParseInt(idStr, 10, 64); err != nil {
-			t.Errorf("Failed to parse ID as int64: %v", err)
+		if _, parseErr := strconv.ParseInt(idStr, 10, 64); parseErr != nil {
+			t.Errorf("Failed to parse ID as int64: %v", parseErr)
 		}
 	})
 }
 
 func TestSnowflake_WithLargeDatacenterID_Unit(t *testing.T) {
 	sf, err := NewGenerator(&GeneratorConfig{
+		Mode:         GeneratorModeMultiDC,
 		WorkerID:     5,
 		DatacenterID: 15,
 	})
@@ -179,22 +245,95 @@ func TestSnowflake_WithLargeDatacenterID_Unit(t *testing.T) {
 		t.Fatalf("Failed to create Snowflake with datacenterID: %v", err)
 	}
 
-	id := sf.Next()
+	id, err := sf.Next()
+	require.NoError(t, err)
 	if id <= 0 {
 		t.Error("Expected positive ID with datacenterID")
 	}
 }
 
+func TestParseGeneratorID_RoundTrip_MultiDC_Unit(t *testing.T) {
+	t.Parallel()
+
+	gen, err := NewGenerator(&GeneratorConfig{
+		Mode:         GeneratorModeMultiDC,
+		WorkerID:     17,
+		DatacenterID: 9,
+	})
+	require.NoError(t, err)
+
+	id, err := gen.Next()
+	require.NoError(t, err)
+	require.Positive(t, id)
+
+	timestamp, datacenterID, workerID, sequence := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.GreaterOrEqual(t, timestamp, int64(1704067200000))
+	require.EqualValues(t, 9, datacenterID)
+	require.EqualValues(t, 17, workerID)
+	require.GreaterOrEqual(t, sequence, int64(0))
+}
+
+func TestParseGeneratorID_RoundTrip_SingleDC_Unit(t *testing.T) {
+	t.Parallel()
+
+	gen, err := NewGenerator(&GeneratorConfig{
+		Mode:     GeneratorModeSingleDC,
+		WorkerID: 513,
+	})
+	require.NoError(t, err)
+
+	id, err := gen.Next()
+	require.NoError(t, err)
+	require.Positive(t, id)
+
+	timestamp, datacenterID, workerID, sequence := ParseGeneratorID(id, GeneratorModeSingleDC)
+	require.GreaterOrEqual(t, timestamp, int64(1704067200000))
+	require.EqualValues(t, 0, datacenterID)
+	require.EqualValues(t, 513, workerID)
+	require.GreaterOrEqual(t, sequence, int64(0))
+}
+
+func TestSnowflake_NextString_CountsMetric_Unit(t *testing.T) {
+	t.Parallel()
+
+	counter := &testCounter{}
+	gen, err := NewGenerator(
+		&GeneratorConfig{WorkerID: 1},
+		WithMeter(&testMeter{counter: counter}),
+	)
+	require.NoError(t, err)
+
+	idStr, err := gen.NextString()
+	require.NoError(t, err)
+	require.NotEmpty(t, idStr)
+	require.Equal(t, 1, counter.incCount)
+}
+
+func TestSnowflake_DefaultMode_MultiDC_Unit(t *testing.T) {
+	t.Parallel()
+
+	gen, err := NewGenerator(&GeneratorConfig{WorkerID: 1})
+	require.NoError(t, err)
+
+	id, err := gen.Next()
+	require.NoError(t, err)
+	_, datacenterID, workerID, _ := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.EqualValues(t, 0, datacenterID)
+	require.EqualValues(t, 1, workerID)
+}
+
 func TestSnowflake_Monotonicity_Unit(t *testing.T) {
-	sf, err := NewGenerator(&GeneratorConfig{WorkerID: 1})
+	sf, err := NewGenerator(&GeneratorConfig{Mode: GeneratorModeMultiDC, WorkerID: 1})
 	if err != nil {
 		t.Fatalf("Failed to create Snowflake: %v", err)
 	}
 
 	// 生成大量 ID 验证单调性
-	lastID := sf.Next()
+	lastID, err := sf.Next()
+	require.NoError(t, err)
 	for i := range 10000 {
-		id := sf.Next()
+		id, err := sf.Next()
+		require.NoError(t, err)
 		if id <= lastID {
 			t.Errorf("ID monotonicity violated at iteration %d: %d <= %d", i, id, lastID)
 			return
@@ -204,7 +343,7 @@ func TestSnowflake_Monotonicity_Unit(t *testing.T) {
 }
 
 func TestSnowflake_Uniqueness_Unit(t *testing.T) {
-	sf, err := NewGenerator(&GeneratorConfig{WorkerID: 1})
+	sf, err := NewGenerator(&GeneratorConfig{Mode: GeneratorModeMultiDC, WorkerID: 1})
 	if err != nil {
 		t.Fatalf("Failed to create Snowflake: %v", err)
 	}
@@ -212,7 +351,8 @@ func TestSnowflake_Uniqueness_Unit(t *testing.T) {
 	// 使用 map 验证唯一性
 	seen := make(map[int64]bool)
 	for i := range 100000 {
-		id := sf.Next()
+		id, err := sf.Next()
+		require.NoError(t, err)
 		if seen[id] {
 			t.Errorf("Duplicate ID generated at iteration %d: %d", i, id)
 			return

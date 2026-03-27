@@ -38,6 +38,7 @@ func snowflakeManualExample() {
 
 	// 创建 Snowflake 实例
 	sf, err := idgen.NewGenerator(&idgen.GeneratorConfig{
+		Mode:         idgen.GeneratorModeMultiDC,
 		WorkerID:     23,
 		DatacenterID: 1, // 可选：设置数据中心 ID
 	})
@@ -48,7 +49,11 @@ func snowflakeManualExample() {
 
 	fmt.Println("生成 5 个 Snowflake ID:")
 	for i := range 5 {
-		id := sf.Next()
+		id, err := sf.Next()
+		if err != nil {
+			log.Printf("Failed to generate Snowflake ID: %v\n", err)
+			return
+		}
 		fmt.Printf("  ID %d: %d\n", i+1, id)
 		time.Sleep(time.Millisecond)
 	}
@@ -121,6 +126,7 @@ func snowflakeAllocatorExample() {
 
 	// 4. 使用分配的 WorkerID 创建 Snowflake
 	sf, err := idgen.NewGenerator(&idgen.GeneratorConfig{
+		Mode:     idgen.GeneratorModeSingleDC,
 		WorkerID: workerID,
 	})
 	if err != nil {
@@ -132,7 +138,11 @@ func snowflakeAllocatorExample() {
 
 	fmt.Println("生成 5 个 Snowflake ID:")
 	for i := range 5 {
-		id := sf.Next()
+		id, err := sf.Next()
+		if err != nil {
+			log.Printf("Failed to generate Snowflake ID: %v\n", err)
+			return
+		}
 		fmt.Printf("  ID %d: %d\n", i+1, id)
 		time.Sleep(time.Millisecond)
 	}

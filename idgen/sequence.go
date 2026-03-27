@@ -3,6 +3,7 @@ package idgen
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
@@ -70,14 +71,14 @@ func NewSequencer(cfg *SequencerConfig, opts ...Option) (Sequencer, error) {
 }
 
 func newRedisSequencer(cfg *SequencerConfig, redis connector.RedisConnector, logger clog.Logger, seqCounter metrics.Counter) (Sequencer, error) {
-	if logger != nil {
-		logger = logger.With(clog.String("component", "sequencer"))
+	if logger == nil {
+		logger = clog.Discard()
 	}
 
 	return &redisSequencer{
 		redis:      redis,
 		cfg:        cfg,
-		logger:     logger,
+		logger:     logger.With(clog.String("component", "sequencer")),
 		seqCounter: seqCounter,
 	}, nil
 }
@@ -229,8 +230,9 @@ func (r *redisSequencer) Set(ctx context.Context, key string, value int64) error
 
 	redisKey := r.buildKey(key)
 	client := r.redis.GetClient()
+	expiration := time.Duration(r.cfg.TTL) * time.Second
 
-	if err := client.Set(ctx, redisKey, value, 0).Err(); err != nil {
+	if err := client.Set(ctx, redisKey, value, expiration).Err(); err != nil {
 		if r.logger != nil {
 			r.logger.Error("failed to set sequence value",
 				clog.Error(err),
@@ -261,9 +263,10 @@ func (r *redisSequencer) SetIfNotExists(ctx context.Context, key string, value i
 
 	redisKey := r.buildKey(key)
 	client := r.redis.GetClient()
+	expiration := time.Duration(r.cfg.TTL) * time.Second
 
 	// 使用 SETNX (Set if Not eXists) 命令
-	result, err := client.SetNX(ctx, redisKey, value, 0).Result()
+	result, err := client.SetNX(ctx, redisKey, value, expiration).Result()
 	if err != nil {
 		if r.logger != nil {
 			r.logger.Error("failed to set sequence if not exists",

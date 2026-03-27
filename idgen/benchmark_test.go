@@ -20,7 +20,7 @@ func BenchmarkSnowflake_Next(b *testing.B) {
 	gen, _ := NewGenerator(&GeneratorConfig{WorkerID: 1})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		gen.Next()
+		_, _ = gen.Next()
 	}
 }
 
@@ -29,7 +29,7 @@ func BenchmarkSnowflake_Next_Parallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			gen.Next()
+			_, _ = gen.Next()
 		}
 	})
 }

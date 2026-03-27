@@ -12,6 +12,12 @@ import (
 )
 
 const (
+	// genesisEpochMilli 自定义 epoch，避免直接消耗 Unix 时间戳的 41bit 窗口。
+	genesisEpochMilli = int64(1704067200000) // 2024-01-01T00:00:00Z
+
+	// maxRelativeTimestamp Snowflake 时间字段上限（41 bit）。
+	maxRelativeTimestamp = int64(1<<41 - 1)
+
 	// maxClockBackwards 最大容忍的时钟回拨时间 (1秒)
 	maxClockBackwards = 1000 * time.Millisecond
 	// smallClockBackwards 微小回拨阈值 (5ms)，在此范围内尝试复用 lastTime
@@ -28,10 +34,15 @@ type snowflake struct {
 	// state 包含 48bit lastTime 和 12bit sequence
 	// 使用 atomic 操作保证并发安全
 	state      atomic.Uint64
+	mode       GeneratorMode
 	workerID   int64
 	dcID       int64
 	logger     clog.Logger
 	genCounter metrics.Counter
+}
+
+func (s *snowflake) recordGenerated() {
+	s.genCounter.Inc(context.Background())
 }
 
 // NewGenerator 创建 ID 生成器 (Snowflake 实现)
@@ -39,7 +50,7 @@ type snowflake struct {
 // 使用示例:
 //
 //	gen, _ := idgen.NewGenerator(&idgen.GeneratorConfig{WorkerID: 1})
-//	id := gen.Next()
+//	id, _ := gen.Next()
 func NewGenerator(cfg *GeneratorConfig, opts ...Option) (Generator, error) {
 	if cfg == nil {
 		return nil, xerrors.WithCode(ErrInvalidInput, "config_nil")
@@ -69,6 +80,7 @@ func NewGenerator(cfg *GeneratorConfig, opts ...Option) (Generator, error) {
 	genCounter, _ := meter.Counter(MetricSnowflakeGenerated, "雪花算法 ID 生成总数")
 
 	sf := &snowflake{
+		mode:       cfg.Mode,
 		workerID:   cfg.WorkerID,
 		dcID:       cfg.DatacenterID,
 		logger:     logger.With(clog.String("component", "generator")),
@@ -76,6 +88,7 @@ func NewGenerator(cfg *GeneratorConfig, opts ...Option) (Generator, error) {
 	}
 
 	sf.logger.Info("generator created",
+		clog.String("mode", string(cfg.Mode)),
 		clog.Int64("worker_id", cfg.WorkerID),
 		clog.Int64("datacenter_id", cfg.DatacenterID),
 	)
@@ -89,7 +102,13 @@ func (s *snowflake) nextInt64() (int64, error) {
 		oldState := s.state.Load()
 		lastTime := int64(oldState >> 12)
 		sequence := int64(oldState & 0xFFF)
-		now := time.Now().UnixMilli()
+		now := time.Now().UnixMilli() - genesisEpochMilli
+		if now < 0 {
+			return 0, xerrors.WithCode(ErrInvalidInput, "time_before_epoch")
+		}
+		if now > maxRelativeTimestamp {
+			return 0, xerrors.WithCode(ErrInvalidInput, "timestamp_overflow")
+		}
 
 		// 处理时钟回拨
 		if now < lastTime {
@@ -127,9 +146,7 @@ func (s *snowflake) nextInt64() (int64, error) {
 		// 尝试更新状态
 		newState := (uint64(now) << 12) | uint64(newSequence)
 		if s.state.CompareAndSwap(oldState, newState) {
-			// 标准 Snowflake 位结构 (41+10+12)
-			// 默认: 41bit 时间戳 + 5bit datacenterID + 5bit workerID + 12bit 序列号
-			id := (now << 22) | (s.dcID << 17) | (s.workerID << 12) | newSequence
+			id := composeGeneratorID(now, s.mode, s.dcID, s.workerID, newSequence)
 			return id, nil
 		}
 		// CAS 失败，重试
@@ -137,29 +154,48 @@ func (s *snowflake) nextInt64() (int64, error) {
 }
 
 // Next 生成下一个 ID
-func (s *snowflake) Next() int64 {
+func (s *snowflake) Next() (int64, error) {
 	id, err := s.nextInt64()
 	if err != nil {
-		return -1
+		s.logger.Error("failed to generate id", clog.Error(err))
+		return 0, err
 	}
-	s.genCounter.Inc(context.Background())
-	return id
+	s.recordGenerated()
+	return id, nil
 }
 
 // NextString 生成下一个 ID (字符串形式)
-func (s *snowflake) NextString() string {
+func (s *snowflake) NextString() (string, error) {
 	id, err := s.nextInt64()
 	if err != nil {
-		return ""
+		s.logger.Error("failed to generate id string", clog.Error(err))
+		return "", err
 	}
-	return fmt.Sprintf("%d", id)
+	s.recordGenerated()
+	return fmt.Sprintf("%d", id), nil
 }
 
-// ParseGeneratorID 解析 Snowflake ID，返回其组成部分
-func ParseGeneratorID(id int64) (timestamp, datacenterID, workerID, sequence int64) {
-	timestamp = id >> 22
-	datacenterID = (id >> 17) & 0x1F
-	workerID = (id >> 12) & 0x1F
+func composeGeneratorID(timestamp int64, mode GeneratorMode, dcID, workerID, sequence int64) int64 {
+	switch mode {
+	case GeneratorModeSingleDC:
+		return (timestamp << 22) | (workerID << 12) | sequence
+	default:
+		return (timestamp << 22) | (dcID << 17) | (workerID << 12) | sequence
+	}
+}
+
+// ParseGeneratorID 解析 Snowflake ID，返回其组成部分。
+// timestamp 为绝对 Unix 毫秒时间戳。
+func ParseGeneratorID(id int64, mode GeneratorMode) (timestamp, datacenterID, workerID, sequence int64) {
+	timestamp = (id >> 22) + genesisEpochMilli
+	switch mode {
+	case GeneratorModeSingleDC:
+		datacenterID = 0
+		workerID = (id >> 12) & 0x3FF
+	default:
+		datacenterID = (id >> 17) & 0x1F
+		workerID = (id >> 12) & 0x1F
+	}
 	sequence = id & 0xFFF
 	return
 }

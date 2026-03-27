@@ -3,6 +3,9 @@ package idgen
 import (
 	"context"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/testkit"
 )
@@ -24,9 +27,12 @@ func setupSequencer(t *testing.T) Sequencer {
 	}
 
 	t.Cleanup(func() {
-		// 清理测试数据
 		client := redis.GetClient()
-		client.Keys(context.Background(), "test:seq:*")
+		keys, err := client.Keys(context.Background(), "test:seq:*").Result()
+		require.NoError(t, err)
+		if len(keys) > 0 {
+			require.NoError(t, client.Del(context.Background(), keys...).Err())
+		}
 	})
 
 	return seq
@@ -524,5 +530,197 @@ func TestRedisAllocator_Integration(t *testing.T) {
 			t.Errorf("Expected to allocate ID after cleanup, got error: %v", err)
 		}
 		defer alloc.Stop()
+	})
+
+	t.Run("KeepAlive before allocate returns error", func(t *testing.T) {
+		ctx := context.Background()
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "redis",
+			KeyPrefix: "test:keepalive:pre",
+			MaxID:     10,
+			TTL:       30,
+		}, WithRedisConnector(redis))
+		require.NoError(t, err)
+
+		errCh := allocator.KeepAlive(ctx)
+		require.Error(t, <-errCh)
+	})
+
+	t.Run("Allocate twice returns error", func(t *testing.T) {
+		ctx := context.Background()
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "redis",
+			KeyPrefix: "test:allocate:twice",
+			MaxID:     10,
+			TTL:       30,
+		}, WithRedisConnector(redis))
+		require.NoError(t, err)
+		defer allocator.Stop()
+
+		_, err = allocator.Allocate(ctx)
+		require.NoError(t, err)
+
+		_, err = allocator.Allocate(ctx)
+		require.Error(t, err)
+	})
+
+	t.Run("Stop is idempotent", func(t *testing.T) {
+		ctx := context.Background()
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "redis",
+			KeyPrefix: "test:stop:idempotent",
+			MaxID:     10,
+			TTL:       30,
+		}, WithRedisConnector(redis))
+		require.NoError(t, err)
+
+		_, err = allocator.Allocate(ctx)
+		require.NoError(t, err)
+
+		require.NotPanics(t, func() {
+			allocator.Stop()
+			allocator.Stop()
+		})
+	})
+
+	t.Run("KeepAlive reports ownership loss", func(t *testing.T) {
+		ctx := context.Background()
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "redis",
+			KeyPrefix: "test:ownership:loss",
+			MaxID:     1,
+			TTL:       3,
+		}, WithRedisConnector(redis))
+		require.NoError(t, err)
+		defer allocator.Stop()
+
+		id, err := allocator.Allocate(ctx)
+		require.NoError(t, err)
+
+		ra, ok := allocator.(*redisAllocator)
+		require.True(t, ok)
+
+		client := redis.GetClient()
+		require.NoError(t, client.Set(ctx, ra.redisKey, "other-instance", time.Duration(ra.cfg.TTL)*time.Second).Err())
+
+		errCh := allocator.KeepAlive(ctx)
+		require.Eventually(t, func() bool {
+			select {
+			case keepAliveErr := <-errCh:
+				return keepAliveErr != nil
+			default:
+				return false
+			}
+		}, 5*time.Second, 100*time.Millisecond)
+
+		value, getErr := client.Get(ctx, ra.redisKey).Result()
+		require.NoError(t, getErr)
+		require.Equal(t, "other-instance", value)
+
+		allocator.Stop()
+
+		value, getErr = client.Get(ctx, ra.redisKey).Result()
+		require.NoError(t, getErr)
+		require.Equal(t, "other-instance", value)
+		require.EqualValues(t, 0, id)
+	})
+}
+
+func TestEtcdAllocator_Integration(t *testing.T) {
+	etcd := testkit.NewEtcdContainerConnector(t)
+
+	t.Run("Allocate successfully", func(t *testing.T) {
+		ctx := context.Background()
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "etcd",
+			KeyPrefix: "test:allocator:etcd",
+			MaxID:     100,
+			TTL:       30,
+		}, WithEtcdConnector(etcd))
+		require.NoError(t, err)
+		defer allocator.Stop()
+
+		instanceID, err := allocator.Allocate(ctx)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, instanceID, int64(0))
+		require.Less(t, instanceID, int64(100))
+	})
+
+	t.Run("Multiple allocations get unique IDs", func(t *testing.T) {
+		ctx := context.Background()
+		alloc1, err := NewAllocator(&AllocatorConfig{
+			Driver:    "etcd",
+			KeyPrefix: "test:unique:etcd",
+			MaxID:     20,
+			TTL:       30,
+		}, WithEtcdConnector(etcd))
+		require.NoError(t, err)
+		defer alloc1.Stop()
+
+		alloc2, err := NewAllocator(&AllocatorConfig{
+			Driver:    "etcd",
+			KeyPrefix: "test:unique:etcd",
+			MaxID:     20,
+			TTL:       30,
+		}, WithEtcdConnector(etcd))
+		require.NoError(t, err)
+		defer alloc2.Stop()
+
+		id1, err := alloc1.Allocate(ctx)
+		require.NoError(t, err)
+		id2, err := alloc2.Allocate(ctx)
+		require.NoError(t, err)
+		require.NotEqual(t, id1, id2)
+	})
+
+	t.Run("KeepAlive before allocate returns error", func(t *testing.T) {
+		ctx := context.Background()
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "etcd",
+			KeyPrefix: "test:keepalive:pre:etcd",
+			MaxID:     10,
+			TTL:       30,
+		}, WithEtcdConnector(etcd))
+		require.NoError(t, err)
+
+		errCh := allocator.KeepAlive(ctx)
+		require.Error(t, <-errCh)
+	})
+
+	t.Run("Allocate twice returns error", func(t *testing.T) {
+		ctx := context.Background()
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "etcd",
+			KeyPrefix: "test:allocate:twice:etcd",
+			MaxID:     10,
+			TTL:       30,
+		}, WithEtcdConnector(etcd))
+		require.NoError(t, err)
+		defer allocator.Stop()
+
+		_, err = allocator.Allocate(ctx)
+		require.NoError(t, err)
+
+		_, err = allocator.Allocate(ctx)
+		require.Error(t, err)
+	})
+
+	t.Run("Stop is idempotent", func(t *testing.T) {
+		ctx := context.Background()
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "etcd",
+			KeyPrefix: "test:stop:idempotent:etcd",
+			MaxID:     10,
+			TTL:       30,
+		}, WithEtcdConnector(etcd))
+		require.NoError(t, err)
+
+		_, err = allocator.Allocate(ctx)
+		require.NoError(t, err)
+
+		require.NotPanics(t, func() {
+			allocator.Stop()
+			allocator.Stop()
+		})
 	})
 }

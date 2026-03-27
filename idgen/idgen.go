@@ -1,40 +1,29 @@
-// Package idgen 提供高性能的 ID 生成能力，支持多种 ID 生成策略：
+// Package idgen 提供 Genesis 的 ID 生成能力。
 //
-//   - Generator: 基于雪花算法的分布式有序 ID 生成接口
-//   - UUID: UUID v7 生成（时间排序，适合数据库主键）
-//   - Sequencer: 基于 Redis/Etcd 的分布式序列号生成器接口
-//   - Allocator: 支持 Redis/Etcd 的 WorkerID 自动分配器
+// 这个组件覆盖四类能力：
 //
-// 设计原则:
-//   - 配置驱动: 统一使用 New(cfg, opts...) 模式
-//   - 接口优先: 面向接口编程，便于切换底层实现
-//   - 高性能: 优化热路径，无锁或低锁竞争
-//   - 实例优先: 支持多实例共存
+//   - Generator: 本地 Snowflake 风格 64bit ID 生成器
+//   - UUID: UUID v7 字符串生成
+//   - Sequencer: 基于 Redis 的按键递增序列号
+//   - Allocator: 基于 Redis/Etcd 的 WorkerID 自动分配器
 //
-// 基本使用:
+// idgen 更像“多种 ID 能力的组合组件”，而不是单一算法封装。不同能力面向的问题不同：
 //
-//	// Generator (Snowflake)
-//	gen, _ := idgen.NewGenerator(&idgen.GeneratorConfig{WorkerID: 1})
-//	id := gen.Next()
+//   - 需要趋势递增、紧凑整数主键时使用 Generator
+//   - 需要跨系统字符串唯一标识时使用 UUID
+//   - 需要同一业务键下严格递增时使用 Sequencer
+//   - 需要为多个实例自动分配 WorkerID 时使用 Allocator
 //
-//	// UUID
-//	uid := idgen.UUID()
+// Generator 当前支持两种位布局模式：
 //
-//	// Sequencer
-//	seq, _ := idgen.NewSequencer(&idgen.SequencerConfig{
-//	    KeyPrefix: "order:",
-//	    Step:      1,
-//	}, idgen.WithRedisConnector(redisConn))
-//	nextID, _ := seq.Next(ctx, "user:1")
+//   - single_dc: 41bit 时间戳、10bit worker、12bit sequence
+//   - multi_dc: 41bit 时间戳、5bit datacenter、5bit worker、12bit sequence
 //
-//	// Allocator (自动分配 WorkerID)
-//	allocator, _ := idgen.NewAllocator(&idgen.AllocatorConfig{
-//	    Driver: "redis",
-//	    MaxID:  512,
-//	}, idgen.WithRedisConnector(redisConn))
-//	workerID, _ := allocator.Allocate(ctx)
-//	defer allocator.Stop()
-//	go func() { if err := <-allocator.KeepAlive(ctx); err != nil { ... } }()
+// 时间字段使用固定自定义 epoch 2024-01-01T00:00:00Z，调用 Next 或 NextString 时会显式返回错误，
+// 以便调用方在时钟回拨等异常情况下做出停机、告警或重试决策。
+//
+// Sequencer 当前只支持 Redis。Allocator 支持 Redis 和 Etcd，其中 KeepAlive 会启动后台保活并返回错误通道，
+// Stop 负责释放租约资源，且实现应被视为幂等清理方法。
 package idgen
 
 import "context"
@@ -47,14 +36,14 @@ import "context"
 // 提供高性能的分布式 ID 生成能力
 type Generator interface {
 	// Next 生成下一个 ID
-	Next() int64
+	Next() (int64, error)
 
 	// NextString 生成下一个 ID (字符串形式)
-	NextString() string
+	NextString() (string, error)
 }
 
 // Sequencer 序列号生成器接口
-// 提供基于 Redis/Etcd 的分布式序列号生成能力
+// 提供基于 Redis 的分布式序列号生成能力
 type Sequencer interface {
 	// Next 为指定键生成下一个序列号
 	Next(ctx context.Context, key string) (int64, error)

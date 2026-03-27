@@ -8,34 +8,55 @@ import (
 // 配置结构 (Configuration)
 // ========================================
 
+// GeneratorMode Snowflake 位布局模式。
+type GeneratorMode string
+
+const (
+	// GeneratorModeSingleDC 使用 41bit 时间戳 + 10bit worker + 12bit sequence。
+	GeneratorModeSingleDC GeneratorMode = "single_dc"
+
+	// GeneratorModeMultiDC 使用 41bit 时间戳 + 5bit datacenter + 5bit worker + 12bit sequence。
+	GeneratorModeMultiDC GeneratorMode = "multi_dc"
+)
+
 // GeneratorConfig ID 生成器配置 (Snowflake)
 type GeneratorConfig struct {
-	// WorkerID 工作节点 ID [0, 1023]
+	// Mode 位布局模式，默认 "multi_dc"。
+	Mode GeneratorMode `yaml:"mode" json:"mode"`
+
+	// WorkerID 工作节点 ID。
+	// single_dc 模式范围 [0, 1023]，multi_dc 模式范围 [0, 31]。
 	WorkerID int64 `yaml:"worker_id" json:"worker_id"`
 
-	// DatacenterID 数据中心 ID [0, 31]，可选
+	// DatacenterID 数据中心 ID。
+	// single_dc 模式下必须为 0，multi_dc 模式范围 [0, 31]。
 	DatacenterID int64 `yaml:"datacenter_id" json:"datacenter_id"`
 }
 
 func (c *GeneratorConfig) setDefaults() {
-	// WorkerID 必须显式配置，不设置默认值
-	// DatacenterID 可选，默认 0
+	if c.Mode == "" {
+		c.Mode = GeneratorModeMultiDC
+	}
 }
 
 func (c *GeneratorConfig) validate() error {
-	// 如果使用了 DatacenterID (>0)，则 WorkerID 只能用 5 bit (Max 31)
-	if c.DatacenterID > 0 && c.WorkerID > 31 {
-		return xerrors.WithCode(ErrInvalidInput, "worker_id_overflow_with_dc")
-	}
-
-	// 如果没有使用 DatacenterID (=0)，则 WorkerID 可以用 10 bit (Max 1023)
-	if c.WorkerID < 0 || c.WorkerID > 1023 {
-		return xerrors.WithCode(ErrInvalidInput, "worker_id_out_of_range")
-	}
-
-	// DatacenterID 范围 [0, 31]
-	if c.DatacenterID < 0 || c.DatacenterID > 31 {
-		return xerrors.WithCode(ErrInvalidInput, "datacenter_id_out_of_range")
+	switch c.Mode {
+	case GeneratorModeSingleDC:
+		if c.WorkerID < 0 || c.WorkerID > 1023 {
+			return xerrors.WithCode(ErrInvalidInput, "worker_id_out_of_range")
+		}
+		if c.DatacenterID != 0 {
+			return xerrors.WithCode(ErrInvalidInput, "datacenter_id_must_be_zero")
+		}
+	case GeneratorModeMultiDC:
+		if c.WorkerID < 0 || c.WorkerID > 31 {
+			return xerrors.WithCode(ErrInvalidInput, "worker_id_out_of_range")
+		}
+		if c.DatacenterID < 0 || c.DatacenterID > 31 {
+			return xerrors.WithCode(ErrInvalidInput, "datacenter_id_out_of_range")
+		}
+	default:
+		return xerrors.WithCode(ErrInvalidInput, "unsupported_generator_mode")
 	}
 
 	return nil

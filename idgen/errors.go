@@ -6,6 +6,9 @@ var (
 	// ErrConnectorNil 连接器为空
 	ErrConnectorNil = xerrors.New("idgen: connector is nil")
 
+	// ErrAlreadyAllocated WorkerID 已分配
+	ErrAlreadyAllocated = xerrors.New("idgen: worker id already allocated")
+
 	// ErrWorkerIDExhausted WorkerID 已耗尽
 	ErrWorkerIDExhausted = xerrors.New("idgen: no available worker id")
 
