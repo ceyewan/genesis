@@ -1,10 +1,9 @@
-// Package db 提供了基于 GORM 的数据库组件，支持分库分表功能。
+// Package db 提供了基于 GORM 的数据库组件。
 //
 // db 组件是 Genesis 基础设施层的核心组件，它在连接器的基础上提供了：
-// - GORM ORM 功能封装
-// - 事务管理支持
-// - 分库分表能力（基于 gorm.io/sharding）
-// - 与 L0 基础组件（日志、链路追踪、错误）的深度集成
+//   - GORM ORM 功能封装
+//   - 事务管理支持
+//   - 与 L0 基础组件（日志、链路追踪、错误）的深度集成
 //
 // ## 基本使用（MySQL）
 //
@@ -12,17 +11,7 @@
 //	defer mysqlConn.Close()
 //	mysqlConn.Connect(ctx)
 //
-//	database, _ := db.New(&db.Config{
-//		Driver: "mysql",
-//		EnableSharding: true,
-//		ShardingRules: []db.ShardingRule{
-//			{
-//				ShardingKey:    "user_id",
-//				NumberOfShards: 64,
-//				Tables:         []string{"orders"},
-//			},
-//		},
-//	},
+//	database, _ := db.New(&db.Config{Driver: "mysql"},
 //		db.WithLogger(logger),
 //		db.WithTracer(otel.GetTracerProvider()),
 //		db.WithMySQLConnector(mysqlConn),
@@ -50,23 +39,20 @@
 //		return tx.Create(&User{Name: "test"}).Error
 //	})
 //
-// ## 分片配置
-//
-// 分片功能通过配置 ShardingRule 启用：
-//
-//	type ShardingRule struct {
-//		ShardingKey    string   // 分片键，如 "user_id"
-//		NumberOfShards uint     // 分片数量
-//		Tables         []string // 应用规则的表名列表
-//	}
-//
 // ## 设计原则
 //
-// - **借用模型**：db 组件借用连接器的连接，不负责连接的生命周期
-// - **配置驱动**：通过 Config.Driver 字段控制底层实现（mysql/postgresql/sqlite）
-// - **显式依赖**：通过构造函数显式注入连接器和选项
-// - **简单设计**：使用 Go 原生模式，避免复杂的抽象
-// - **可观测性**：集成 clog 和 OpenTelemetry trace，提供完整的日志和链路追踪能力
+//   - 借用模型：db 组件借用连接器的连接，不负责连接的生命周期
+//   - 配置驱动：通过 Config.Driver 字段控制底层实现（mysql/postgresql/sqlite）
+//   - 显式依赖：通过构造函数显式注入连接器和选项
+//   - 可观测性：集成 clog 和 OpenTelemetry trace，提供完整的日志和链路追踪能力
+//
+// ## 分表说明
+//
+// 分表属于数据库层面的能力，推荐使用数据库原生分区功能：
+//   - PostgreSQL：PARTITION BY HASH / RANGE / LIST（PG10+）
+//   - MySQL：PARTITION BY HASH / RANGE / LIST
+//
+// 原生分区对应用层完全透明，无需任何应用代码改动。
 package db
 
 import (
@@ -75,7 +61,6 @@ import (
 	"github.com/uptrace/opentelemetry-go-extra/otelgorm"
 	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
-	"gorm.io/sharding"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
@@ -145,26 +130,6 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 			otelgorm.WithTracerProvider(opt.tracer),
 		)); err != nil {
 			return nil, xerrors.Wrap(err, "failed to register otelgorm plugin")
-		}
-	}
-
-	// 注册分片中间件
-	if cfg.EnableSharding && len(cfg.ShardingRules) > 0 {
-		for _, rule := range cfg.ShardingRules {
-			tables := make([]any, len(rule.Tables))
-			for i, v := range rule.Tables {
-				tables[i] = v
-			}
-
-			middleware := sharding.Register(sharding.Config{
-				ShardingKey:         rule.ShardingKey,
-				NumberOfShards:      rule.NumberOfShards,
-				PrimaryKeyGenerator: sharding.PKSnowflake,
-			}, tables...)
-
-			if err := gormDB.Use(middleware); err != nil {
-				return nil, xerrors.Wrapf(err, "failed to register sharding middleware for tables %v", rule.Tables)
-			}
 		}
 	}
 
