@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -64,6 +65,19 @@ func (c *Config) validate() error {
 
 	if c.RefreshTokenTTL <= 0 {
 		return xerrors.Wrapf(ErrInvalidConfig, "refresh_token_ttl must be positive")
+	}
+
+	if c.TokenLookup != "" {
+		parts := strings.Split(c.TokenLookup, ":")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return xerrors.Wrapf(ErrInvalidConfig, "invalid token_lookup: %s", c.TokenLookup)
+		}
+
+		switch parts[0] {
+		case "header", "query", "cookie":
+		default:
+			return xerrors.Wrapf(ErrInvalidConfig, "unsupported token_lookup source: %s", parts[0])
+		}
 	}
 
 	return nil

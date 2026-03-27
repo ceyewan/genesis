@@ -1,48 +1,111 @@
 # Auth 组件
 
-Auth 组件为 Genesis 框架提供统一的认证能力，基于 JWT (JSON Web Token) 实现。
+`auth` 是 Genesis 的 L3 治理层组件，提供**基于 JWT 的双令牌认证能力**。它适合"应用自己签发 access token / refresh token，并在服务端本地完成验签"的场景，重点解决统一签发、统一校验、统一 Gin 接入的问题。
 
-## 特性
+如果你需要的是：
 
-- **安全性保障**：
-    - 严格的签名方法验证（仅支持 HS256）
-    - Claims 不可变性（GenerateToken 不会修改原始 Claims）
-    - 完善的刷新令牌验证（Issuer、Audience、时间窗口检查）
-- **无状态认证**：JWT 自包含用户信息，易于横向扩展。
-- **多源 Token 提取**：自动从 Header、Query、Cookie 中提取 Token，开箱即用。
-- **Gin 集成**：提供开箱即用的中间件。
-- **遵循 L0 规范**：集成 `clog`、`metrics`、`xerrors`。
-- **标准协议**：使用 `github.com/golang-jwt/jwt/v5` 标准库。
+- 轻量、无存储的认证方案；
+- 业务接口只接收 access token；
+- access token 过期后用 refresh token 换发新 token；
+- 在 Gin 项目里快速接入认证和简单 RBAC；
 
-## 目录结构
+那么当前 `auth` 组件是合适的。
 
-```text
-auth/
-├── auth.go         # 接口定义 + 实现
-├── config.go       # 配置结构
-├── errors.go       # 哨兵错误
-├── options.go      # 函数式选项
-├── claims.go       # Claims 定义
-├── metrics.go      # 指标常量
-└── middleware.go   # Gin 中间件
+如果你需要的是：
+
+- token 撤销、黑名单、单设备登录；
+- refresh token 重放检测；
+- OAuth2 / OIDC / SSO；
+- 统一身份中心或外部 IdP 联动；
+
+那么当前 `auth` 不覆盖这些能力。
+
+---
+
+## 快速开始
+
+### 1. 初始化认证器
+
+```go
+authenticator, err := auth.New(&auth.Config{
+    SecretKey:       "your-secret-key-at-least-32-chars",
+    SigningMethod:   "HS256",
+    Issuer:          "my-service",
+    Audience:        []string{"frontend"},
+    AccessTokenTTL:  15 * time.Minute,
+    RefreshTokenTTL: 7 * 24 * time.Hour,
+    TokenHeadName:   "Bearer",
+}, auth.WithLogger(logger))
 ```
+
+### 2. 登录时签发双令牌
+
+```go
+claims := &auth.Claims{
+    RegisteredClaims: jwt.RegisteredClaims{
+        Subject: "user-123",
+    },
+    Username: "alice",
+    Roles:    []string{"admin"},
+}
+
+pair, err := authenticator.GenerateTokenPair(ctx, claims)
+if err != nil {
+    return err
+}
+
+// pair.AccessToken     用于业务接口访问
+// pair.RefreshToken    用于刷新
+// pair.AccessTokenExpiresAt / RefreshTokenExpiresAt 可返回给前端做过期管理
+```
+
+### 3. 业务接口使用 access token
+
+```go
+r := gin.Default()
+r.Use(authenticator.GinMiddleware())
+
+r.GET("/profile", func(c *gin.Context) {
+    claims, _ := auth.GetClaims(c)
+    c.JSON(200, gin.H{
+        "user_id": claims.Subject,
+        "roles":   claims.Roles,
+    })
+})
+```
+
+### 4. 刷新接口使用 refresh token
+
+```go
+r.POST("/refresh", func(c *gin.Context) {
+    var req struct {
+        RefreshToken string `json:"refresh_token"`
+    }
+    if err := c.ShouldBindJSON(&req); err != nil {
+        c.JSON(400, gin.H{"error": "bad request"})
+        return
+    }
+
+    pair, err := authenticator.RefreshToken(c.Request.Context(), req.RefreshToken)
+    if err != nil {
+        c.JSON(401, gin.H{"error": "unauthorized"})
+        return
+    }
+
+    c.JSON(200, pair)
+})
+```
+
+---
 
 ## 核心接口
 
-### Authenticator
-
 ```go
 type Authenticator interface {
-    // GenerateToken 生成 Token
-    GenerateToken(ctx context.Context, claims *Claims) (string, error)
-
-    // ValidateToken 验证 Token，返回 Claims
-    ValidateToken(ctx context.Context, token string) (*Claims, error)
-
-    // RefreshToken 刷新 Token
-    RefreshToken(ctx context.Context, token string) (string, error)
-
-    // GinMiddleware 返回 Gin 认证中间件
+    GenerateTokenPair(ctx context.Context, claims *Claims) (*TokenPair, error)
+    ValidateAccessToken(ctx context.Context, token string) (*Claims, error)
+    ValidateRefreshToken(ctx context.Context, token string) (*Claims, error)
+    RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error)
     GinMiddleware() gin.HandlerFunc
 }
 ```
@@ -51,139 +114,133 @@ type Authenticator interface {
 
 ```go
 type Claims struct {
-    // 标准声明 (使用 jwt.RegisteredClaims)
     jwt.RegisteredClaims
 
-    // 自定义声明
-    Username string         `json:"uname,omitempty"`
-    Roles    []string       `json:"roles,omitempty"`
-    Extra    map[string]any `json:"extra,omitempty"`
+    TokenType TokenType      `json:"typ,omitempty"`
+    Username  string         `json:"uname,omitempty"`
+    Roles     []string       `json:"roles,omitempty"`
+    Extra     map[string]any `json:"extra,omitempty"`
 }
 ```
+
+说明：
+
+- `TokenType` 由组件内部写入，业务方通常不需要手动设置。
+- `Username`、`Roles`、`Extra` 用于承载业务身份信息。
+- `GenerateTokenPair` 会复制输入 claims，不会修改原对象。
+
+### TokenPair
+
+```go
+type TokenPair struct {
+    AccessToken           string
+    RefreshToken          string
+    AccessTokenExpiresAt  time.Time
+    RefreshTokenExpiresAt time.Time
+    TokenType             string
+}
+```
+
+---
 
 ## 配置
 
-```yaml
-auth:
-    secret_key: "your-secret-key-min-32-chars-long"
-    signing_method: "HS256"
-    issuer: "my-service"
-    access_token_ttl: 15m
-    refresh_token_ttl: 168h
-    # token_lookup: 可选，留空则使用默认多源查找
-    # 默认查找顺序: header:Authorization -> query:token -> cookie:jwt
-    token_lookup: "header:Authorization" # 可指定单一来源
-    token_head_name: "Bearer"
-```
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `SecretKey` | 必填 | HMAC 签名密钥，至少 32 字符 |
+| `SigningMethod` | `HS256` | 当前仅支持 HS256 |
+| `Issuer` | 空 | 可选签发者约束 |
+| `Audience` | 空 | 可选受众约束 |
+| `AccessTokenTTL` | `15m` | access token 有效期 |
+| `RefreshTokenTTL` | `7d` | refresh token 有效期 |
+| `TokenLookup` | 空 | access token 提取方式，留空使用默认多源查找 |
+| `TokenHeadName` | `Bearer` | Authorization header 前缀 |
 
-### Token 提取方式
+### Access Token 提取方式
 
-默认情况下（`token_lookup` 留空），组件会按以下顺序尝试提取 Token：
+`GinMiddleware()` 内部只负责提取和校验 **access token**。
 
-1. **Header**: `Authorization: Bearer <token>`
-2. **Query**: `?token=<token>`
-3. **Cookie**: `jwt=<token>`
+当 `TokenLookup` 留空时，提取顺序为：
 
-这种设计使得同一份配置可以同时支持：
+1. `Authorization: Bearer <token>`
+2. `?token=<token>`
+3. `jwt=<token>` cookie
 
-- REST API（使用 Header）
-- WebSocket 连接（使用 Query）
-- 前端应用（使用 Cookie）
-
-如果需要限制只从特定来源提取，可配置 `token_lookup`：
+如果希望只从固定来源提取，可配置：
 
 ```go
 &auth.Config{
-    SecretKey: "...",
-    TokenLookup: "query:token",  // 只从 query 提取
+    SecretKey:   "...",
+    TokenLookup: "header:Authorization",
 }
 ```
 
-## 使用示例
+---
 
-### 初始化
+## Gin 集成
 
-```go
-// 创建认证器
-authenticator, err := auth.New(&auth.Config{
-    SecretKey: "your-secret-key-at-least-32-chars",
-}, auth.WithLogger(logger))
-```
+### 认证中间件
 
-### 登录并生成 Token
+`GinMiddleware()` 的语义是：
 
-```go
-claims := &auth.Claims{
-    RegisteredClaims: jwt.RegisteredClaims{
-        Subject: user.ID,
-    },
-    Username: user.Username,
-    Roles:    []string{"admin"},
-}
+- 自动提取 access token；
+- 自动校验签名、过期时间、issuer、audience；
+- 拒绝 refresh token 直接访问业务接口；
+- 验证成功后把 claims 放进 `gin.Context`。
 
-token, err := authenticator.GenerateToken(ctx, claims)
-```
+### 角色校验
 
-### 在中间件中使用
+`RequireRoles` 采用 **OR 逻辑**：
 
 ```go
-r := gin.Default()
-r.Use(authenticator.GinMiddleware())
-
-// 需要认证的路由
-r.GET("/profile", func(c *gin.Context) {
-    claims, _ := auth.GetClaims(c)
-    c.JSON(200, gin.H{"user_id": claims.Subject})
-})
-
-// 要求特定角色的路由（OR 逻辑）
 r.GET("/admin", auth.RequireRoles("admin"), handler)
-r.GET("/moderate", auth.RequireRoles("admin", "moderator"), handler)  // 拥有任一角色即可
+r.GET("/moderate", auth.RequireRoles("admin", "moderator"), handler)
 ```
 
-### RequireRoles
+这表示用户只要拥有任意一个指定角色即可通过。
 
-`RequireRoles` 是一个角色检查中间件，采用 **OR 逻辑**：
+---
 
-- 用户只需拥有 **任意一个** 指定角色即可通过
-- `RequireRoles("admin", "editor")` 表示用户必须有 `admin` 或 `editor` 角色
-- 如果没有任何匹配角色，返回 403 Forbidden
+## 前端交互模型
 
-## 监控指标
+推荐的前端使用方式是：
 
-Auth 组件提供以下可观测性指标，业务方可通过导出的常量引用指标名称：
+1. 登录成功后保存 `access_token` 与 `refresh_token`。
+2. 普通业务请求只携带 `access_token`。
+3. 当业务接口因 access token 过期返回 401 时，前端调用刷新接口。
+4. 刷新接口使用 `refresh_token` 换发新的 `TokenPair`。
+5. 刷新失败则清理本地登录态并跳转登录页。
 
-| 指标名                        | 类型    | 标签                                                                                | 描述           |
-| ----------------------------- | ------- | ----------------------------------------------------------------------------------- | -------------- |
-| `auth_tokens_validated_total` | Counter | `status="success\|error"`, `error_type="expired\|invalid_signature\|invalid_token"` | Token 验证计数 |
-| `auth_tokens_refreshed_total` | Counter | `status="success\|error"`                                                           | Token 刷新计数 |
+也就是说，**普通业务请求不需要同时携带两个 token**。
 
-### 指标常量引用
+---
 
-```go
-import "github.com/ceyewan/genesis/auth"
+## 指标
 
-// 使用导出的常量引用指标名
-metricName := auth.MetricTokensValidated
-```
+当前组件导出两个指标常量：
 
-### Prometheus 查询示例
+| 指标名 | 类型 | 标签 | 说明 |
+| --- | --- | --- | --- |
+| `auth_tokens_validated_total` | Counter | `status`, `error_type` | token 校验次数 |
+| `auth_tokens_refreshed_total` | Counter | `status` | token 刷新次数 |
 
-```promql
-# 验证成功率
-rate(auth_tokens_validated_total{status="success"}[5m]) / rate(auth_tokens_validated_total[5m])
+注意：
 
-# 验证失败数（按错误类型分组）
-sum by (error_type) (rate(auth_tokens_validated_total{status="error"}[5m]))
+- token 缺失不计入校验失败指标；
+- 当前指标没有区分 access / refresh 类型；
+- 若未来需要更细的观测维度，可在后续版本扩展。
 
-# 刷新成功率
-rate(auth_tokens_refreshed_total{status="success"}[5m]) / rate(auth_tokens_refreshed_total[5m])
+---
 
-# 刷新失败数
-sum(rate(auth_tokens_refreshed_total{status="error"}[5m]))
-```
+## 边界与限制
 
-### 指标说明
+当前 `auth` 组件明确**不提供**以下能力：
 
-- **Token 缺失**（客户端未提供 token）不计入验证失败指标
-- **验证失败** 仅统计提供了 token 但验证失败的情况（过期、签名错误、格式错误）
+- token 撤销；
+- 黑名单；
+- 单设备登录；
+- refresh token 持久化；
+- refresh token 重放检测；
+- OAuth2 / OIDC / SSO。
+
+因此，它更适合作为**应用自建认证层**，而不是完整身份系统。

@@ -1,281 +1,134 @@
-# Genesis Auth：JWT 认证组件的设计与实现
+# Genesis auth：双 JWT 令牌认证组件的设计与实现
 
-Genesis `auth` 是治理层（L3）的认证组件，基于 JWT（JSON Web Token）提供统一的令牌签发、验证、刷新与 Gin 中间件集成能力。它遵循 Genesis 基础规范，使用 `clog`、`metrics`、`xerrors` 构建可观测、可注入、可维护的认证基础设施。
-
----
-
-## 0 摘要
-
-- `auth` 将认证能力抽象为 `Authenticator` 接口，统一 `GenerateToken`、`ValidateToken`、`RefreshToken`、`GinMiddleware` 四类核心操作
-- 签名算法限制为 HS256，通过 `jwt.WithValidMethods` 阻断算法混淆攻击
-- Token 提取支持"可配置单源"与"默认多源回退"两种模式：`header:Authorization → query:token → cookie:jwt`
-- 刷新策略采用"忽略时间声明校验的解析 + Issuer/Audience/NBF/IAT/RefreshTTL 二次判定"的分段验证
-- Claims 采用深拷贝机制，确保 `GenerateToken` 不修改原始对象
-- RBAC 通过 `RequireRoles` 中间件实现，采用 OR 逻辑（满足任一角色即可通过）
+Genesis `auth` 是治理层（L3）的认证组件，负责应用自建认证体系中的令牌签发、校验与 Gin 接入。它解决的问题不是"如何做统一身份中心"，而是"当应用决定自己管理用户登录态时，如何用尽量低的复杂度提供一套语义清晰、边界明确、可直接接入业务 API 的双令牌认证能力"。这篇文章聚焦它为什么采用双 JWT 令牌模型、为什么保留 Gin 集成、为什么当前阶段故意不引入外部存储，以及这种设计适合什么场景、不适合什么场景。
 
 ---
 
-## 1 背景：微服务认证的核心问题
+## 1 背景
 
-在微服务架构中，认证系统需要同时满足以下要求：
+在很多中小型服务和内部系统里，认证并不一定需要 OAuth2、OIDC 或统一身份中心。更常见的需求是：应用自己完成登录校验，在本服务或同一业务系统内签发令牌，让前端携带令牌访问后续接口。这个场景的核心矛盾在于，系统既希望 access token 足够短，降低泄露后的风险，又希望用户不必频繁重新登录。因此单 access token 模型通常很快就会走向双令牌模型：短期 access token 负责访问业务接口，长期 refresh token 负责在窗口内换发新的 token。
 
-- **无状态扩展**：服务多副本部署时不依赖本地会话存储
-- **跨入口一致性**：HTTP API、WebSocket、浏览器请求使用统一的认证语义
-- **安全可控**：签名验证、过期检查、签发方校验、受众限制等规则必须明确
-- **可观测性**：区分验证失败类型（过期、签名错误、格式错误），便于监控与排障
-- **可集成性**：中间件接入后，业务 Handler 能直接获取身份声明
-
-JWT 适合承载"自包含、可验签"的访问令牌，而 `auth` 的目标是将这套能力组件化，避免业务重复实现。
+如果没有统一组件，业务代码很容易重复发明同样的轮子：手写 JWT claims、手写签名与验证、手写过期判断、手写 Gin middleware、手写角色检查。更麻烦的是，不同服务会在令牌刷新、错误处理、Header 提取顺序这些细节上各做一套，最后形成不一致的认证语义。Genesis `auth` 的价值就在这里：它不是完整身份平台，而是把"应用自建双令牌认证"这条最常见主路径组件化。
 
 ---
 
-## 2 核心设计
+## 2 基础原理
 
-### 2.1 接口抽象
+JWT 适合承载自包含的访问令牌。服务端签发后，后续校验只需要同一份签名密钥，不需要额外查库。这带来两个直接好处：一是多副本部署下可以天然水平扩展；二是业务服务在认证主链路上没有额外依赖。
 
-`auth` 对外暴露 `Authenticator` 接口：
+但 JWT 并不自动等于"完整认证体系"。它默认解决的是令牌结构、签名与标准声明问题，并不解决会话撤销、单设备登录、refresh token 重放检测、黑名单等问题。因此 Genesis `auth` 的一个核心设计前提是：先把双 JWT 令牌这条主路径做正确，把 access token 和 refresh token 的职责彻底分开；更强的会话语义以后再通过引入存储扩展。
+
+在这套模型里，业务接口只接受 access token。refresh token 不参与普通业务请求，只在 access token 过期、前端需要续期时，拿来调用刷新接口。这个分工非常关键，因为它决定了后续接口设计、中间件设计和前端交互方式。
+
+---
+
+## 3 设计目标
+
+`auth` 当前版本围绕以下几个目标展开：
+
+1. **双令牌语义明确**：access token 与 refresh token 在 claims、校验路径和使用方式上都必须区分。
+2. **无状态主路径**：签发、校验和换发不依赖 Redis 或数据库。
+3. **Gin 接入低成本**：保留 `GinMiddleware` 和 `RequireRoles`，让项目接入足够直接。
+4. **错误语义稳定**：业务方只需要处理清晰的哨兵错误，不依赖第三方库的原始文案。
+5. **先收敛边界，再谈扩展**：当前故意不做撤销、黑名单和 OAuth/OIDC，避免把组件做成"什么都想管一点"的中间态。
+
+这些目标共同决定了 `auth` 的接口形状：它要足够小，足够明确，但不能继续假装单令牌接口就能表达双令牌语义。
+
+---
+
+## 4 核心接口与配置
+
+`auth` 对外暴露的核心接口如下：
 
 ```go
 type Authenticator interface {
-    GenerateToken(ctx context.Context, claims *Claims) (string, error)
-    ValidateToken(ctx context.Context, token string) (*Claims, error)
-    RefreshToken(ctx context.Context, token string) (string, error)
+    GenerateTokenPair(ctx context.Context, claims *Claims) (*TokenPair, error)
+    ValidateAccessToken(ctx context.Context, token string) (*Claims, error)
+    ValidateRefreshToken(ctx context.Context, token string) (*Claims, error)
+    RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error)
     GinMiddleware() gin.HandlerFunc
 }
 ```
 
-这种抽象让业务代码依赖能力而非实现，后续替换认证方案时无需修改调用侧。
+接口设计的重点不在方法数量，而在语义明确。旧的单令牌接口 `GenerateToken / ValidateToken / RefreshToken(token string)` 最大的问题不是代码不好写，而是它无法准确表达 refresh token 的角色。现在的接口直接把 access token 校验和 refresh token 校验拆开，让调用方在方法名层面就不会混淆。
 
-### 2.2 配置模型
+配置项方面，当前仍然保持克制：
 
-组件配置集中在 `auth.Config`：
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `SecretKey` | 必填 | HMAC 签名密钥，至少 32 字符 |
+| `SigningMethod` | `HS256` | 当前只支持 HS256 |
+| `Issuer` | 空 | 可选签发者约束 |
+| `Audience` | 空 | 可选受众约束 |
+| `AccessTokenTTL` | `15m` | access token 有效期 |
+| `RefreshTokenTTL` | `7d` | refresh token 有效期 |
+| `TokenLookup` | 空 | access token 提取方式 |
+| `TokenHeadName` | `Bearer` | Authorization header 前缀 |
 
-| 字段              | 类型     | 默认值         | 说明           |
-| ----------------- | -------- | -------------- | -------------- |
-| `SecretKey`       | string   | 必填，≥32 字符 | HMAC 签名密钥  |
-| `SigningMethod`   | string   | `HS256`        | 签名算法       |
-| `Issuer`          | string   | -              | 签发者标识     |
-| `Audience`        | []string | -              | 受众列表       |
-| `AccessTokenTTL`  | duration | `15m`          | 访问令牌有效期 |
-| `RefreshTokenTTL` | duration | `7d`           | 刷新令牌有效期 |
-| `TokenLookup`     | string   | -              | Token 提取位置 |
-| `TokenHeadName`   | string   | `Bearer`       | Header 前缀    |
-
-配置验证在构造阶段执行：密钥长度不足、算法不支持、TTL 非正数等错误在初始化时暴露，避免运行时才发现配置问题。
-
-### 2.3 Claims 结构
-
-```go
-type Claims struct {
-    jwt.RegisteredClaims           // 标准声明
-    Username string                `json:"uname,omitempty"`
-    Roles    []string              `json:"roles,omitempty"`
-    Extra    map[string]any        `json:"extra,omitempty"`
-}
-```
-
-标准声明包含：`iss`（签发者）、`sub`（主体）、`aud`（受众）、`exp`（过期时间）、`nbf`（生效时间）、`iat`（签发时间）。业务字段使用短 key（如 `uname`）减少 Token 体积。
+这里有一个刻意的设计选择：`TokenLookup` 只用于 access token 提取，因为普通请求只应该携带 access token。refresh token 的提取通常由业务刷新接口显式决定，而不是混进全局 middleware。
 
 ---
 
-## 3 令牌签发（GenerateToken）
+## 5 核心概念与数据模型
 
-### 3.1 签发流程
+这套组件有两个最重要的概念：`Claims` 和 `TokenPair`。
 
-签发过程包含四个步骤：首先深拷贝 Claims 以避免修改原对象，然后回填标准声明（exp、iat、iss、aud 缺省时注入），接着使用 HS256 算法签名，最后记录日志并返回 Token。
+`Claims` 仍然基于 `jwt.RegisteredClaims` 扩展，但现在增加了 `TokenType` 字段，用来标识令牌到底是 `access` 还是 `refresh`。这一点看起来只是多了一个字段，实际意义非常大，因为它把"令牌用途"从隐式约定变成了显式声明。后续 `ValidateAccessToken` 和 `ValidateRefreshToken` 会同时校验签名、标准声明和 `TokenType`，从而保证 refresh token 不能拿去访问业务接口，access token 也不能伪装成 refresh token。
 
-### 3.2 Claims 不可变性
+`TokenPair` 是登录和刷新接口的统一返回结构，它同时返回 access token、refresh token 以及两者的过期时间。这么设计的目的是让前端逻辑简单而稳定。登录成功时前端拿到一对 token，普通业务请求只发送 access token；当接口因为 access token 过期返回 401 时，前端再用 refresh token 调刷新接口，拿到一对新的 token 并覆盖本地状态。
 
-`GenerateToken` 首先执行 `cloneClaims(claims)`，对 `Roles`、`Extra`、`Audience` 等引用类型执行深拷贝。这确保：
-
-- 调用方传入的 Claims 对象不会被修改
-- 多次调用 `GenerateToken` 不会产生副作用
-- 并发场景下数据安全性
-
-### 3.3 默认值注入
-
-标准声明的回填逻辑：
-
-- `ExpiresAt`：当前时间 + `AccessTokenTTL`
-- `IssuedAt`：当前时间
-- `Issuer`：使用配置值（若 Claims 未设置）
-- `Audience`：使用配置值（若 Claims 未设置）
+从这个模型可以看出，`auth` 当前更接近"应用内认证组件"而不是"认证平台"。它管理的是令牌本身，而不是更完整的会话生命周期。
 
 ---
 
-## 4 令牌验证（ValidateToken）
+## 6 关键实现思路
 
-### 4.1 验证流程
+双令牌签发的主链路很直接：`GenerateTokenPair` 接收一份业务 claims，先深拷贝成 access claims，再深拷贝成 refresh claims。两份 claims 共享 `sub`、`iss`、`aud`、用户名、角色等业务信息，但分别写入不同的 `TokenType` 和不同的过期时间。access token 使用 `AccessTokenTTL`，refresh token 使用 `RefreshTokenTTL`。签发时还会写入 `iat` 和 `jti`，其中 `jti` 的存在保证即使在同一秒内刷新，得到的新 token 也不会与旧 token 完全相同。
 
-验证过程首先使用 `jwt.ParseWithClaims` 解析 Token，通过 `jwt.WithValidMethods` 限定算法为 HS256，然后根据配置附加 Issuer、Audience 校验。最后将错误归类为 `expired`、`invalid_signature`、`invalid_token` 三类，并记录 `auth_tokens_validated_total` 指标。
+校验链路同样围绕类型分离展开。`ValidateAccessToken` 和 `ValidateRefreshToken` 最终都会走统一的 JWT 解析逻辑：先校验算法、签名、`iss`、`aud`、`exp` 等标准声明，再校验 `TokenType` 是否符合预期。如果类型不匹配，即使签名和过期时间都合法，也会返回 `ErrInvalidToken`。这让 access token 和 refresh token 的语义边界真正落到了实现里，而不是停留在调用方约定。
 
-### 4.2 错误语义映射
+刷新链路的核心是"refresh token 只做换发，不做业务访问"。`RefreshToken` 先调用 `ValidateRefreshToken`，只有 refresh token 能通过。通过后，它会复制这份 refresh token 中的业务 claims，清空 `typ`、`exp`、`iat`、`jti` 等由系统生成的字段，再重新走一遍 `GenerateTokenPair`。这样拿到的是一对新的 token，而不是沿用旧 refresh token 重新签一个 access token。
 
-| 底层 JWT 错误                  | 映射后错误            | error_type 标签     |
-| ------------------------------ | --------------------- | ------------------- |
-| `jwt.ErrTokenExpired`          | `ErrExpiredToken`     | `expired`           |
-| `jwt.ErrTokenSignatureInvalid` | `ErrInvalidSignature` | `invalid_signature` |
-| 其他                           | `ErrInvalidToken`     | `invalid_token`     |
-
-稳定的错误语义让业务侧可以做精确的错误处理，而不依赖第三方库的原始错误文案。
-
-### 4.3 算法混淆防护
-
-通过 `jwt.WithValidMethods([]string{"HS256"})` 强制限定签名算法。这防止了攻击者将 Token Header 中的 `alg` 修改为 `none` 而绕过验证的攻击手法。
+Gin 中间件则只服务于 access token 主链路。它按配置提取 access token，调用 `ValidateAccessToken`，校验通过后把 claims 放进 `gin.Context`。这个设计看起来保守，但它避免了很多后续混乱：一旦 middleware 接受 refresh token，前端或调用方很容易偷懒把 refresh token 直接用于业务访问，双令牌模型就会被破坏。
 
 ---
 
-## 5 令牌刷新（RefreshToken）
+## 7 工程取舍与设计权衡
 
-### 5.1 分段验证策略
+这里最核心的权衡是：为什么先做双 JWT 令牌，而不是一步引入 refresh token 存储。
 
-刷新不是盲目重签，而是分两段校验。
+原因很简单。当前 `auth` 的主要目标是把 access token / refresh token 的语义先做正确，而不是立刻承诺完整会话体系。只要一引入存储，设计复杂度会马上上升：需要 `jti` 持久化、需要 refresh token 轮换状态、需要撤销标记、需要处理并发刷新和重放检测、需要讨论 Redis 还是数据库、需要补更多运维与容灾策略。这些都不是不该做，而是应该放在下一阶段，在边界清晰的前提下做。
 
-第一阶段使用 `jwt.WithoutClaimsValidation` 跳过时间校验，仅验证签名与结构合法性。第二阶段执行自定义的刷新策略校验：iss 必须匹配配置（若配置了），aud 必须与配置有交集（若配置了），nbf 不能在未来，iat 必须存在且满足 `now <= iat + RefreshTokenTTL`。
+另一个取舍是为什么继续保留 Gin 集成。严格说，把 `gin.HandlerFunc` 放进核心接口会增加框架耦合；但当前 Genesis 的实际使用场景里，你明确需要 Gin，而且 `RequireRoles` 在 RBAC 场景下确实能显著降低接入成本。既然这个组件首先服务于实际项目，而不是抽象洁癖，那么保留 Gin 适配层就是合理的工程取舍。相应地，我们做的不是删除它，而是把它的语义收敛得更安全：默认错误响应更保守，middleware 只认 access token。
 
-### 5.2 刷新窗口设计
-
-刷新窗口独立于访问令牌有效期。从签发时间开始，AccessTokenTTL 决定访问令牌的生命周期，RefreshTokenTTL 决定整个刷新窗口的长度。这种设计允许访问令牌已过期但仍在刷新窗口内的令牌续期，同时阻断超窗刷新。
-
-### 5.3 重签机制
-
-通过后清空 `exp` 和 `iat`，重新调用 `GenerateToken`。这确保新令牌的时间戳反映当前时间，而非原始签发时间。
+还有一个值得强调的权衡是算法支持。当前只支持 HS256，会让一些人觉得"不够通用"。但在 Genesis 这种组件库里，过早支持多算法、多密钥来源、`kid`、JWKS 往往会先带来复杂性，而不是带来真实收益。只支持 HS256 的代价是暂时不适合对接外部 IdP，收益是接口和实现都更收敛，主路径更容易做对。
 
 ---
 
-## 6 Token 提取与 Gin 集成
+## 8 适用场景与实践建议
 
-### 6.1 提取策略
+当前 `auth` 适合以下场景：应用自己控制登录流程，用户规模和安全复杂度尚未逼到必须上统一身份中心；系统希望使用双令牌模型降低 access token 风险，同时又不想引入 Redis 或数据库来管理 refresh token；项目主要运行在 Gin 栈上，认证接入成本要足够低。
 
-单源模式通过配置 `TokenLookup` 指定唯一来源，如 `header:Authorization`、`query:token` 或 `cookie:jwt`。
+不适合的场景同样明确：你需要强制下线、单设备登录、refresh token 撤销、重放检测、统一身份中心、第三方登录、企业 SSO 或 OAuth2/OIDC 互操作时，当前 `auth` 都不是终点方案。此时更合理的做法是要么在下一阶段为 refresh token 引入存储，要么直接转向更完整的身份系统。
 
-多源回退模式在 `TokenLookup` 留空时生效，按顺序尝试三个来源：Header（`Authorization: Bearer <token>`）、Query（`?token=<token>`）、Cookie（`jwt=<token>`）。这种设计让同一配置可以同时支持 REST API（Header）、WebSocket（Query）、前端应用（Cookie）。
+前端接入时的推荐实践也很重要。普通业务请求只发送 access token，不要把 refresh token 带进每个 API。refresh token 只在 access token 失效后调用刷新接口使用。刷新成功后，前端应同时替换 access token 和 refresh token，而不是只替换 access token。否则虽然当前版本没有重放检测，但前端行为会和未来更严格的轮换模型产生冲突。
 
-### 6.2 Gin 中间件行为
-
-中间件首先从请求提取 Token，然后调用 `ValidateToken` 验证。验证成功后将 Claims 存入 `gin.Context`（键：`auth:claims`）并调用 `c.Next()`，失败则返回 401。
-
-注意：Token 缺失不计入验证失败指标，因为用户未提供 Token 属于正常业务场景，而非验证错误。
-
-### 6.3 角色鉴权（RequireRoles）
-
-`RequireRoles(...)` 提供 RBAC 能力：
-
-```go
-// 用户必须拥有 admin 或 editor 任一角色
-r.GET("/admin", auth.RequireRoles("admin", "editor"), handler)
-```
-
-采用 OR 逻辑：用户拥有任意一个指定角色即可通过。若没有任何匹配角色，返回 403 Forbidden。
+在 claims 设计上也建议保持克制。JWT 不是加密容器，业务方不应该把敏感明文塞进 `Extra`。更适合放进去的是稳定的身份字段、角色、少量授权上下文，而不是高敏感信息或频繁变化的信息。
 
 ---
 
-## 7 JWT 底层原理
+## 9 常见误区
 
-### 7.1 JWT 结构
+最常见的误区是把 refresh token 当成"更长寿命的 access token"。如果 refresh token 也能直接访问业务接口，那它和 access token 的区别就只剩过期时间，双令牌模型就失去了意义。Genesis `auth` 通过 `TokenType` 校验和 `GinMiddleware` 的 access-only 设计，明确阻止了这种用法。
 
-JWT（JWS 格式）由三部分组成：`base64url(header).base64url(payload).base64url(signature)`。Header 包含算法类型（`{"alg":"HS256","typ":"JWT"}`），Payload 包含标准声明与业务声明，Signature 是 HMAC-SHA256 签名结果。
+第二个误区是把"无存储双 JWT 令牌"误解成"完整登录体系"。当前版本没有撤销能力，也没有重放检测，意味着一旦 refresh token 泄露，在其有效期内仍可能被使用。因此它适合主路径认证，不适合需要强会话控制的高安全场景。
 
-注意：JWT 默认不是加密格式，Payload 可被 Base64 解码查看，不应存放敏感明文。
-
-### 7.2 标准声明的语义
-
-| 声明  | 含义       | 使用场景                         |
-| ----- | ---------- | -------------------------------- |
-| `sub` | Subject    | 用户唯一标识                     |
-| `exp` | Expiration | 硬截止时间，过期即拒绝           |
-| `iat` | Issued At  | 签发时间，用于刷新窗口与时钟校验 |
-| `nbf` | Not Before | 生效时间，防止提前使用           |
-| `iss` | Issuer     | 签发者，防止跨系统串用           |
-| `aud` | Audience   | 受众，限制令牌可使用的服务范围   |
-
-### 7.3 常见误区
-
-- **JWT 自带加密**：默认只有签名保护完整性，不保护机密性
-- **只校验签名就够**：`iss/aud/exp/nbf` 都是必要约束
-- **允许客户端传入任意 alg**：必须在服务端白名单固定算法
+第三个误区是把 README、blog 和 `go doc` 混为一谈。README 解决的是快速接入，`go doc` 解决的是 API 怎么调用，而这篇 blog 解决的是为什么要做成双 JWT、为什么先不引入存储、为什么继续保留 Gin 集成。三者各有角色，不能互相替代。
 
 ---
 
-## 8 可观测性与错误语义
+## 10 总结
 
-### 8.1 指标设计
+Genesis `auth` 当前阶段的核心价值，不是把认证问题一口气做完，而是把应用自建认证里最常见、最容易写乱的那部分先做正确：双 JWT 令牌、类型分离校验、统一刷新语义、统一 Gin 接入和简单 RBAC。它故意不去承诺完整会话体系，也正因为这种克制，才让当前接口、实现和使用方式保持一致。
 
-| 指标名                        | 类型    | 标签                   | 描述           |
-| ----------------------------- | ------- | ---------------------- | -------------- |
-| `auth_tokens_validated_total` | Counter | `status`, `error_type` | Token 验证计数 |
-| `auth_tokens_refreshed_total` | Counter | `status`               | Token 刷新计数 |
-
-### 8.2 Prometheus 查询示例
-
-```promql
-# 验证成功率
-rate(auth_tokens_validated_total{status="success"}[5m])
-/ rate(auth_tokens_validated_total[5m])
-
-# 验证失败分布（按错误类型）
-sum by (error_type) (
-    rate(auth_tokens_validated_total{status="error"}[5m])
-)
-```
-
----
-
-## 9 认证体系之外的补充方式
-
-JWT 适合无状态访问令牌场景，但并非所有场景的唯一解。
-
-### 9.1 Session + Cookie（有状态）
-
-- 服务端保存会话（Redis/DB），客户端持有 Session ID Cookie
-- 优点：可服务端即时失效（登出、风控封禁）
-- 代价：需要中心化会话存储与粘性治理
-
-### 9.2 Opaque Token + Introspection
-
-- 令牌本身无业务信息，只是随机串
-- 资源服务通过鉴权服务做在线查询
-- 优点：撤销与权限变更即时生效
-- 代价：增加鉴权网络开销与可用性依赖
-
-### 9.3 mTLS（双向证书）
-
-- 用于高安全内网调用或零信任网络
-- 以证书身份替代共享密钥，天然抗重放与中间人风险更强
-
-### 9.4 OAuth2/OIDC（第三方身份体系）
-
-- 当系统需要接入企业 SSO、社交登录、多租户 IdP 时更合适
-- 可将 Genesis `auth` 作为资源服务本地校验层，与外部 IdP 联动
-
----
-
-## 10 最佳实践与常见坑
-
-### 10.1 推荐配置
-
-生产环境推荐配置如下：secret_key 从环境变量读取，signing_method 使用 HS256，设置合理的 issuer 和 audience，access_token_ttl 建议 15 分钟，refresh_token_ttl 建议 7 天，token_lookup 留空使用默认多源提取。
-
-### 10.2 密钥管理
-
-生产环境密钥必须从环境变量或密钥管理系统读取，不应硬编码。密钥长度至少 32 字符（256 位），推荐使用随机生成的高熵字符串。密钥轮换需要平滑过渡策略（双密钥验证期）。
-
-### 10.3 TTL 选择建议
-
-| 场景          | AccessTokenTTL | RefreshTokenTTL |
-| ------------- | -------------- | --------------- |
-| 普通 Web 应用 | 15m - 1h       | 7d - 30d        |
-| 移动应用      | 1h - 24h       | 30d - 90d       |
-| 高安全系统    | 5m - 15m       | 1h - 24h        |
-
-### 10.4 常见误区
-
-在 Token 中存储大量用户信息是常见误区，正确做法是只存必要的标识（如 user_id），详细信息从数据库查询。认为 RefreshToken 可以无限期使用也是错误的，RefreshToken 也应有合理的有效期，超期需重新登录。对于登出场景，JWT 本身不支持主动失效，登出可通过客户端删除 Token 实现，高安全场景需要维护黑名单。
-
----
-
-## 11 总结
-
-Genesis `auth` 提供了一套生产可用的 JWT 认证组件，其核心价值在于：通过接口抽象实现可替换性，通过构造时校验确保配置安全下限，通过分段验证实现可控的刷新策略，通过可观测性支持生产监控。
-
-认证体系通常是组合拳：`auth` 解决的是本地令牌能力的核心拼图，而非替代全部身份基础设施。实际系统中，JWT 常与 Session、OAuth2、mTLS 等机制按场景组合使用。
+后续如果需要更强的会话控制，最自然的演进方向不是继续往单纯 JWT 里堆逻辑，而是在当前双令牌语义稳定的基础上，为 refresh token 引入持久化、撤销和重放检测能力。那会是下一阶段的问题，而不是这一阶段就应该混进来的复杂度。

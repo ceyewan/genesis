@@ -3,7 +3,6 @@ package auth
 import (
 	"net/http"
 	"slices"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -16,16 +15,16 @@ func (a *jwtAuth) GinMiddleware() gin.HandlerFunc {
 		if err != nil {
 			// Token 缺失不计入指标（用户未提供 token，不属于验证失败）
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": err.Error(),
+				"error": "unauthorized",
 			})
 			return
 		}
 
-		claims, err := a.ValidateToken(c.Request.Context(), token)
+		claims, err := a.ValidateAccessToken(c.Request.Context(), token)
 		// 指标已在 ValidateToken 内部记录
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": err.Error(),
+				"error": "unauthorized",
 			})
 			return
 		}
@@ -59,7 +58,7 @@ func RequireRoles(roles ...string) gin.HandlerFunc {
 
 		if !hasRequiredRole {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error": "forbidden: required one of roles: " + strings.Join(roles, ", "),
+				"error": "forbidden",
 			})
 			return
 		}

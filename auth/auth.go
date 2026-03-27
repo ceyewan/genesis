@@ -1,22 +1,27 @@
-// Package auth 提供基于 JWT 的认证能力。
+// Package auth 提供基于 JWT 的双令牌认证能力。
 //
-// 遵循 Genesis L3 治理层规范，支持：
-//   - Token 生成、验证与刷新
-//   - Gin 中间件集成
-//   - 基于角色的访问控制 (RBAC)
-//   - 多种 Token 提取方式 (Header, Cookie, Query)
+// auth 是 Genesis 的 L3 治理层组件，面向"应用自己签发并校验 JWT"的场景，
+// 提供 access token / refresh token 的签发、校验与换发能力，以及 Gin 接入层。
 //
-// 基本使用：
+// 组件边界：
+//   - 提供双 JWT 令牌模型，不依赖外部存储。
+//   - GinMiddleware 只接受 access token。
+//   - RefreshToken 只接受 refresh token，并返回一对新的 token。
+//   - 不提供 token 撤销、会话管理、黑名单、重放检测、OAuth2/OIDC 能力。
+//
+// 典型用法：
 //
 //	authenticator, _ := auth.New(&auth.Config{SecretKey: "..."})
-//	token, _ := authenticator.GenerateToken(ctx, &auth.Claims{
+//	pair, _ := authenticator.GenerateTokenPair(ctx, &auth.Claims{
 //	    RegisteredClaims: jwt.RegisteredClaims{Subject: "user-123"},
 //	})
+//	claims, _ := authenticator.ValidateAccessToken(ctx, pair.AccessToken)
 package auth
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -31,30 +36,42 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// Authenticator 认证器接口
+// TokenPair 表示一对 access / refresh 令牌。
+type TokenPair struct {
+	AccessToken           string
+	RefreshToken          string
+	AccessTokenExpiresAt  time.Time
+	RefreshTokenExpiresAt time.Time
+	TokenType             string
+}
+
+// Authenticator 认证器接口。
 type Authenticator interface {
-	// GenerateToken 生成 Token
-	GenerateToken(ctx context.Context, claims *Claims) (string, error)
+	// GenerateTokenPair 生成 access / refresh 双令牌。
+	GenerateTokenPair(ctx context.Context, claims *Claims) (*TokenPair, error)
 
-	// ValidateToken 验证 Token，返回 Claims
-	ValidateToken(ctx context.Context, token string) (*Claims, error)
+	// ValidateAccessToken 验证 access token，返回 Claims。
+	ValidateAccessToken(ctx context.Context, token string) (*Claims, error)
 
-	// RefreshToken 刷新 Token
-	RefreshToken(ctx context.Context, token string) (string, error)
+	// ValidateRefreshToken 验证 refresh token，返回 Claims。
+	ValidateRefreshToken(ctx context.Context, token string) (*Claims, error)
 
-	// GinMiddleware 返回 Gin 认证中间件
+	// RefreshToken 使用 refresh token 换发新的 access / refresh 双令牌。
+	RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error)
+
+	// GinMiddleware 返回 Gin 认证中间件。
 	GinMiddleware() gin.HandlerFunc
 }
 
-// jwtAuth JWT 认证实现
+// jwtAuth JWT 认证实现。
 type jwtAuth struct {
-	config         *Config         // 配置
-	options        *options        // 选项
-	validatedCount metrics.Counter // Token 验证计数
-	refreshedCount metrics.Counter // Token 刷新计数
+	config         *Config
+	options        *options
+	validatedCount metrics.Counter
+	refreshedCount metrics.Counter
 }
 
-// New 创建 Authenticator
+// New 创建 Authenticator。
 func New(cfg *Config, opts ...Option) (Authenticator, error) {
 	if cfg == nil {
 		return nil, ErrInvalidConfig
@@ -76,12 +93,11 @@ func New(cfg *Config, opts ...Option) (Authenticator, error) {
 		return nil, err
 	}
 
-	// 初始化指标（Discard() 返回的 noopMeter 永远返回有效的 Counter，不需要判空）
-	auth.validatedCount, _ = o.meter.Counter(
+	auth.validatedCount = auth.initCounter(
 		MetricTokensValidated,
 		"Total number of tokens validated",
 	)
-	auth.refreshedCount, _ = o.meter.Counter(
+	auth.refreshedCount = auth.initCounter(
 		MetricTokensRefreshed,
 		"Total number of tokens refreshed",
 	)
@@ -89,47 +105,104 @@ func New(cfg *Config, opts ...Option) (Authenticator, error) {
 	return auth, nil
 }
 
-// GenerateToken 生成 Token
-func (a *jwtAuth) GenerateToken(ctx context.Context, claims *Claims) (string, error) {
+func (a *jwtAuth) initCounter(name, desc string) metrics.Counter {
+	counter, err := a.options.meter.Counter(name, desc)
+	if err == nil {
+		return counter
+	}
+
+	a.options.logger.Warn("init auth counter failed, falling back to discard meter",
+		clog.String("metric", name),
+		clog.Error(err),
+	)
+
+	counter, _ = metrics.Discard().Counter(name, desc)
+	return counter
+}
+
+// GenerateTokenPair 生成双令牌。
+func (a *jwtAuth) GenerateTokenPair(ctx context.Context, claims *Claims) (*TokenPair, error) {
 	if claims == nil {
-		return "", ErrInvalidClaims
+		return nil, ErrInvalidClaims
 	}
 
-	tokenClaims := cloneClaims(claims)
+	now := time.Now()
+	accessClaims := cloneClaims(claims)
+	accessClaims.TokenType = TokenTypeAccess
+	accessExpiresAt := now.Add(a.config.AccessTokenTTL)
+	accessClaims.ExpiresAt = jwt.NewNumericDate(accessExpiresAt)
+	accessClaims.IssuedAt = jwt.NewNumericDate(now)
+	if accessClaims.Issuer == "" && a.config.Issuer != "" {
+		accessClaims.Issuer = a.config.Issuer
+	}
+	if len(accessClaims.Audience) == 0 && len(a.config.Audience) > 0 {
+		accessClaims.Audience = append(jwt.ClaimStrings(nil), a.config.Audience...)
+	}
+	if accessClaims.ID == "" {
+		accessClaims.ID = newTokenID(TokenTypeAccess)
+	}
 
-	// 设置标准声明
-	if tokenClaims.ExpiresAt == nil {
-		tokenClaims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(a.config.AccessTokenTTL))
-	}
-	if tokenClaims.IssuedAt == nil {
-		tokenClaims.IssuedAt = jwt.NewNumericDate(time.Now())
-	}
-	if tokenClaims.Issuer == "" && a.config.Issuer != "" {
-		tokenClaims.Issuer = a.config.Issuer
-	}
-	if len(tokenClaims.Audience) == 0 && len(a.config.Audience) > 0 {
-		tokenClaims.Audience = append(jwt.ClaimStrings(nil), a.config.Audience...)
+	accessToken, err := a.signClaims(accessClaims)
+	if err != nil {
+		return nil, err
 	}
 
-	// 选择签名方法
+	refreshClaims := cloneClaims(claims)
+	refreshClaims.TokenType = TokenTypeRefresh
+	refreshExpiresAt := now.Add(a.config.RefreshTokenTTL)
+	refreshClaims.ExpiresAt = jwt.NewNumericDate(refreshExpiresAt)
+	refreshClaims.IssuedAt = jwt.NewNumericDate(now)
+	if refreshClaims.Issuer == "" && a.config.Issuer != "" {
+		refreshClaims.Issuer = a.config.Issuer
+	}
+	if len(refreshClaims.Audience) == 0 && len(a.config.Audience) > 0 {
+		refreshClaims.Audience = append(jwt.ClaimStrings(nil), a.config.Audience...)
+	}
+	if refreshClaims.ID == "" {
+		refreshClaims.ID = newTokenID(TokenTypeRefresh)
+	}
+
+	refreshToken, err := a.signClaims(refreshClaims)
+	if err != nil {
+		return nil, err
+	}
+
+	a.options.logger.Info("token pair generated", clog.String("user_id", claims.Subject))
+
+	return &TokenPair{
+		AccessToken:           accessToken,
+		RefreshToken:          refreshToken,
+		AccessTokenExpiresAt:  accessExpiresAt,
+		RefreshTokenExpiresAt: refreshExpiresAt,
+		TokenType:             a.config.TokenHeadName,
+	}, nil
+}
+
+func (a *jwtAuth) signClaims(claims *Claims) (string, error) {
 	method := jwt.GetSigningMethod(a.config.SigningMethod)
 	if method == nil || method.Alg() != jwt.SigningMethodHS256.Alg() {
 		return "", ErrInvalidConfig
 	}
 
-	token := jwt.NewWithClaims(method, tokenClaims)
+	token := jwt.NewWithClaims(method, claims)
 	tokenString, err := token.SignedString([]byte(a.config.SecretKey))
 	if err != nil {
 		return "", xerrors.Wrap(err, "failed to sign token")
 	}
-
-	a.options.logger.Info("token generated", clog.String("user_id", tokenClaims.Subject))
-
 	return tokenString, nil
 }
 
-// ValidateToken 验证 Token
-func (a *jwtAuth) ValidateToken(ctx context.Context, tokenString string) (*Claims, error) {
+// ValidateAccessToken 验证 access token。
+func (a *jwtAuth) ValidateAccessToken(ctx context.Context, tokenString string) (*Claims, error) {
+	return a.validateTypedToken(ctx, tokenString, TokenTypeAccess)
+}
+
+// ValidateRefreshToken 验证 refresh token。
+func (a *jwtAuth) ValidateRefreshToken(ctx context.Context, tokenString string) (*Claims, error) {
+	return a.validateTypedToken(ctx, tokenString, TokenTypeRefresh)
+}
+
+func (a *jwtAuth) validateTypedToken(ctx context.Context, tokenString string, expected TokenType) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, a.keyFunc(), a.validationParserOptions()...)
 
@@ -146,76 +219,51 @@ func (a *jwtAuth) ValidateToken(ctx context.Context, tokenString string) (*Claim
 			err = ErrInvalidToken
 		}
 
-		// Metrics: 验证失败
 		a.validatedCount.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", errType))
 		return nil, err
 	}
 
-	if !token.Valid {
+	if !token.Valid || claims.TokenType != expected {
 		a.validatedCount.Add(ctx, 1, metrics.L("status", "error"), metrics.L("error_type", "invalid_token"))
 		return nil, ErrInvalidToken
 	}
 
-	a.options.logger.Info("token validated", clog.String("user_id", claims.Subject))
+	a.options.logger.Info("token validated",
+		clog.String("user_id", claims.Subject),
+		clog.String("token_type", string(claims.TokenType)),
+	)
 
-	// Metrics: 验证成功
 	a.validatedCount.Add(ctx, 1, metrics.L("status", "success"))
-
 	return claims, nil
 }
 
-// RefreshToken 刷新 Token
-func (a *jwtAuth) RefreshToken(ctx context.Context, token string) (string, error) {
-	claims, err := a.parseClaimsWithoutTimeValidation(token)
+// RefreshToken 使用 refresh token 换发新双令牌。
+func (a *jwtAuth) RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error) {
+	claims, err := a.ValidateRefreshToken(ctx, refreshToken)
 	if err != nil {
 		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
-		return "", err
+		return nil, err
 	}
 
-	now := time.Now()
-	if a.config.Issuer != "" && claims.Issuer != a.config.Issuer {
-		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
-		return "", ErrInvalidToken
-	}
-	if len(a.config.Audience) > 0 && !hasAnyAudience(claims.Audience, a.config.Audience) {
-		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
-		return "", ErrInvalidToken
-	}
-	if claims.NotBefore != nil && now.Before(claims.NotBefore.Time) {
-		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
-		return "", ErrInvalidToken
-	}
+	nextClaims := cloneClaims(claims)
+	nextClaims.TokenType = ""
+	nextClaims.ExpiresAt = nil
+	nextClaims.IssuedAt = nil
+	nextClaims.ID = ""
 
-	if claims.IssuedAt == nil {
-		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
-		return "", ErrInvalidToken
-	}
-
-	if now.After(claims.IssuedAt.Time.Add(a.config.RefreshTokenTTL)) {
-		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
-		return "", ErrExpiredToken
-	}
-
-	// 更新过期时间和签发时间
-	claims.ExpiresAt = nil
-	claims.IssuedAt = nil
-
-	// 使用相同的 claims，重新生成 token
-	newToken, err := a.GenerateToken(ctx, claims)
+	pair, err := a.GenerateTokenPair(ctx, nextClaims)
 	if err != nil {
 		a.refreshedCount.Add(ctx, 1, metrics.L("status", "error"))
-		return "", err
+		return nil, err
 	}
 
-	a.options.logger.Info("token refreshed", clog.String("user_id", claims.Subject))
-
-	// Metrics: 刷新成功
+	a.options.logger.Info("token pair refreshed", clog.String("user_id", claims.Subject))
 	a.refreshedCount.Add(ctx, 1, metrics.L("status", "success"))
 
-	return newToken, nil
+	return pair, nil
 }
 
-// ExtractToken 从请求中提取 token（导出用于中间件）
+// ExtractToken 从请求中提取 access token（导出用于中间件）。
 //
 // 查找顺序（如果 TokenLookup 未配置）:
 // 1. header:Authorization (Bearer token)
@@ -224,12 +272,8 @@ func (a *jwtAuth) RefreshToken(ctx context.Context, token string) (string, error
 //
 // 如果配置了 TokenLookup，则只按指定方式提取。
 func (a *jwtAuth) ExtractToken(r *http.Request) (string, error) {
-	// 如果用户配置了特定的 lookup 方式，只使用该方式
 	if a.config.TokenLookup != "" {
 		parts := strings.Split(a.config.TokenLookup, ":")
-		if len(parts) != 2 {
-			return "", ErrMissingToken
-		}
 		source, key := parts[0], parts[1]
 		token, ok := a.extractFromSource(r, source, key)
 		if !ok {
@@ -238,16 +282,12 @@ func (a *jwtAuth) ExtractToken(r *http.Request) (string, error) {
 		return token, nil
 	}
 
-	// 默认多源查找：header -> query -> cookie
-	// 1. 尝试从 header 提取
 	if token, ok := a.extractFromSource(r, "header", "Authorization"); ok {
 		return token, nil
 	}
-	// 2. 尝试从 query 提取
 	if token, ok := a.extractFromSource(r, "query", "token"); ok {
 		return token, nil
 	}
-	// 3. 尝试从 cookie 提取
 	if token, ok := a.extractFromSource(r, "cookie", "jwt"); ok {
 		return token, nil
 	}
@@ -255,8 +295,7 @@ func (a *jwtAuth) ExtractToken(r *http.Request) (string, error) {
 	return "", ErrMissingToken
 }
 
-// extractFromSource 从指定来源提取 token
-// 返回 token 和是否成功找到（注意：找到但格式错误时也返回 ok=false）
+// extractFromSource 从指定来源提取 token。
 func (a *jwtAuth) extractFromSource(r *http.Request, source, key string) (string, bool) {
 	switch source {
 	case "header":
@@ -264,8 +303,8 @@ func (a *jwtAuth) extractFromSource(r *http.Request, source, key string) (string
 		if authHeader == "" {
 			return "", false
 		}
-		tokenParts := strings.SplitN(authHeader, " ", 2)
-		if len(tokenParts) != 2 || tokenParts[0] != a.config.TokenHeadName {
+		tokenParts := strings.Fields(authHeader)
+		if len(tokenParts) != 2 || !strings.EqualFold(tokenParts[0], a.config.TokenHeadName) {
 			return "", false
 		}
 		return tokenParts[1], true
@@ -348,4 +387,8 @@ func hasAnyAudience(tokenAud jwt.ClaimStrings, expected []string) bool {
 		}
 	}
 	return false
+}
+
+func newTokenID(tokenType TokenType) string {
+	return fmt.Sprintf("%s-%d", tokenType, time.Now().UnixNano())
 }

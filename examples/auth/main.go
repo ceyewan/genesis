@@ -9,56 +9,54 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/ceyewan/genesis/auth"
 	"github.com/ceyewan/genesis/clog"
 )
 
+type loginRequest struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+}
+
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
 func main() {
-	// 1. 初始化配置
 	cfg := &auth.Config{
-		SecretKey:      "your-secret-key-must-be-at-least-32-chars",
-		SigningMethod:  "HS256",
-		Issuer:         "my-app",
-		AccessTokenTTL: 15 * time.Minute,
-		TokenLookup:    "header:Authorization",
-		TokenHeadName:  "Bearer",
+		SecretKey:       "your-secret-key-must-be-at-least-32-chars",
+		SigningMethod:   "HS256",
+		Issuer:          "my-app",
+		Audience:        []string{"example-client"},
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 7 * 24 * time.Hour,
+		TokenLookup:     "header:Authorization",
+		TokenHeadName:   "Bearer",
 	}
 
-	// 2. 初始化日志
 	logger, err := clog.New(clog.NewDevDefaultConfig("example"))
 	if err != nil {
 		log.Fatalf("create logger: %v", err)
 	}
 
-	// 3. 创建认证器
 	authenticator, err := auth.New(cfg, auth.WithLogger(logger))
 	if err != nil {
 		log.Fatalf("create authenticator: %v", err)
 	}
 
-	// 4. 创建 HTTP 路由
-	mux := http.NewServeMux()
+	router := gin.New()
+	router.Use(gin.Recovery())
 
-	// 登录接口 - 生成 Token
-	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	router.POST("/login", func(c *gin.Context) {
+		var req loginRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 			return
 		}
 
-		var req struct {
-			UserID   string `json:"user_id" binding:"required"`
-			Username string `json:"username"`
-		}
-
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		// 创建 Claims
 		claims := &auth.Claims{
 			RegisteredClaims: jwt.RegisteredClaims{
 				Subject: req.UserID,
@@ -67,112 +65,90 @@ func main() {
 			Roles:    []string{"user"},
 		}
 
-		// 生成 Token
-		token, err := authenticator.GenerateToken(r.Context(), claims)
+		pair, err := authenticator.GenerateTokenPair(c.Request.Context(), claims)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
 		}
 
-		response := map[string]any{
-			"token":      token,
-			"expires_in": int(cfg.AccessTokenTTL.Seconds()),
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		c.JSON(http.StatusOK, pair)
 	})
 
-	// 受保护的路由
-	mux.HandleFunc("/profile", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	router.POST("/refresh", func(c *gin.Context) {
+		var req refreshRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 			return
 		}
 
-		// 从 Authorization header 获取 token
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "missing authorization header", http.StatusUnauthorized)
-			return
-		}
-
-		// 解析 Bearer token
-		if len(authHeader) < 7 || authHeader[:7] != "Bearer " {
-			http.Error(w, "invalid authorization header format", http.StatusUnauthorized)
-			return
-		}
-		token := authHeader[7:]
-
-		// 验证 token
-		claims, err := authenticator.ValidateToken(r.Context(), token)
+		pair, err := authenticator.RefreshToken(c.Request.Context(), req.RefreshToken)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
 
-		// 返回用户信息
-		response := map[string]any{
+		c.JSON(http.StatusOK, pair)
+	})
+
+	protected := router.Group("/")
+	protected.Use(authenticator.GinMiddleware())
+	protected.GET("/profile", func(c *gin.Context) {
+		claims, _ := auth.GetClaims(c)
+		c.JSON(http.StatusOK, gin.H{
 			"user_id":  claims.Subject,
 			"username": claims.Username,
 			"roles":    claims.Roles,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		})
 	})
 
-	// 启动服务器
 	go func() {
 		logger.Info("auth example server starting", clog.String("addr", ":12345"))
-		if err := http.ListenAndServe(":12345", mux); err != nil {
+		if err := router.Run(":12345"); err != nil {
 			logger.Error("server error", clog.Error(err))
 		}
 	}()
 
-	// 等待服务器启动
-	time.Sleep(1 * time.Second)
-
-	// 运行基本测试
+	time.Sleep(time.Second)
 	runBasicTests(logger)
 }
 
-// runBasicTests 运行基本功能测试
 func runBasicTests(logger clog.Logger) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	baseURL := "http://localhost:12345"
 
 	logger.Info("=== 开始基本功能测试 ===")
 
-	// 测试1: 登录获取 token
-	logger.Info("测试1: 登录获取 token")
-	loginData := map[string]string{
-		"user_id":  "user123",
-		"username": "Alice",
-	}
-	body, _ := json.Marshal(loginData)
+	logger.Info("测试1: 登录获取双令牌")
+	loginBody, _ := json.Marshal(loginRequest{
+		UserID:   "user123",
+		Username: "Alice",
+	})
 
-	resp, err := client.Post(baseURL+"/login", "application/json", bytes.NewReader(body))
+	resp, err := client.Post(baseURL+"/login", "application/json", bytes.NewReader(loginBody))
 	if err != nil {
 		logger.Error("登录失败", clog.Error(err))
 		return
 	}
 	defer resp.Body.Close()
 
-	data, _ := io.ReadAll(resp.Body)
-	result := make(map[string]any)
-	json.Unmarshal(data, &result)
-
+	var pair auth.TokenPair
+	if err := json.NewDecoder(resp.Body).Decode(&pair); err != nil {
+		logger.Error("解析登录响应失败", clog.Error(err))
+		return
+	}
 	if resp.StatusCode != http.StatusOK {
 		logger.Error("登录失败", clog.Int("code", resp.StatusCode))
 		return
 	}
 
-	token := result["token"].(string)
-	logger.Info("登录成功", clog.String("token", token[:20]+"..."))
+	logger.Info("登录成功",
+		clog.String("access_token", pair.AccessToken[:20]+"..."),
+		clog.String("refresh_token", pair.RefreshToken[:20]+"..."),
+	)
 
-	// 测试2: 使用 token 访问受保护的路由
-	logger.Info("测试2: 访问受保护的路由")
-	req, _ := http.NewRequest("GET", baseURL+"/profile", nil)
-	req.Header.Add("Authorization", "Bearer "+token)
+	logger.Info("测试2: 使用 access token 访问受保护路由")
+	req, _ := http.NewRequest(http.MethodGet, baseURL+"/profile", nil)
+	req.Header.Set("Authorization", "Bearer "+pair.AccessToken)
 
 	resp, err = client.Do(req)
 	if err != nil {
@@ -181,53 +157,76 @@ func runBasicTests(logger clog.Logger) {
 	}
 	defer resp.Body.Close()
 
-	data, _ = io.ReadAll(resp.Body)
-	json.Unmarshal(data, &result)
-
+	var profile map[string]any
+	data, _ := io.ReadAll(resp.Body)
+	_ = json.Unmarshal(data, &profile)
 	if resp.StatusCode != http.StatusOK {
 		logger.Error("访问受保护路由失败", clog.Int("code", resp.StatusCode))
 		return
 	}
 
 	logger.Info("访问受保护路由成功",
-		clog.String("user_id", fmt.Sprint(result["user_id"])),
-		clog.String("username", fmt.Sprint(result["username"])),
+		clog.String("user_id", fmt.Sprint(profile["user_id"])),
+		clog.String("username", fmt.Sprint(profile["username"])),
 	)
 
-	// 测试3: 使用无效 token
-	logger.Info("测试3: 使用无效 token")
-	req, _ = http.NewRequest("GET", baseURL+"/profile", nil)
-	req.Header.Add("Authorization", "Bearer invalid.token.here")
+	logger.Info("测试3: 使用 refresh token 换发新双令牌")
+	refreshBody, _ := json.Marshal(refreshRequest{RefreshToken: pair.RefreshToken})
+	resp, err = client.Post(baseURL+"/refresh", "application/json", bytes.NewReader(refreshBody))
+	if err != nil {
+		logger.Error("刷新令牌失败", clog.Error(err))
+		return
+	}
+	defer resp.Body.Close()
+
+	var refreshed auth.TokenPair
+	if err := json.NewDecoder(resp.Body).Decode(&refreshed); err != nil {
+		logger.Error("解析刷新响应失败", clog.Error(err))
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		logger.Error("刷新令牌失败", clog.Int("code", resp.StatusCode))
+		return
+	}
+	if refreshed.AccessToken == pair.AccessToken || refreshed.RefreshToken == pair.RefreshToken {
+		logger.Error("刷新后令牌未轮换")
+		return
+	}
+	logger.Info("刷新令牌成功")
+
+	logger.Info("测试4: 使用 refresh token 直接访问业务接口，应被拒绝")
+	req, _ = http.NewRequest(http.MethodGet, baseURL+"/profile", nil)
+	req.Header.Set("Authorization", "Bearer "+pair.RefreshToken)
 
 	resp, err = client.Do(req)
 	if err != nil {
-		logger.Error("测试无效token失败", clog.Error(err))
+		logger.Error("测试 refresh token 访问业务接口失败", clog.Error(err))
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
-		logger.Error("无效token未被正确拒绝", clog.Int("code", resp.StatusCode))
-	} else {
-		logger.Info("无效token被正确拒绝")
+		logger.Error("refresh token 未被正确拒绝", clog.Int("code", resp.StatusCode))
+		return
 	}
+	logger.Info("refresh token 被正确拒绝")
 
-	// 测试4: 缺少 Authorization header
-	logger.Info("测试4: 缺少 Authorization header")
-	req, _ = http.NewRequest("GET", baseURL+"/profile", nil)
+	logger.Info("测试5: 使用无效 access token")
+	req, _ = http.NewRequest(http.MethodGet, baseURL+"/profile", nil)
+	req.Header.Set("Authorization", "Bearer invalid.token.here")
 
 	resp, err = client.Do(req)
 	if err != nil {
-		logger.Error("测试缺少header失败", clog.Error(err))
+		logger.Error("测试无效 token 失败", clog.Error(err))
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
-		logger.Error("缺少header未被正确拒绝", clog.Int("code", resp.StatusCode))
-	} else {
-		logger.Info("缺少header被正确拒绝")
+		logger.Error("无效 token 未被正确拒绝", clog.Int("code", resp.StatusCode))
+		return
 	}
+	logger.Info("无效 token 被正确拒绝")
 
 	logger.Info("=== 基本功能测试完成 ===")
 }
