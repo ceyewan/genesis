@@ -44,6 +44,8 @@ make logs        # 查看服务日志
 go test ./...                    # 运行所有测试
 go test -race -count=1 ./...     # 带竞态检测
 make lint                        # 运行 golangci-lint
+make modernize                   # 应用 go fix 现代化建议
+make modernize-check             # 检查是否存在 go fix 建议
 go doc -all ./<component>        # 查看组件文档
 
 # 示例
@@ -58,6 +60,7 @@ make example-all                 # 运行所有示例
 
 - 格式化使用 `gofumpt`（比 `gofmt` 更严格），通过 `golangci-lint` 强制执行
 - Import 使用 `goimports` 格式，分三组：标准库 / 第三方 / 内部包（`github.com/ceyewan/genesis/...`）
+- 使用 Go 1.26+ 工具链时，定期运行 `go fix ./...` 应用官方现代化建议；提交前至少运行 `make modernize-check`
 
 ### 命名
 
@@ -156,5 +159,6 @@ os.Getenv("CACHE_PREFIX")           // ❌ 使用 config
 2. **不确定就确认**：不确定的改动先询问，避免"差不多"式修改。
 3. **复用优于新建**：优先使用已有接口和工具，不新增无用抽象。
 4. **改后必须验证**：改动后运行对应测试或 lint，确保行为稳定。
+   如修改 Go 代码，同时运行 `make modernize-check`，确保没有遗漏的 `go fix` 建议。
 5. **遵守架构边界**：保持四层扁平化架构，不将第三方依赖泄漏到组件接口。
 6. **谨慎重构**：重构前理解上下游调用，必要时分步进行。

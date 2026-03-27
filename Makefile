@@ -1,4 +1,4 @@
-.PHONY: help up down test lint clean logs status examples
+.PHONY: help up down test lint modernize modernize-check clean logs status examples
 
 help:
 	@echo "Genesis 开发环境"
@@ -8,6 +8,8 @@ help:
 	@echo "  make down      - 停止所有开发服务"
 	@echo "  make test      - 运行测试"
 	@echo "  make lint      - 运行代码检查"
+	@echo "  make modernize - 运行 go fix 现代化代码"
+	@echo "  make modernize-check - 检查是否存在 go fix 建议"
 	@echo "  make clean     - 清理卷和网络"
 	@echo "  make logs      - 显示所有服务日志"
 	@echo "  make status    - 查看服务状态"
@@ -27,6 +29,21 @@ test:
 lint:
 	@echo "运行代码检查..."
 	@golangci-lint run
+
+modernize:
+	@echo "运行 go fix..."
+	@go fix ./...
+
+modernize-check:
+	@echo "检查 go fix 建议..."
+	@out="$$(go fix -diff ./...)"; \
+	if [ -n "$$out" ]; then \
+		printf '%s\n' "$$out"; \
+		echo ""; \
+		echo "检测到可应用的 go fix 变更，请运行: go fix ./..."; \
+		exit 1; \
+	fi
+
 clean:
 	@echo "清理卷和网络..."
 	@docker compose -f docker-compose.yml down -v

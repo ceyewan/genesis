@@ -533,8 +533,7 @@ func TestLoaderWatchBeforeLoad(t *testing.T) {
 		t.Fatalf("Failed to create loader: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	_, err = loader.Watch(ctx, "app.debug")
 	if !errors.Is(err, ErrNotLoaded) {

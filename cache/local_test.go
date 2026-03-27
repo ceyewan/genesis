@@ -159,14 +159,14 @@ func TestLocal_MaxEntries(t *testing.T) {
 
 	t.Run("Eviction when exceeding MaxEntries", func(t *testing.T) {
 		// 写入 15 个条目
-		for i := 0; i < 15; i++ {
+		for i := range 15 {
 			err := cache.Set(ctx, "key:"+strconv.Itoa(i), i, time.Hour)
 			require.NoError(t, err)
 		}
 
 		// 验证所有写入的键都存在（otter 可能会异步驱逐）
 		// 这里主要验证写入不会失败
-		for i := 0; i < 15; i++ {
+		for i := range 15 {
 			var got int
 			err := cache.Get(ctx, "key:"+strconv.Itoa(i), &got)
 			// 可能命中也可能被驱逐，都不应该报错
@@ -193,10 +193,10 @@ func TestLocal_Concurrency(t *testing.T) {
 		errCh := make(chan error, goroutines)
 		wg.Add(goroutines)
 
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(id int) {
 				defer wg.Done()
-				for j := 0; j < iterations; j++ {
+				for j := range iterations {
 					key := "key:" + strconv.Itoa(id) + ":" + strconv.Itoa(j)
 					value := id*1000 + j
 
@@ -237,7 +237,7 @@ func TestLocal_Concurrency(t *testing.T) {
 		// Goroutine 1: Set
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for i := range iterations {
 				err := cache.Set(ctx, "shared:key", i, time.Minute)
 				if err != nil {
 					errCh <- err
@@ -249,7 +249,7 @@ func TestLocal_Concurrency(t *testing.T) {
 		// Goroutine 2: Get
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				var got int
 				err := cache.Get(ctx, "shared:key", &got)
 				// 可能命中也可能不命中，但不应崩溃
@@ -263,7 +263,7 @@ func TestLocal_Concurrency(t *testing.T) {
 		// Goroutine 3: Delete
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				err := cache.Delete(ctx, "shared:key")
 				if err != nil {
 					errCh <- err
