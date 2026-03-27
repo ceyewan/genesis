@@ -3,7 +3,7 @@
 // 核心特性：
 //   - 统一抽象：通过 Connector 接口提供一致的连接管理 API
 //   - 类型安全：通过 TypedConnector[T] 泛型接口确保编译时类型检查
-//   - 多数据源支持：Redis、MySQL、SQLite、Etcd、NATS、Kafka
+//   - 多数据源支持：Redis、MySQL、PostgreSQL、SQLite、Etcd、NATS、Kafka
 //   - 健康检查：定期检查连接状态，支持自动故障恢复
 //   - 并发安全：所有公开方法均为并发安全，支持多协程同时访问
 //   - 资源管理：遵循"谁创建，谁负责释放"原则，Close() 应在应用层调用
