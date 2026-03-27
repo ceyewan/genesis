@@ -1,31 +1,32 @@
-// Package ratelimit 提供了限流组件，支持单机和分布式两种模式。
+// Package ratelimit 提供 Genesis 的限流组件。
 //
-// ratelimit 是 Genesis 治理层的核心组件，它提供了：
-// - 统一的 Limiter 接口，屏蔽单机和分布式差异
-// - 单机模式：基于 golang.org/x/time/rate 的内存限流
-// - 分布式模式：基于 Redis + Lua 的分布式限流
-// - 令牌桶算法，支持突发流量
-// - 开箱即用的 Gin 中间件
-// - 与 L0 基础组件（日志、指标）的深度集成
+// `ratelimit` 位于治理层（L3），面向两类常见需求：
+// 1. 进程内的轻量限流；
+// 2. 基于 Redis 的集群共享限流。
 //
-// ## 基本使用
+// 这个包的核心能力是非阻塞的 `Allow` / `AllowN` 检查。单机模式使用
+// `golang.org/x/time/rate`，分布式模式使用 Redis Lua 脚本维护共享桶状态。
 //
-//	// 单机模式
+// 分布式模式有几个重要语义：
+// - 桶状态按 `key + limit` 隔离，不同 `Rate/Burst` 不会共享同一个 Redis 键。
+// - 脚本使用 Redis `TIME` 作为统一时钟，避免多节点本地时钟漂移破坏限流精度。
+// - `Wait` 不是分布式能力，调用会返回 `ErrNotSupported`。
+//
+// Gin 中间件和 gRPC 拦截器默认采用 `fail_open`，即限流器内部异常时放行业务请求；
+// 如果希望把限流器异常视为保护失败，可切换到 `fail_closed`。
+//
+// 基本用法：
+//
 //	limiter, _ := ratelimit.New(&ratelimit.Config{
 //	    Driver: ratelimit.DriverStandalone,
-//	    Standalone: &ratelimit.StandaloneConfig{
-//	        CleanupInterval: 1 * time.Minute,
-//	        IdleTimeout:     5 * time.Minute,
-//	    },
 //	}, ratelimit.WithLogger(logger))
 //
-//	// 检查是否允许请求
-//	allowed, _ := limiter.Allow(ctx, "user:123", ratelimit.Limit{Rate: 10, Burst: 20})
-//	if !allowed {
-//	    return "rate limit exceeded"
-//	}
+//	allowed, err := limiter.Allow(ctx, "user:123", ratelimit.Limit{
+//	    Rate:  10,
+//	    Burst: 20,
+//	})
 //
-// ## 分布式模式
+// 分布式用法：
 //
 //	redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
 //	defer redisConn.Close()
@@ -36,29 +37,6 @@
 //	        Prefix: "myapp:ratelimit:",
 //	    },
 //	}, ratelimit.WithRedisConnector(redisConn), ratelimit.WithLogger(logger))
-//
-//	allowed, _ := limiter.Allow(ctx, "api:/users", ratelimit.Limit{Rate: 100, Burst: 200})
-//
-// ## Gin 中间件
-//
-//	r := gin.New()
-//	r.Use(ratelimit.GinMiddleware(limiter, &ratelimit.GinMiddlewareOptions{
-//	    KeyFunc: func(c *gin.Context) string {
-//	        return c.ClientIP()
-//	    },
-//	    LimitFunc: func(c *gin.Context) ratelimit.Limit {
-//	        return ratelimit.Limit{Rate: 100, Burst: 200}
-//	    },
-//	}))
-//
-// ## 可观测性
-//
-// 通过注入 Logger 和 Meter 实现统一的日志和指标收集：
-//
-//	limiter, _ := ratelimit.New(cfg,
-//	    ratelimit.WithLogger(logger),
-//	    ratelimit.WithMeter(meter),
-//	)
 package ratelimit
 
 import (
@@ -79,6 +57,16 @@ type Limit struct {
 	Rate  float64 // 令牌生成速率（每秒生成多少个令牌）
 	Burst int     // 令牌桶容量（突发最大请求数）
 }
+
+// ErrorPolicy 定义限流检查出错时的处理策略。
+type ErrorPolicy string
+
+const (
+	// ErrorPolicyFailOpen 表示限流器出错时放行请求。
+	ErrorPolicyFailOpen ErrorPolicy = "fail_open"
+	// ErrorPolicyFailClosed 表示限流器出错时拒绝请求。
+	ErrorPolicyFailClosed ErrorPolicy = "fail_closed"
+)
 
 // Limiter 限流器核心接口
 type Limiter interface {

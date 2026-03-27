@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -227,6 +228,31 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 			router.ServeHTTP(w, req)
 			assert.Equal(t, http.StatusOK, w.Code)
 		}
+	})
+
+	t.Run("限流器错误时可配置为 fail-closed", func(t *testing.T) {
+		router := setupTestRouter()
+
+		router.Use(GinMiddleware(&errorLimiter{err: errors.New("limiter error")}, &GinMiddlewareOptions{
+			KeyFunc: func(c *gin.Context) string {
+				return "test"
+			},
+			LimitFunc: func(c *gin.Context) Limit {
+				return Limit{Rate: 1, Burst: 1}
+			},
+			ErrorPolicy: ErrorPolicyFailClosed,
+		}))
+
+		router.GET("/test", func(c *gin.Context) {
+			c.String(http.StatusOK, "ok")
+		})
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusTooManyRequests, w.Code)
+		assert.Contains(t, w.Body.String(), "rate limiter unavailable")
 	})
 
 	t.Run("nil KeyFunc 应该使用默认 ClientIP", func(t *testing.T) {

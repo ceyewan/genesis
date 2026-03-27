@@ -213,6 +213,24 @@ func TestUnaryServerInterceptor_EdgeCases(t *testing.T) {
 		assert.NotNil(t, resp)
 	})
 
+	t.Run("限流器错误时可配置为 fail-closed", func(t *testing.T) {
+		errorLimiter := &errorLimiter{err: errors.New("limiter error")}
+		limitFunc := func(ctx context.Context, fullMethod string) Limit {
+			return Limit{Rate: 10, Burst: 10}
+		}
+		interceptor := UnaryServerInterceptorWithOptions(errorLimiter, nil, limitFunc, &GRPCInterceptorOptions{
+			ErrorPolicy: ErrorPolicyFailClosed,
+		})
+
+		ctx := context.Background()
+		info := &grpc.UnaryServerInfo{FullMethod: "/test/Method"}
+
+		resp, err := interceptor(ctx, "request", info, handler)
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		assert.Equal(t, codes.Unavailable, status.Code(err))
+	})
+
 	t.Run("无效限流规则应该放行", func(t *testing.T) {
 		limiter, err := New(&Config{Driver: DriverStandalone, Standalone: &StandaloneConfig{}}, WithLogger(logger))
 		require.NoError(t, err)
@@ -345,6 +363,21 @@ func TestUnaryClientInterceptor_EdgeCases(t *testing.T) {
 		ctx := context.Background()
 		err := interceptor(ctx, "/test/Method", "request", "reply", nil, invoker)
 		require.NoError(t, err, "限流器错误时应该放行")
+	})
+
+	t.Run("限流器错误时客户端可配置为 fail-closed", func(t *testing.T) {
+		errorLimiter := &errorLimiter{err: errors.New("limiter error")}
+		limitFunc := func(ctx context.Context, fullMethod string) Limit {
+			return Limit{Rate: 10, Burst: 10}
+		}
+		interceptor := UnaryClientInterceptorWithOptions(errorLimiter, nil, limitFunc, &GRPCInterceptorOptions{
+			ErrorPolicy: ErrorPolicyFailClosed,
+		})
+
+		ctx := context.Background()
+		err := interceptor(ctx, "/test/Method", "request", "reply", nil, invoker)
+		require.Error(t, err)
+		assert.Equal(t, codes.Unavailable, status.Code(err))
 	})
 }
 
@@ -541,7 +574,7 @@ func TestStreamClientInterceptor(t *testing.T) {
 
 func TestGRPCLimiterConfig(t *testing.T) {
 	t.Run("newGRPCLimiterConfig 默认值", func(t *testing.T) {
-		cfg := newGRPCLimiterConfig(nil, nil, nil)
+		cfg := newGRPCLimiterConfig(nil, nil, nil, nil)
 
 		assert.NotNil(t, cfg.limiter, "nil limiter 应该被替换为 Discard")
 		assert.NotNil(t, cfg.keyFunc, "nil keyFunc 应该被替换为默认函数")
@@ -552,9 +585,10 @@ func TestGRPCLimiterConfig(t *testing.T) {
 		limiter := Discard()
 		cfg := newGRPCLimiterConfig(limiter, nil, func(ctx context.Context, fullMethod string) Limit {
 			return Limit{Rate: 0, Burst: 0}
-		})
+		}, nil)
 
-		allowed, passThrough := cfg.check(context.Background(), "/test/Method")
+		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
+		require.NoError(t, err)
 		assert.False(t, allowed)
 		assert.True(t, passThrough, "无效限流规则应该放行")
 	})
@@ -563,20 +597,34 @@ func TestGRPCLimiterConfig(t *testing.T) {
 		errorLimiter := &errorLimiter{err: errors.New("limiter error")}
 		cfg := newGRPCLimiterConfig(errorLimiter, nil, func(ctx context.Context, fullMethod string) Limit {
 			return Limit{Rate: 10, Burst: 10}
-		})
+		}, nil)
 
-		allowed, passThrough := cfg.check(context.Background(), "/test/Method")
+		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
+		require.NoError(t, err)
 		assert.False(t, allowed)
 		assert.True(t, passThrough, "限流器错误应该放行")
+	})
+
+	t.Run("check 方法 - 限流器错误 fail-closed", func(t *testing.T) {
+		errorLimiter := &errorLimiter{err: errors.New("limiter error")}
+		cfg := newGRPCLimiterConfig(errorLimiter, nil, func(ctx context.Context, fullMethod string) Limit {
+			return Limit{Rate: 10, Burst: 10}
+		}, &GRPCInterceptorOptions{ErrorPolicy: ErrorPolicyFailClosed})
+
+		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
+		require.Error(t, err)
+		assert.False(t, allowed)
+		assert.False(t, passThrough)
 	})
 
 	t.Run("check 方法 - 请求被允许", func(t *testing.T) {
 		limiter := &sequenceLimiter{allowed: []bool{true}}
 		cfg := newGRPCLimiterConfig(limiter, nil, func(ctx context.Context, fullMethod string) Limit {
 			return Limit{Rate: 10, Burst: 10}
-		})
+		}, nil)
 
-		allowed, passThrough := cfg.check(context.Background(), "/test/Method")
+		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
+		require.NoError(t, err)
 		assert.True(t, allowed)
 		assert.False(t, passThrough, "允许请求不应该放行")
 	})
@@ -585,9 +633,10 @@ func TestGRPCLimiterConfig(t *testing.T) {
 		limiter := &sequenceLimiter{allowed: []bool{false}}
 		cfg := newGRPCLimiterConfig(limiter, nil, func(ctx context.Context, fullMethod string) Limit {
 			return Limit{Rate: 10, Burst: 10}
-		})
+		}, nil)
 
-		allowed, passThrough := cfg.check(context.Background(), "/test/Method")
+		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
+		require.NoError(t, err)
 		assert.False(t, allowed)
 		assert.False(t, passThrough, "拒绝请求不应该放行")
 	})

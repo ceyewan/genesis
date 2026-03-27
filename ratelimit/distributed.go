@@ -2,7 +2,8 @@ package ratelimit
 
 import (
 	"context"
-	"time"
+	"fmt"
+	"strconv"
 
 	"github.com/redis/go-redis/v9"
 
@@ -18,13 +19,14 @@ const luaScript = `
 -- KEYS[1]: 限流器的唯一键
 -- ARGV[1]: 速率 (rate, 每秒允许的请求数)
 -- ARGV[2]: 桶容量 (capacity, 峰值/并发容量)
--- ARGV[3]: 当前时间戳 (now, 浮点数，秒.毫秒)
--- ARGV[4]: 本次请求需要消耗的令牌数 (tokens_to_consume)
+-- ARGV[3]: 本次请求需要消耗的令牌数 (tokens_to_consume)
 
 local rate = tonumber(ARGV[1])
 local capacity = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])
-local requested = tonumber(ARGV[4])
+local requested = tonumber(ARGV[3])
+
+local time_parts = redis.call("TIME")
+local now = tonumber(time_parts[1]) + tonumber(time_parts[2]) / 1000000
 
 -- 每个令牌代表的时间间隔（秒）
 local interval_per_token = 1 / rate
@@ -129,13 +131,10 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 	}
 
 	// 构建 Redis key
-	fullKey := l.prefix + key
-
-	// 当前时间戳（秒.毫秒）
-	now := float64(time.Now().UnixNano()) / 1e9
+	fullKey := l.buildKey(key, limit)
 
 	// 执行 Lua 脚本
-	result, err := l.script.Run(ctx, l.client, []string{fullKey}, limit.Rate, limit.Burst, now, n).Result()
+	result, err := l.script.Run(ctx, l.client, []string{fullKey}, limit.Rate, limit.Burst, n).Result()
 	if err != nil {
 		if l.logger != nil {
 			l.logger.Error("failed to execute lua script",
@@ -185,6 +184,16 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 	}
 
 	return isAllowed, nil
+}
+
+func (l *distributedLimiter) buildKey(key string, limit Limit) string {
+	return fmt.Sprintf(
+		"%s%s:rate=%s:burst=%d",
+		l.prefix,
+		key,
+		strconv.FormatFloat(limit.Rate, 'g', -1, 64),
+		limit.Burst,
+	)
 }
 
 // Wait 阻塞等待直到获取 1 个令牌

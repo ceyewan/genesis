@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/ceyewan/genesis/clog"
 )
 
 // GinMiddlewareOptions Gin 限流中间件配置
@@ -12,6 +14,8 @@ type GinMiddlewareOptions struct {
 	WithHeaders bool
 	KeyFunc     func(*gin.Context) string
 	LimitFunc   func(*gin.Context) Limit
+	ErrorPolicy ErrorPolicy
+	Logger      clog.Logger
 }
 
 // GinMiddleware 创建 Gin 限流中间件
@@ -44,6 +48,14 @@ func GinMiddleware(limiter Limiter, opts *GinMiddlewareOptions) gin.HandlerFunc 
 		keyFunc = opts.KeyFunc
 		limitFunc = opts.LimitFunc
 		withHeaders = opts.WithHeaders
+	}
+	errorPolicy := ErrorPolicyFailOpen
+	var logger clog.Logger
+	if opts != nil {
+		if opts.ErrorPolicy != "" {
+			errorPolicy = opts.ErrorPolicy
+		}
+		logger = opts.Logger
 	}
 
 	if keyFunc == nil {
@@ -83,8 +95,18 @@ func GinMiddleware(limiter Limiter, opts *GinMiddlewareOptions) gin.HandlerFunc 
 		// 检查是否允许请求
 		allowed, err := limiter.Allow(c.Request.Context(), key, limit)
 		if err != nil {
-			// 降级策略：限流器出错时放行，避免影响业务
-			// 实际生产中可能需要根据具体情况决定是否放行
+			if logger != nil {
+				logger.Warn("Rate limiter middleware check failed",
+					clog.String("key", key),
+					clog.String("error_policy", string(errorPolicy)),
+					clog.Error(err))
+			}
+			if errorPolicy == ErrorPolicyFailClosed {
+				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+					"error": "rate limiter unavailable",
+				})
+				return
+			}
 			c.Next()
 			return
 		}

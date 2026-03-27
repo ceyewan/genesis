@@ -120,6 +120,22 @@ func TestDistributedLimiter_AllowN(t *testing.T) {
 		// 应该有相同的结果
 		assert.Equal(t, allowed2, allowedN2)
 	})
+
+	t.Run("相同 key 不同 limit 应该独立限流", func(t *testing.T) {
+		key := "same-key-different-limit"
+
+		allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 1})
+		require.NoError(t, err)
+		require.True(t, allowed)
+
+		allowed, err = limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 1})
+		require.NoError(t, err)
+		require.False(t, allowed)
+
+		allowed, err = limiter.Allow(ctx, key, Limit{Rate: 100, Burst: 100})
+		require.NoError(t, err)
+		require.True(t, allowed, "不同 limit 不应共享同一个分布式桶状态")
+	})
 }
 
 // ============================================================

@@ -6,6 +6,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/ceyewan/genesis/clog"
 )
 
 // ========================================
@@ -18,19 +20,28 @@ type GRPCKeyFunc func(ctx context.Context, fullMethod string) string
 // GRPCLimitFunc 获取限流规则的函数类型
 type GRPCLimitFunc func(ctx context.Context, fullMethod string) Limit
 
+// GRPCInterceptorOptions 定义 gRPC 限流拦截器的可选行为。
+type GRPCInterceptorOptions struct {
+	ErrorPolicy ErrorPolicy
+	Logger      clog.Logger
+}
+
 // grpcLimiterConfig gRPC 限流器内部配置（复用逻辑）
 type grpcLimiterConfig struct {
-	limiter   Limiter
-	keyFunc   GRPCKeyFunc
-	limitFunc GRPCLimitFunc
+	limiter     Limiter
+	keyFunc     GRPCKeyFunc
+	limitFunc   GRPCLimitFunc
+	errorPolicy ErrorPolicy
+	logger      clog.Logger
 }
 
 // newGRPCLimiterConfig 创建标准化的 gRPC 限流配置
-func newGRPCLimiterConfig(limiter Limiter, keyFunc GRPCKeyFunc, limitFunc GRPCLimitFunc) *grpcLimiterConfig {
+func newGRPCLimiterConfig(limiter Limiter, keyFunc GRPCKeyFunc, limitFunc GRPCLimitFunc, opts *GRPCInterceptorOptions) *grpcLimiterConfig {
 	cfg := &grpcLimiterConfig{
-		limiter:   limiter,
-		keyFunc:   keyFunc,
-		limitFunc: limitFunc,
+		limiter:     limiter,
+		keyFunc:     keyFunc,
+		limitFunc:   limitFunc,
+		errorPolicy: ErrorPolicyFailOpen,
 	}
 	if cfg.limiter == nil {
 		cfg.limiter = Discard()
@@ -43,31 +54,47 @@ func newGRPCLimiterConfig(limiter Limiter, keyFunc GRPCKeyFunc, limitFunc GRPCLi
 			return Limit{}
 		}
 	}
+	if opts != nil {
+		if opts.ErrorPolicy != "" {
+			cfg.errorPolicy = opts.ErrorPolicy
+		}
+		cfg.logger = opts.Logger
+	}
 	return cfg
 }
 
-// check 执行限流检查，返回是否应该放行
-// 返回值：(allowed, shouldPassThrough)
-// - allowed=true: 请求被允许
-// - allowed=false, shouldPassThrough=true: 限流器出错或规则无效，降级放行
-// - allowed=false, shouldPassThrough=false: 请求被限流
-func (c *grpcLimiterConfig) check(ctx context.Context, fullMethod string) (allowed bool, shouldPassThrough bool) {
+// check 执行限流检查。
+// 返回值：
+//   - allowed=true: 请求被允许
+//   - allowed=false, passThrough=true: 限流器出错且策略为 fail-open，或规则无效
+//   - allowed=false, passThrough=false, err=nil: 请求被限流
+//   - allowed=false, passThrough=false, err!=nil: 限流器出错且策略为 fail-closed
+func (c *grpcLimiterConfig) check(ctx context.Context, fullMethod string) (allowed bool, passThrough bool, err error) {
 	key := c.keyFunc(ctx, fullMethod)
 	limit := c.limitFunc(ctx, fullMethod)
 
 	// 无效限流规则，放行
 	if limit.Rate <= 0 || limit.Burst <= 0 {
-		return false, true
+		return false, true, nil
 	}
 
 	// 执行限流检查
-	allowed, err := c.limiter.Allow(ctx, key, limit)
+	allowed, err = c.limiter.Allow(ctx, key, limit)
 	if err != nil {
-		// 限流器出错，降级放行
-		return false, true
+		if c.logger != nil {
+			c.logger.Warn("gRPC rate limiter check failed",
+				clog.String("full_method", fullMethod),
+				clog.String("key", key),
+				clog.String("error_policy", string(c.errorPolicy)),
+				clog.Error(err))
+		}
+		if c.errorPolicy == ErrorPolicyFailClosed {
+			return false, false, err
+		}
+		return false, true, nil
 	}
 
-	return allowed, false
+	return allowed, false, nil
 }
 
 // ========================================
@@ -97,10 +124,23 @@ func UnaryServerInterceptor(
 	keyFunc GRPCKeyFunc,
 	limitFunc GRPCLimitFunc,
 ) grpc.UnaryServerInterceptor {
-	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc)
+	return UnaryServerInterceptorWithOptions(limiter, keyFunc, limitFunc, nil)
+}
+
+// UnaryServerInterceptorWithOptions 返回带错误策略的 gRPC 一元调用服务端拦截器。
+func UnaryServerInterceptorWithOptions(
+	limiter Limiter,
+	keyFunc GRPCKeyFunc,
+	limitFunc GRPCLimitFunc,
+	opts *GRPCInterceptorOptions,
+) grpc.UnaryServerInterceptor {
+	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc, opts)
 
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		allowed, passThrough := cfg.check(ctx, info.FullMethod)
+		allowed, passThrough, err := cfg.check(ctx, info.FullMethod)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, "rate limiter unavailable")
+		}
 		if passThrough || allowed {
 			return handler(ctx, req)
 		}
@@ -136,10 +176,23 @@ func UnaryClientInterceptor(
 	keyFunc GRPCKeyFunc,
 	limitFunc GRPCLimitFunc,
 ) grpc.UnaryClientInterceptor {
-	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc)
+	return UnaryClientInterceptorWithOptions(limiter, keyFunc, limitFunc, nil)
+}
+
+// UnaryClientInterceptorWithOptions 返回带错误策略的 gRPC 一元调用客户端拦截器。
+func UnaryClientInterceptorWithOptions(
+	limiter Limiter,
+	keyFunc GRPCKeyFunc,
+	limitFunc GRPCLimitFunc,
+	opts *GRPCInterceptorOptions,
+) grpc.UnaryClientInterceptor {
+	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc, opts)
 
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		allowed, passThrough := cfg.check(ctx, method)
+		allowed, passThrough, err := cfg.check(ctx, method)
+		if err != nil {
+			return status.Error(codes.Unavailable, "rate limiter unavailable")
+		}
 		if passThrough || allowed {
 			return invoker(ctx, method, req, reply, cc, opts...)
 		}
@@ -162,10 +215,23 @@ func StreamServerInterceptor(
 	keyFunc GRPCKeyFunc,
 	limitFunc GRPCLimitFunc,
 ) grpc.StreamServerInterceptor {
-	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc)
+	return StreamServerInterceptorWithOptions(limiter, keyFunc, limitFunc, nil)
+}
+
+// StreamServerInterceptorWithOptions 返回带错误策略的 gRPC 流式调用服务端拦截器。
+func StreamServerInterceptorWithOptions(
+	limiter Limiter,
+	keyFunc GRPCKeyFunc,
+	limitFunc GRPCLimitFunc,
+	opts *GRPCInterceptorOptions,
+) grpc.StreamServerInterceptor {
+	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc, opts)
 
 	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		allowed, passThrough := cfg.check(stream.Context(), info.FullMethod)
+		allowed, passThrough, err := cfg.check(stream.Context(), info.FullMethod)
+		if err != nil {
+			return status.Error(codes.Unavailable, "rate limiter unavailable")
+		}
 		if passThrough || allowed {
 			return handler(srv, stream)
 		}
@@ -184,10 +250,23 @@ func StreamClientInterceptor(
 	keyFunc GRPCKeyFunc,
 	limitFunc GRPCLimitFunc,
 ) grpc.StreamClientInterceptor {
-	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc)
+	return StreamClientInterceptorWithOptions(limiter, keyFunc, limitFunc, nil)
+}
+
+// StreamClientInterceptorWithOptions 返回带错误策略的 gRPC 流式调用客户端拦截器。
+func StreamClientInterceptorWithOptions(
+	limiter Limiter,
+	keyFunc GRPCKeyFunc,
+	limitFunc GRPCLimitFunc,
+	opts *GRPCInterceptorOptions,
+) grpc.StreamClientInterceptor {
+	cfg := newGRPCLimiterConfig(limiter, keyFunc, limitFunc, opts)
 
 	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-		allowed, passThrough := cfg.check(ctx, method)
+		allowed, passThrough, err := cfg.check(ctx, method)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, "rate limiter unavailable")
+		}
 		if passThrough || allowed {
 			return streamer(ctx, desc, cc, method, opts...)
 		}
