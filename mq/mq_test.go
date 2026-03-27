@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/clog"
@@ -24,43 +24,34 @@ func TestConfig(t *testing.T) {
 			JetStream: &JetStreamConfig{
 				StreamPrefix: "",
 			},
+			RedisStream: &RedisStreamConfig{},
 		}
 		cfg.setDefaults()
 
-		assert.Equal(t, "S-", cfg.JetStream.StreamPrefix)
+		require.Equal(t, "S-", cfg.JetStream.StreamPrefix)
+		require.Equal(t, 30*time.Second, cfg.JetStream.AckWait)
+		require.Equal(t, 30*time.Second, cfg.RedisStream.PendingIdle)
 	})
 
 	t.Run("validate 验证配置 - 成功", func(t *testing.T) {
 		tests := []struct {
-			name  string
-			cfg   *Config
-			valid bool
+			name string
+			cfg  *Config
 		}{
 			{
-				name:  "NATS Core",
-				cfg:   &Config{Driver: DriverNATSCore},
-				valid: true,
+				name: "NATS JetStream",
+				cfg:  &Config{Driver: DriverNATSJetStream},
 			},
 			{
-				name:  "NATS JetStream",
-				cfg:   &Config{Driver: DriverNATSJetStream},
-				valid: true,
-			},
-			{
-				name:  "Redis Stream",
-				cfg:   &Config{Driver: DriverRedisStream},
-				valid: true,
+				name: "Redis Stream",
+				cfg:  &Config{Driver: DriverRedisStream},
 			},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				err := tt.cfg.validate()
-				if tt.valid {
-					assert.NoError(t, err)
-				} else {
-					assert.Error(t, err)
-				}
+				require.NoError(t, err)
 			})
 		}
 	})
@@ -69,13 +60,13 @@ func TestConfig(t *testing.T) {
 		t.Run("空驱动", func(t *testing.T) {
 			cfg := &Config{}
 			err := cfg.validate()
-			assert.Error(t, err)
+			require.Error(t, err)
 		})
 
 		t.Run("不支持的驱动", func(t *testing.T) {
 			cfg := &Config{Driver: Driver("unknown")}
 			err := cfg.validate()
-			assert.Error(t, err)
+			require.Error(t, err)
 		})
 	})
 }
@@ -90,15 +81,13 @@ func TestDriverConstants(t *testing.T) {
 		driver Driver
 		want   string
 	}{
-		{"NATS Core", DriverNATSCore, "nats_core"},
 		{"NATS JetStream", DriverNATSJetStream, "nats_jetstream"},
 		{"Redis Stream", DriverRedisStream, "redis_stream"},
-		{"Kafka", DriverKafka, "kafka"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, string(tt.driver))
+			require.Equal(t, tt.want, string(tt.driver))
 		})
 	}
 }
@@ -111,35 +100,25 @@ func TestNew(t *testing.T) {
 	t.Run("配置为空", func(t *testing.T) {
 		mq, err := New(nil)
 		require.Error(t, err)
-		assert.Nil(t, mq)
+		require.Nil(t, mq)
 	})
 
 	t.Run("驱动不支持", func(t *testing.T) {
 		mq, err := New(&Config{Driver: Driver("unknown")})
 		require.Error(t, err)
-		assert.Nil(t, mq)
+		require.Nil(t, mq)
 	})
 
 	t.Run("缺少 NATS 连接器", func(t *testing.T) {
-		mq, err := New(&Config{Driver: DriverNATSCore})
+		mq, err := New(&Config{Driver: DriverNATSJetStream})
 		require.Error(t, err)
-		assert.Nil(t, mq)
+		require.Nil(t, mq)
 	})
 
 	t.Run("缺少 Redis 连接器", func(t *testing.T) {
 		mq, err := New(&Config{Driver: DriverRedisStream})
 		require.Error(t, err)
-		assert.Nil(t, mq)
-	})
-
-	t.Run("成功创建 NATS Core", func(t *testing.T) {
-		mq, err := New(
-			&Config{Driver: DriverNATSCore},
-			WithNATSConnector(&mockNATSConnector{}),
-		)
-		require.NoError(t, err)
-		assert.NotNil(t, mq)
-		_ = mq.Close()
+		require.Nil(t, mq)
 	})
 
 	t.Run("成功创建 NATS JetStream", func(t *testing.T) {
@@ -148,7 +127,7 @@ func TestNew(t *testing.T) {
 			WithNATSConnector(&mockNATSConnector{}),
 		)
 		require.NoError(t, err)
-		assert.NotNil(t, mq)
+		require.NotNil(t, mq)
 		_ = mq.Close()
 	})
 
@@ -158,7 +137,7 @@ func TestNew(t *testing.T) {
 			WithRedisConnector(&mockRedisConnector{}),
 		)
 		require.NoError(t, err)
-		assert.NotNil(t, mq)
+		require.NotNil(t, mq)
 		_ = mq.Close()
 	})
 }
@@ -171,35 +150,35 @@ func TestOptions(t *testing.T) {
 	t.Run("WithLogger", func(t *testing.T) {
 		logger := clog.Discard()
 		mq, err := New(
-			&Config{Driver: DriverNATSCore},
+			&Config{Driver: DriverNATSJetStream},
 			WithNATSConnector(&mockNATSConnector{}),
 			WithLogger(logger),
 		)
 		require.NoError(t, err)
-		assert.NotNil(t, mq)
+		require.NotNil(t, mq)
 		_ = mq.Close()
 	})
 
 	t.Run("WithMeter", func(t *testing.T) {
 		meter := metrics.Discard()
 		mq, err := New(
-			&Config{Driver: DriverNATSCore},
+			&Config{Driver: DriverNATSJetStream},
 			WithNATSConnector(&mockNATSConnector{}),
 			WithMeter(meter),
 		)
 		require.NoError(t, err)
-		assert.NotNil(t, mq)
+		require.NotNil(t, mq)
 		_ = mq.Close()
 	})
 
 	t.Run("默认 Logger 和 Meter", func(t *testing.T) {
 		// 不传任何选项，应该使用默认值
 		mq, err := New(
-			&Config{Driver: DriverNATSCore},
+			&Config{Driver: DriverNATSJetStream},
 			WithNATSConnector(&mockNATSConnector{}),
 		)
 		require.NoError(t, err)
-		assert.NotNil(t, mq)
+		require.NotNil(t, mq)
 		_ = mq.Close()
 	})
 }
@@ -216,10 +195,10 @@ func TestMQ_Publish(t *testing.T) {
 		ctx := context.Background()
 		err := mq.Publish(ctx, "test.subject", []byte("test data"))
 
-		assert.NoError(t, err)
-		assert.True(t, transport.publishCalled)
-		assert.Equal(t, "test.subject", transport.lastTopic)
-		assert.Equal(t, []byte("test data"), transport.lastData)
+		require.NoError(t, err)
+		require.True(t, transport.publishCalled)
+		require.Equal(t, "test.subject", transport.lastTopic)
+		require.Equal(t, []byte("test data"), transport.lastData)
 	})
 
 	t.Run("发布失败", func(t *testing.T) {
@@ -229,7 +208,7 @@ func TestMQ_Publish(t *testing.T) {
 		ctx := context.Background()
 		err := mq.Publish(ctx, "test.subject", []byte("test data"))
 
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 
 	t.Run("带 Headers 发布", func(t *testing.T) {
@@ -240,8 +219,8 @@ func TestMQ_Publish(t *testing.T) {
 		headers := Headers{"trace-id": "abc123"}
 		err := mq.Publish(ctx, "test.subject", []byte("test data"), WithHeaders(headers))
 
-		assert.NoError(t, err)
-		assert.Equal(t, headers, transport.lastPublishOpts.Headers)
+		require.NoError(t, err)
+		require.Equal(t, headers, transport.lastPublishOpts.Headers)
 	})
 
 	t.Run("带单个 Header 发布", func(t *testing.T) {
@@ -251,19 +230,8 @@ func TestMQ_Publish(t *testing.T) {
 		ctx := context.Background()
 		err := mq.Publish(ctx, "test.subject", []byte("test data"), WithHeader("x-key", "x-value"))
 
-		assert.NoError(t, err)
-		assert.Equal(t, "x-value", transport.lastPublishOpts.Headers["x-key"])
-	})
-
-	t.Run("带 Key 发布", func(t *testing.T) {
-		transport := &mockTransport{}
-		mq := newMQ(transport, clog.Discard(), metrics.Discard())
-
-		ctx := context.Background()
-		err := mq.Publish(ctx, "test.subject", []byte("test data"), WithKey("partition-key"))
-
-		assert.NoError(t, err)
-		assert.Equal(t, "partition-key", transport.lastPublishOpts.Key)
+		require.NoError(t, err)
+		require.Equal(t, "x-value", transport.lastPublishOpts.Headers["x-key"])
 	})
 }
 
@@ -281,9 +249,9 @@ func TestMQ_Subscribe(t *testing.T) {
 
 		sub, err := mq.Subscribe(ctx, "test.subject", handler)
 
-		assert.NoError(t, err)
-		assert.NotNil(t, sub)
-		assert.True(t, transport.subscribeCalled)
+		require.NoError(t, err)
+		require.NotNil(t, sub)
+		require.True(t, transport.subscribeCalled)
 	})
 
 	t.Run("订阅失败", func(t *testing.T) {
@@ -295,8 +263,8 @@ func TestMQ_Subscribe(t *testing.T) {
 
 		sub, err := mq.Subscribe(ctx, "test.subject", handler)
 
-		assert.Error(t, err)
-		assert.Nil(t, sub)
+		require.Error(t, err)
+		require.Nil(t, sub)
 	})
 
 	t.Run("带 QueueGroup 订阅", func(t *testing.T) {
@@ -308,23 +276,37 @@ func TestMQ_Subscribe(t *testing.T) {
 
 		sub, err := mq.Subscribe(ctx, "test.subject", handler, WithQueueGroup("test-group"))
 
-		assert.NoError(t, err)
-		assert.NotNil(t, sub)
-		assert.Equal(t, "test-group", transport.lastSubscribeOpts.QueueGroup)
+		require.NoError(t, err)
+		require.NotNil(t, sub)
+		require.Equal(t, "test-group", transport.lastSubscribeOpts.QueueGroup)
 	})
 
-	t.Run("手动确认模式", func(t *testing.T) {
+	t.Run("手动确认模式（默认）", func(t *testing.T) {
 		transport := &mockTransport{}
 		mq := newMQ(transport, clog.Discard(), metrics.Discard())
 
 		ctx := context.Background()
 		handler := func(msg Message) error { return nil }
 
-		sub, err := mq.Subscribe(ctx, "test.subject", handler, WithManualAck())
+		sub, err := mq.Subscribe(ctx, "test.subject", handler)
 
-		assert.NoError(t, err)
-		assert.NotNil(t, sub)
-		assert.False(t, transport.lastSubscribeOpts.AutoAck)
+		require.NoError(t, err)
+		require.NotNil(t, sub)
+		require.False(t, transport.lastSubscribeOpts.AutoAck)
+	})
+
+	t.Run("开启自动确认", func(t *testing.T) {
+		transport := &mockTransport{}
+		mq := newMQ(transport, clog.Discard(), metrics.Discard())
+
+		ctx := context.Background()
+		handler := func(msg Message) error { return nil }
+
+		sub, err := mq.Subscribe(ctx, "test.subject", handler, WithAutoAck())
+
+		require.NoError(t, err)
+		require.NotNil(t, sub)
+		require.True(t, transport.lastSubscribeOpts.AutoAck)
 	})
 
 	t.Run("带 Durable 订阅", func(t *testing.T) {
@@ -336,9 +318,9 @@ func TestMQ_Subscribe(t *testing.T) {
 
 		sub, err := mq.Subscribe(ctx, "test.subject", handler, WithDurable("durable-name"))
 
-		assert.NoError(t, err)
-		assert.NotNil(t, sub)
-		assert.Equal(t, "durable-name", transport.lastSubscribeOpts.DurableName)
+		require.NoError(t, err)
+		require.NotNil(t, sub)
+		require.Equal(t, "durable-name", transport.lastSubscribeOpts.DurableName)
 	})
 
 	t.Run("设置 BatchSize", func(t *testing.T) {
@@ -350,9 +332,9 @@ func TestMQ_Subscribe(t *testing.T) {
 
 		sub, err := mq.Subscribe(ctx, "test.subject", handler, WithBatchSize(50))
 
-		assert.NoError(t, err)
-		assert.NotNil(t, sub)
-		assert.Equal(t, 50, transport.lastSubscribeOpts.BatchSize)
+		require.NoError(t, err)
+		require.NotNil(t, sub)
+		require.Equal(t, 50, transport.lastSubscribeOpts.BatchSize)
 	})
 
 	t.Run("设置 MaxInflight", func(t *testing.T) {
@@ -364,39 +346,9 @@ func TestMQ_Subscribe(t *testing.T) {
 
 		sub, err := mq.Subscribe(ctx, "test.subject", handler, WithMaxInflight(100))
 
-		assert.NoError(t, err)
-		assert.NotNil(t, sub)
-		assert.Equal(t, 100, transport.lastSubscribeOpts.MaxInflight)
-	})
-
-	t.Run("设置 BufferSize", func(t *testing.T) {
-		transport := &mockTransport{}
-		mq := newMQ(transport, clog.Discard(), metrics.Discard())
-
-		ctx := context.Background()
-		handler := func(msg Message) error { return nil }
-
-		sub, err := mq.Subscribe(ctx, "test.subject", handler, WithBufferSize(500))
-
-		assert.NoError(t, err)
-		assert.NotNil(t, sub)
-		assert.Equal(t, 500, transport.lastSubscribeOpts.BufferSize)
-	})
-
-	t.Run("设置死信队列", func(t *testing.T) {
-		transport := &mockTransport{}
-		mq := newMQ(transport, clog.Discard(), metrics.Discard())
-
-		ctx := context.Background()
-		handler := func(msg Message) error { return nil }
-
-		sub, err := mq.Subscribe(ctx, "test.subject", handler, WithDeadLetter(3, "dlq-topic"))
-
-		assert.NoError(t, err)
-		assert.NotNil(t, sub)
-		assert.NotNil(t, transport.lastSubscribeOpts.DeadLetter)
-		assert.Equal(t, 3, transport.lastSubscribeOpts.DeadLetter.MaxRetries)
-		assert.Equal(t, "dlq-topic", transport.lastSubscribeOpts.DeadLetter.Topic)
+		require.NoError(t, err)
+		require.NotNil(t, sub)
+		require.Equal(t, 100, transport.lastSubscribeOpts.MaxInflight)
 	})
 }
 
@@ -411,8 +363,8 @@ func TestMQ_Close(t *testing.T) {
 
 		err := mq.Close()
 
-		assert.NoError(t, err)
-		assert.True(t, transport.closeCalled)
+		require.NoError(t, err)
+		require.True(t, transport.closeCalled)
 	})
 
 	t.Run("关闭失败", func(t *testing.T) {
@@ -421,7 +373,33 @@ func TestMQ_Close(t *testing.T) {
 
 		err := mq.Close()
 
-		assert.Error(t, err)
+		require.Error(t, err)
+	})
+
+	t.Run("Close 幂等", func(t *testing.T) {
+		transport := &mockTransport{}
+		mq := newMQ(transport, clog.Discard(), metrics.Discard())
+
+		require.NoError(t, mq.Close())
+		require.NoError(t, mq.Close()) // 第二次关闭不应报错
+	})
+
+	t.Run("关闭后 Publish 返回 ErrClosed", func(t *testing.T) {
+		transport := &mockTransport{}
+		mq := newMQ(transport, clog.Discard(), metrics.Discard())
+
+		require.NoError(t, mq.Close())
+		err := mq.Publish(context.Background(), "topic", []byte("data"))
+		require.ErrorIs(t, err, ErrClosed)
+	})
+
+	t.Run("关闭后 Subscribe 返回 ErrClosed", func(t *testing.T) {
+		transport := &mockTransport{}
+		mq := newMQ(transport, clog.Discard(), metrics.Discard())
+
+		require.NoError(t, mq.Close())
+		_, err := mq.Subscribe(context.Background(), "topic", func(msg Message) error { return nil })
+		require.ErrorIs(t, err, ErrClosed)
 	})
 }
 
@@ -430,55 +408,56 @@ func TestMQ_Close(t *testing.T) {
 // ============================================================
 
 func TestMQ_AutoAckBehavior(t *testing.T) {
-	t.Run("Handler 成功时自动 Ack", func(t *testing.T) {
+	t.Run("AutoAck 模式 Handler 成功时自动 Ack", func(t *testing.T) {
 		testMsg := &mockMessage{}
-		transport := &mockTransport{
-			caps: CapabilitiesNATSJetStream,
-			handler: func(msg Message) error {
-				// 模拟 Handler 返回 nil
-				return nil
-			},
-		}
-		// 覆盖 Subscribe 方法，直接调用 handler 来测试 AutoAck 行为
-		originalHandler := transport.handler
-		transport = &mockTransport{
-			caps: CapabilitiesNATSJetStream,
-		}
+		m := &mq{logger: clog.Discard(), meter: metrics.Discard(), driver: DriverNATSJetStream}
+		wrapped := m.wrapHandler("test.topic", func(msg Message) error {
+			return nil
+		}, subscribeOptions{AutoAck: true})
 
-		mq := newMQ(transport, clog.Discard(), metrics.Discard())
-
-		ctx := context.Background()
-		_, _ = mq.Subscribe(ctx, "test.subject", originalHandler, WithAutoAck())
-
-		// 模拟 AutoAck 包装后的行为
-		err := originalHandler(testMsg)
-		assert.NoError(t, err)
-		// 在 AutoAck 模式下，成功后应该调用 Ack
-		_ = testMsg.Ack()
-		assert.True(t, testMsg.ackCalled, "成功时应该调用 Ack")
-		assert.False(t, testMsg.nakCalled)
+		err := wrapped(testMsg)
+		require.NoError(t, err)
+		require.True(t, testMsg.ackCalled, "成功时应该调用 Ack")
+		require.False(t, testMsg.nakCalled)
 	})
 
-	t.Run("Handler 失败时行为", func(t *testing.T) {
+	t.Run("AutoAck 模式 Handler 失败时自动 Nak", func(t *testing.T) {
 		testMsg := &mockMessage{}
-		transport := &mockTransport{
-			caps: CapabilitiesNATSJetStream, // 支持 Nak
-			handler: func(msg Message) error {
-				return errors.New("handler failed")
-			},
-		}
-		mq := newMQ(transport, clog.Discard(), metrics.Discard())
+		m := &mq{logger: clog.Discard(), meter: metrics.Discard(), driver: DriverNATSJetStream}
+		wrapped := m.wrapHandler("test.topic", func(msg Message) error {
+			return errors.New("handler failed")
+		}, subscribeOptions{AutoAck: true})
 
-		ctx := context.Background()
-		_, _ = mq.Subscribe(ctx, "test.subject", transport.handler, WithAutoAck())
+		err := wrapped(testMsg)
+		require.Error(t, err)
+		require.True(t, testMsg.nakCalled, "失败时应该调用 Nak")
+		require.False(t, testMsg.ackCalled)
+	})
 
-		// 模拟 AutoAck 包装后的行为
-		err := transport.handler(testMsg)
-		assert.Error(t, err)
-		// 失败时应该调用 Nak
-		_ = testMsg.Nak()
-		assert.True(t, testMsg.nakCalled)
-		assert.False(t, testMsg.ackCalled)
+	t.Run("ManualAck 模式不自动调用 Ack/Nak", func(t *testing.T) {
+		testMsg := &mockMessage{}
+		m := &mq{logger: clog.Discard(), meter: metrics.Discard(), driver: DriverNATSJetStream}
+		wrapped := m.wrapHandler("test.topic", func(msg Message) error {
+			return nil
+		}, subscribeOptions{AutoAck: false})
+
+		err := wrapped(testMsg)
+		require.NoError(t, err)
+		require.False(t, testMsg.ackCalled, "ManualAck 模式不应自动 Ack")
+		require.False(t, testMsg.nakCalled)
+	})
+
+	t.Run("AutoAck 模式 Nak 返回 ErrNotSupported 时不应记录错误", func(t *testing.T) {
+		// 模拟 Redis 消息，Nak 返回 ErrNotSupported
+		testMsg := &mockMessageNakNotSupported{}
+		m := &mq{logger: clog.Discard(), meter: metrics.Discard(), driver: DriverRedisStream}
+		wrapped := m.wrapHandler("test.topic", func(msg Message) error {
+			return errors.New("handler failed")
+		}, subscribeOptions{AutoAck: true})
+
+		// 不应 panic，ErrNotSupported 应被静默忽略
+		err := wrapped(testMsg)
+		require.Error(t, err)
 	})
 }
 
@@ -491,38 +470,38 @@ func TestHeaders(t *testing.T) {
 		original := Headers{"key1": "value1", "key2": "value2"}
 		cloned := original.Clone()
 
-		assert.Equal(t, original, cloned)
+		require.Equal(t, original, cloned)
 
 		// 修改克隆不影响原始
 		cloned["key1"] = "modified"
-		assert.Equal(t, "value1", original["key1"])
-		assert.Equal(t, "modified", cloned["key1"])
+		require.Equal(t, "value1", original["key1"])
+		require.Equal(t, "modified", cloned["key1"])
 	})
 
 	t.Run("nil Headers Clone 返回 nil", func(t *testing.T) {
 		var h Headers
 		cloned := h.Clone()
-		assert.Nil(t, cloned)
+		require.Nil(t, cloned)
 	})
 
 	t.Run("Get 获取值", func(t *testing.T) {
 		h := Headers{"key": "value"}
-		assert.Equal(t, "value", h.Get("key"))
-		assert.Equal(t, "", h.Get("nonexistent"))
+		require.Equal(t, "value", h.Get("key"))
+		require.Equal(t, "", h.Get("nonexistent"))
 	})
 
 	t.Run("nil Headers Get 返回空字符串", func(t *testing.T) {
 		var h Headers
-		assert.Equal(t, "", h.Get("key"))
+		require.Equal(t, "", h.Get("key"))
 	})
 
 	t.Run("Set 设置值", func(t *testing.T) {
 		h := Headers{}
 		h.Set("key", "value")
-		assert.Equal(t, "value", h["key"])
+		require.Equal(t, "value", h["key"])
 
 		h.Set("key", "new-value")
-		assert.Equal(t, "new-value", h["key"])
+		require.Equal(t, "new-value", h["key"])
 	})
 }
 
@@ -533,68 +512,16 @@ func TestHeaders(t *testing.T) {
 func TestDefaultOptions(t *testing.T) {
 	t.Run("默认发布选项", func(t *testing.T) {
 		opts := defaultPublishOptions()
-		// Headers 默认为 nil，使用 WithHeaders/WithHeader 时才会创建
-		assert.Nil(t, opts.Headers)
-		assert.Empty(t, opts.Key)
+		require.Nil(t, opts.Headers)
 	})
 
 	t.Run("默认订阅选项", func(t *testing.T) {
 		opts := defaultSubscribeOptions()
-		assert.True(t, opts.AutoAck)
-		assert.Equal(t, 10, opts.BatchSize)
-		assert.Equal(t, 100, opts.BufferSize)
-		assert.Empty(t, opts.QueueGroup)
-		assert.Empty(t, opts.DurableName)
-		assert.Equal(t, 0, opts.MaxInflight)
-		assert.Nil(t, opts.DeadLetter)
-	})
-}
-
-// ============================================================
-// Capabilities 测试
-// ============================================================
-
-func TestCapabilities(t *testing.T) {
-	t.Run("NATS Core 能力", func(t *testing.T) {
-		caps := CapabilitiesNATSCore
-		assert.False(t, caps.Persistence)
-		assert.False(t, caps.ExactlyOnce)
-		assert.False(t, caps.Nak)
-		assert.False(t, caps.DeadLetter)
-		assert.True(t, caps.QueueGroup)
-		assert.False(t, caps.OrderedDelivery)
-		assert.False(t, caps.BatchConsume)
-		assert.False(t, caps.DelayedMessage)
-	})
-
-	t.Run("NATS JetStream 能力", func(t *testing.T) {
-		caps := CapabilitiesNATSJetStream
-		assert.True(t, caps.Persistence)
-		assert.True(t, caps.ExactlyOnce)
-		assert.True(t, caps.Nak)
-		assert.True(t, caps.QueueGroup)
-		assert.True(t, caps.OrderedDelivery)
-		assert.True(t, caps.BatchConsume)
-	})
-
-	t.Run("Redis Stream 能力", func(t *testing.T) {
-		caps := CapabilitiesRedisStream
-		assert.True(t, caps.Persistence)
-		assert.False(t, caps.ExactlyOnce)
-		assert.False(t, caps.Nak)
-		assert.True(t, caps.QueueGroup)
-		assert.True(t, caps.OrderedDelivery)
-		assert.True(t, caps.BatchConsume)
-	})
-
-	t.Run("Kafka 能力（预留）", func(t *testing.T) {
-		caps := CapabilitiesKafka
-		assert.True(t, caps.Persistence)
-		assert.True(t, caps.ExactlyOnce)
-		assert.True(t, caps.QueueGroup)
-		assert.True(t, caps.OrderedDelivery)
-		assert.True(t, caps.BatchConsume)
-		assert.True(t, caps.DeadLetter)
+		require.False(t, opts.AutoAck) // 默认手动确认
+		require.Equal(t, 10, opts.BatchSize)
+		require.Empty(t, opts.QueueGroup)
+		require.Empty(t, opts.DurableName)
+		require.Equal(t, 0, opts.MaxInflight)
 	})
 }
 
@@ -603,16 +530,16 @@ func TestCapabilities(t *testing.T) {
 // ============================================================
 
 func TestMetricConstants(t *testing.T) {
-	assert.Equal(t, "mq.publish.total", MetricPublishTotal)
-	assert.Equal(t, "mq.publish.duration", MetricPublishDuration)
-	assert.Equal(t, "mq.consume.total", MetricConsumeTotal)
-	assert.Equal(t, "mq.handle.duration", MetricHandleDuration)
+	require.Equal(t, "mq.publish.total", MetricPublishTotal)
+	require.Equal(t, "mq.publish.duration", MetricPublishDuration)
+	require.Equal(t, "mq.consume.total", MetricConsumeTotal)
+	require.Equal(t, "mq.handle.duration", MetricHandleDuration)
 }
 
 func TestLabelConstants(t *testing.T) {
-	assert.Equal(t, "topic", LabelTopic)
-	assert.Equal(t, "status", LabelStatus)
-	assert.Equal(t, "driver", LabelDriver)
+	require.Equal(t, "topic", LabelTopic)
+	require.Equal(t, "status", LabelStatus)
+	require.Equal(t, "driver", LabelDriver)
 }
 
 // ============================================================
@@ -632,7 +559,6 @@ type mockTransport struct {
 	lastPublishOpts   publishOptions
 	lastSubscribeOpts subscribeOptions
 	handler           Handler
-	caps              Capabilities
 }
 
 func (m *mockTransport) Publish(ctx context.Context, topic string, data []byte, opts publishOptions) error {
@@ -656,10 +582,6 @@ func (m *mockTransport) Subscribe(subscribeCtx context.Context, topic string, ha
 func (m *mockTransport) Close() error {
 	m.closeCalled = true
 	return m.closeError
-}
-
-func (m *mockTransport) Capabilities() Capabilities {
-	return m.caps
 }
 
 // mockSubscription 是 Subscription 的 mock 实现
@@ -772,11 +694,21 @@ func (m *mockRedisConnector) GetClient() *redis.Client {
 // 辅助函数
 // ============================================================
 
+// mockMessageNakNotSupported 模拟 Nak 返回 ErrNotSupported 的消息（如 Redis Stream）
+type mockMessageNakNotSupported struct {
+	mockMessage
+}
+
+func (m *mockMessageNakNotSupported) Nak() error {
+	return ErrNotSupported
+}
+
 // newMQ 创建一个用于测试的 MQ 实例
 func newMQ(transport Transport, logger clog.Logger, meter metrics.Meter) MQ {
 	return &mq{
 		transport: transport,
 		logger:    logger,
 		meter:     meter,
+		driver:    DriverNATSJetStream,
 	}
 }

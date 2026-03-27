@@ -58,6 +58,30 @@ func (t *natsJetStreamTransport) Publish(ctx context.Context, topic string, data
 	return err
 }
 
+// headersToNATS 将 Headers 转换为 nats.Header
+func headersToNATS(h Headers) nats.Header {
+	if len(h) == 0 {
+		return nil
+	}
+	nh := make(nats.Header, len(h))
+	for k, v := range h {
+		nh.Set(k, v)
+	}
+	return nh
+}
+
+// headersFromNATS 将 nats.Header 转换为 Headers
+func headersFromNATS(nh nats.Header) Headers {
+	if len(nh) == 0 {
+		return nil
+	}
+	h := make(Headers, len(nh))
+	for k := range nh {
+		h[k] = nh.Get(k)
+	}
+	return h
+}
+
 // Subscribe 订阅消息
 func (t *natsJetStreamTransport) Subscribe(ctx context.Context, topic string, handler Handler, opts subscribeOptions) (Subscription, error) {
 	// 自动创建/更新 Stream（如果配置开启）
@@ -88,6 +112,11 @@ func (t *natsJetStreamTransport) Subscribe(ctx context.Context, topic string, ha
 		consumerCfg.Durable = sanitizeName(opts.DurableName)
 	}
 
+	// 设置 AckWait（等待 Ack 的超时时间）
+	if t.cfg.AckWait > 0 {
+		consumerCfg.AckWait = t.cfg.AckWait
+	}
+
 	// 设置 MaxAckPending（背压控制）
 	if opts.MaxInflight > 0 {
 		consumerCfg.MaxAckPending = opts.MaxInflight
@@ -114,11 +143,6 @@ func (t *natsJetStreamTransport) Subscribe(ctx context.Context, topic string, ha
 	}
 
 	return newJetStreamSubscription(cons, ctx), nil
-}
-
-// Capabilities 返回能力描述
-func (t *natsJetStreamTransport) Capabilities() Capabilities {
-	return CapabilitiesNATSJetStream
 }
 
 // Close 关闭 Transport

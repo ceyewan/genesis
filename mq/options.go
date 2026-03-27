@@ -9,9 +9,6 @@ type PublishOption func(*publishOptions)
 type publishOptions struct {
 	// Headers 消息头
 	Headers Headers
-
-	// Key 消息 Key（用于分区路由，Kafka 场景预留）
-	Key string
 }
 
 // defaultPublishOptions 返回默认发布选项
@@ -42,16 +39,6 @@ func WithHeader(key, value string) PublishOption {
 	}
 }
 
-// WithKey 设置消息 Key（用于分区路由）
-//
-// 注意：当前仅预留，NATS/Redis 不使用此选项。
-// Kafka 场景下用于保证相同 Key 的消息路由到同一分区。
-func WithKey(key string) PublishOption {
-	return func(o *publishOptions) {
-		o.Key = key
-	}
-}
-
 // ==================== 订阅选项 ====================
 
 // SubscribeOption 订阅选项
@@ -66,6 +53,7 @@ type subscribeOptions struct {
 	// AutoAck 是否自动确认
 	// true: Handler 返回 nil 自动 Ack，返回 error 自动 Nak
 	// false: 用户在 Handler 中手动调用 msg.Ack()/Nak()
+	// 默认为 false（手动确认）
 	AutoAck bool
 
 	// DurableName 持久化订阅名称
@@ -73,61 +61,40 @@ type subscribeOptions struct {
 	DurableName string
 
 	// BatchSize 批量拉取大小
-	// Redis Stream: XREADGROUP COUNT 参数
-	// JetStream: Fetch batch size
+	// Redis Stream: XREADGROUP COUNT / XREAD COUNT 参数
+	// JetStream: 当前实现使用 consumer.Consume() 推送模式，此参数无效
 	BatchSize int
 
 	// MaxInflight 最大在途消息数
 	// JetStream: MaxAckPending
 	MaxInflight int
-
-	// BufferSize Channel 缓冲区大小（用于内部消息分发）
-	BufferSize int
-
-	// DeadLetter 死信队列配置
-	DeadLetter *DeadLetterConfig
-}
-
-// DeadLetterConfig 死信队列配置
-//
-// 注意：当前为预留配置，各驱动暂未实现。
-// 未来实现计划：
-//   - JetStream: 利用 RedeliveryPolicy + 自定义逻辑
-//   - Redis Stream: 基于 Pending 列表 + XCLAIM 实现
-//   - Kafka: 发送到 error topic
-type DeadLetterConfig struct {
-	// MaxRetries 最大重试次数，超过后进入死信队列
-	MaxRetries int
-
-	// Topic 死信队列主题
-	Topic string
 }
 
 // defaultSubscribeOptions 返回默认订阅选项
 func defaultSubscribeOptions() subscribeOptions {
 	return subscribeOptions{
-		AutoAck:    true,
-		BatchSize:  10,
-		BufferSize: 100,
+		AutoAck:   false, // 默认手动确认
+		BatchSize: 10,
 	}
 }
 
-// WithQueueGroup 设置队列组（用于负载均衡）
+// WithQueueGroup 设置消费组（用于竞争消费/负载均衡）
 //
-// 同一队列组内的消费者竞争消费消息，实现负载均衡。
-// 不同队列组独立消费，实现广播。
+// 同一消费组内的消费者竞争消费消息，实现负载均衡。
+// 不设置时为独立消费（广播）模式。
 //
-// 对应关系：
-//   - NATS: Queue Subscribe
-//   - Redis Stream: Consumer Group
-//   - Kafka (未来): Consumer Group
+// 驱动映射（语义有差异）：
+//   - NATS JetStream: 映射为 durable consumer 名称，多实例共享同一 durable 实现负载均衡
+//   - Redis Stream: 映射为 consumer group 名称，组是持久化进度的承载体
+//
+// 注意：两者"持久化"的载体不同，JetStream 持久化在 durable consumer，Redis 持久化在 group。
 func WithQueueGroup(name string) SubscribeOption {
 	return func(o *subscribeOptions) {
 		o.QueueGroup = name
 	}
 }
 
-// WithManualAck 关闭自动确认
+// WithManualAck 关闭自动确认（默认行为）
 //
 // 启用后需要在 Handler 中手动调用 msg.Ack() 或 msg.Nak()。
 // 适用于需要精确控制确认时机的场景。
@@ -142,17 +109,25 @@ func WithManualAck() SubscribeOption {
 	}
 }
 
-// WithAutoAck 开启自动确认（默认行为）
+// WithAutoAck 开启自动确认
+//
+// 启用后 Handler 返回 nil 时自动 Ack，返回 error 时自动 Nak。
+// 注意：这会改变默认行为，确保业务逻辑能正确处理。
 func WithAutoAck() SubscribeOption {
 	return func(o *subscribeOptions) {
 		o.AutoAck = true
 	}
 }
 
-// WithDurable 设置持久化订阅名称
+// WithDurable 设置消费者实例名称
 //
-// 持久化订阅会记录消费进度，重启后继续消费。
-// 仅 JetStream / Redis Stream 有效。
+// 驱动映射（语义不同，请注意区分）：
+//   - NATS JetStream: 映射为 durable consumer 名称，是消费进度游标的身份标识；
+//     未设置 WithQueueGroup 时生效，设置后 WithQueueGroup 优先。
+//   - Redis Stream: 映射为 consumer name，是同一 group 内消费者实例的标识；
+//     需与 WithQueueGroup 配合使用，单独设置无持久化效果。
+//
+// 如需跨驱动共享消费进度，请使用 WithQueueGroup。
 func WithDurable(name string) SubscribeOption {
 	return func(o *subscribeOptions) {
 		o.DurableName = name
@@ -163,6 +138,10 @@ func WithDurable(name string) SubscribeOption {
 //
 // 影响单次拉取的消息数量，适当增大可提升吞吐量。
 // 默认值：10
+//
+// 驱动支持情况：
+//   - Redis Stream：有效，对应 XREADGROUP COUNT / XREAD COUNT 参数。
+//   - JetStream：当前实现使用 consumer.Consume() 推送模式，此参数无效。
 func WithBatchSize(size int) SubscribeOption {
 	return func(o *subscribeOptions) {
 		if size > 0 {
@@ -179,30 +158,6 @@ func WithMaxInflight(n int) SubscribeOption {
 	return func(o *subscribeOptions) {
 		if n > 0 {
 			o.MaxInflight = n
-		}
-	}
-}
-
-// WithBufferSize 设置内部缓冲区大小
-//
-// 默认值：100
-func WithBufferSize(size int) SubscribeOption {
-	return func(o *subscribeOptions) {
-		if size > 0 {
-			o.BufferSize = size
-		}
-	}
-}
-
-// WithDeadLetter 设置死信队列配置
-//
-// 注意：当前为预留配置，各驱动暂未实现。
-// 调用此选项不会报错，但不会生效。
-func WithDeadLetter(maxRetries int, topic string) SubscribeOption {
-	return func(o *subscribeOptions) {
-		o.DeadLetter = &DeadLetterConfig{
-			MaxRetries: maxRetries,
-			Topic:      topic,
 		}
 	}
 }

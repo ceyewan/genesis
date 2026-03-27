@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,13 +23,15 @@ const (
 // redisStreamTransport Redis Stream 传输层实现
 type redisStreamTransport struct {
 	client *redis.Client
+	cfg    *RedisStreamConfig
 	logger clog.Logger
 }
 
 // newRedisStreamTransport 创建 Redis Stream Transport
-func newRedisStreamTransport(conn connector.RedisConnector, logger clog.Logger) *redisStreamTransport {
+func newRedisStreamTransport(conn connector.RedisConnector, cfg *RedisStreamConfig, logger clog.Logger) *redisStreamTransport {
 	return &redisStreamTransport{
 		client: conn.GetClient(),
+		cfg:    cfg,
 		logger: logger,
 	}
 }
@@ -47,10 +50,16 @@ func (t *redisStreamTransport) Publish(ctx context.Context, topic string, data [
 		values[redisFieldHeaders] = headersJSON
 	}
 
-	return t.client.XAdd(ctx, &redis.XAddArgs{
+	args := &redis.XAddArgs{
 		Stream: topic,
 		Values: values,
-	}).Err()
+	}
+	if t.cfg.MaxLen > 0 {
+		args.MaxLen = t.cfg.MaxLen
+		args.Approx = t.cfg.Approximate
+	}
+
+	return t.client.XAdd(ctx, args).Err()
 }
 
 // Subscribe 订阅消息
@@ -59,6 +68,14 @@ func (t *redisStreamTransport) Subscribe(ctx context.Context, topic string, hand
 	sub := &redisStreamSubscription{
 		cancel: cancel,
 		done:   make(chan struct{}),
+	}
+
+	// Consumer Group 创建在 goroutine 外执行，确保错误能在初始化阶段暴露
+	if opts.QueueGroup != "" {
+		if err := t.client.XGroupCreateMkStream(ctx, topic, opts.QueueGroup, "$").Err(); err != nil && !isGroupExistsError(err) {
+			cancel()
+			return nil, xerrors.Wrap(err, "create consumer group failed")
+		}
 	}
 
 	go func() {
@@ -76,6 +93,11 @@ func (t *redisStreamTransport) Subscribe(ctx context.Context, topic string, hand
 	return sub, nil
 }
 
+// isGroupExistsError 判断是否为 Consumer Group 已存在错误
+func isGroupExistsError(err error) bool {
+	return strings.Contains(err.Error(), "BUSYGROUP")
+}
+
 // consumeWithGroup Consumer Group 模式消费
 //
 // 实现策略：
@@ -88,15 +110,10 @@ func (t *redisStreamTransport) consumeWithGroup(ctx context.Context, topic strin
 		consumer = fmt.Sprintf("%s-%d", group, time.Now().UnixNano())
 	}
 
-	// 尝试创建 Consumer Group（忽略已存在错误）
-	_ = t.client.XGroupCreateMkStream(ctx, topic, group, "$").Err()
-
 	// Pending 消息 claim 的配置
-	const (
-		pendingIdleTime   = 30 * time.Second // 消息空闲超过此时间可被 claim
-		pendingClaimCount = 10               // 每次最多 claim 多少条
-		pendingCheckRatio = 5                // 每 N 次循环检查一次 pending
-	)
+	pendingClaimCount := 10              // 每次最多 claim 多少条
+	pendingCheckRatio := 5               // 每 N 次循环检查一次 pending
+	pendingIdleTime := t.cfg.PendingIdle // 消息空闲超过此时间可被 claim
 	loopCount := 0
 	claimCursor := "0-0" // XAutoClaim 游标，避免每次从头扫描
 
@@ -288,11 +305,6 @@ func (t *redisStreamTransport) Close() error {
 	return nil
 }
 
-// Capabilities 返回能力描述
-func (t *redisStreamTransport) Capabilities() Capabilities {
-	return CapabilitiesRedisStream
-}
-
 // ==================== Message 实现 ====================
 
 // redisStreamMessage Redis Stream 消息实现
@@ -334,9 +346,10 @@ func (m *redisStreamMessage) Ack() error {
 }
 
 func (m *redisStreamMessage) Nak() error {
-	// Redis Stream 没有原生 Nak
-	// 消息会留在 Pending 列表，可通过 XCLAIM 重新获取
-	return nil
+	// Redis Stream 没有原生 Nak 语义。
+	// 返回 ErrNotSupported，让调用方知道此操作在 Redis 下不成立。
+	// 消息会留在 Pending 列表，由 XAUTOCLAIM 在 PendingIdle 超时后重新认领。
+	return ErrNotSupported
 }
 
 func (m *redisStreamMessage) ID() string {

@@ -65,7 +65,7 @@ func main() {
 		fatalAndExit(obs.Logger, "connect nats failed", clog.Error(err))
 	}
 
-	mqClient, err := mq.New(&mq.Config{Driver: mq.DriverNATSCore}, mq.WithNATSConnector(natsConn), mq.WithLogger(obs.Logger), mq.WithMeter(obs.Meter))
+	mqClient, err := mq.New(&mq.Config{Driver: mq.DriverNATSJetStream}, mq.WithNATSConnector(natsConn), mq.WithLogger(obs.Logger), mq.WithMeter(obs.Meter))
 	if err != nil {
 		fatalAndExit(obs.Logger, "new mq failed", clog.Error(err))
 	}

@@ -61,48 +61,41 @@ type Message interface {
 	// Ack 确认消息处理成功
 	//
 	// 不同后端行为：
-	//   - NATS Core: 无操作（无持久化语义）
-	//   - NATS JetStream: 发送 Ack 到服务端
-	//   - Redis Stream: Consumer Group 模式下执行 XACK
-	//   - Kafka (未来): 提交 offset
+	//   - NATS JetStream: 发送 Ack 到服务端，消息从 pending 移除
+	//   - Redis Stream: Consumer Group 模式下执行 XACK；广播模式下无操作
 	Ack() error
 
 	// Nak 拒绝消息，请求重投
 	//
 	// 不同后端行为：
-	//   - NATS Core: 无操作
-	//   - NATS JetStream: 发送 Nak，触发重投
-	//   - Redis Stream: 无原生支持，消息留在 Pending 列表
-	//   - Kafka (未来): 不提交 offset，触发 rebalance 后重投
+	//   - NATS JetStream: 触发消息立即重投
+	//   - Redis Stream: 返回 ErrNotSupported；消息留在 Pending 列表，
+	//     由 XAUTOCLAIM 在 PendingIdle 超时后重新认领
 	//
-	// 注意：部分后端不支持真正的 Nak，错误处理需结合业务设计。
+	// 调用方应通过 errors.Is(err, ErrNotSupported) 区分"不支持"与真实错误。
+	// AutoAck 模式下 ErrNotSupported 会被自动忽略。
 	Nak() error
 
 	// ID 获取消息唯一标识（可选）
 	//
 	// 不同后端返回值：
-	//   - NATS Core: 空字符串
-	//   - NATS JetStream: Stream sequence
-	//   - Redis Stream: 消息 ID (如 "1234567890-0")
+	//   - NATS JetStream: "<stream>:<sequence>"（如 "S-orders:42"）
+	//   - Redis Stream: 消息 ID（如 "1700000000000-0"）
 	ID() string
 }
 
 // Handler 消息处理函数
 //
 // 设计说明：只接收 Message 参数，通过 msg.Context() 获取上下文，
-// 避免 ctx 和 msg.Context() 同时存在造成的困惑。
+// 避免 ctx 与 msg.Context() 并存造成语义歧义。
 //
 // 返回值：
-//   - nil: 处理成功，AutoAck 模式下自动确认
-//   - error: 处理失败，AutoAck 模式下自动 Nak（如后端支持）
+//   - nil: 处理成功，AutoAck 模式下自动调用 Ack
+//   - error: 处理失败，AutoAck 模式下自动调用 Nak（Redis 下 ErrNotSupported 会被忽略）
 //
-// 重要提示（JetStream 用户必读）：
-//   - JetStream 的 Nak 会触发消息重新投递
-//   - 如果返回 error 是非暂时性的（如数据格式错误），消息会无限重投
-//   - 解决方案：
-//     1. 使用 WithManualAck 手动控制 Ack/Nak
-//     2. 对于不可恢复的错误，也调用 Ack() 并记录日志
-//     3. 结合 WithRetry 中间件在应用层重试，失败后仍 Ack
+// 注意（JetStream）：Nak 触发消息立即重投。对非暂时性错误（如解码失败），
+// 建议使用 WithManualAck 手动 Ack，或配合 WithRetry 在应用层重试后 Ack，
+// 避免消息无限重投。
 type Handler func(msg Message) error
 
 // Subscription 订阅句柄

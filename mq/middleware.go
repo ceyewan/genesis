@@ -29,6 +29,83 @@ func Chain(middlewares ...Middleware) Middleware {
 	}
 }
 
+// WithDeadLetter 创建死信队列中间件
+//
+// 当消息处理失败（所有重试都耗尽）后，将消息发送到死信队列。
+// 这是跨驱动的通用实现，适用于 JetStream 和 Redis Stream。
+//
+// 参数：
+//   - pub: MQ 实例，用于发送死信消息
+//   - dlTopic: 死信队列主题
+//   - maxRetries: 最大重试次数，超过后将消息发送到死信队列
+//   - logger: 日志记录器
+//
+// 示例：
+//
+//	dlMiddleware := mq.WithDeadLetter(mqClient, "orders.DLQ", 3, logger)
+//	handler = dlMiddleware(myHandler)
+func WithDeadLetter(pub MQ, dlTopic string, maxRetries int, logger clog.Logger) Middleware {
+	return func(next Handler) Handler {
+		return func(msg Message) error {
+			var err error
+			for attempt := 0; attempt <= maxRetries; attempt++ {
+				err = next(msg)
+				if err == nil {
+					return nil
+				}
+
+				// 最后一次尝试失败，发送到死信队列
+				if attempt == maxRetries {
+					break
+				}
+
+				// 检查 context 是否已取消
+				select {
+				case <-msg.Context().Done():
+					return msg.Context().Err()
+				default:
+				}
+			}
+
+			// 发送到死信队列
+			headers := msg.Headers()
+			if headers == nil {
+				headers = make(Headers)
+			}
+			headers.Set("x-original-topic", msg.Topic())
+			headers.Set("x-error", err.Error())
+
+			dlErr := pub.Publish(msg.Context(), dlTopic, msg.Data(), WithHeaders(headers))
+			if dlErr != nil {
+				logger.Error("failed to send message to dead letter queue",
+					clog.String("original_topic", msg.Topic()),
+					clog.String("dlq_topic", dlTopic),
+					clog.String("msg_id", msg.ID()),
+					clog.Error(dlErr),
+				)
+				return dlErr
+			}
+
+			logger.Warn("message sent to dead letter queue",
+				clog.String("original_topic", msg.Topic()),
+				clog.String("dlq_topic", dlTopic),
+				clog.String("msg_id", msg.ID()),
+				clog.Error(err),
+			)
+
+			// 发送到死信队列后，确认原消息（避免重复处理）
+			if ackErr := msg.Ack(); ackErr != nil {
+				logger.Error("failed to ack message after sending to DLQ",
+					clog.String("msg_id", msg.ID()),
+					clog.Error(ackErr),
+				)
+			}
+
+			return nil
+		}
+	}
+}
+
 // RetryConfig 重试配置
 type RetryConfig struct {
 	// MaxRetries 最大重试次数（不含首次执行）

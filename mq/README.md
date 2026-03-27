@@ -1,383 +1,150 @@
-# mq - Genesis 消息队列组件
+# mq - 消息队列组件
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/mq.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/mq)
 
-`mq` 是 Genesis 业务层的消息队列抽象组件，提供统一的发布订阅 API，支持 NATS Core、NATS JetStream、Redis Stream 等多种后端实现。
+`mq` 是 Genesis 的 L2 业务层组件，提供统一的发布订阅接口，当前支持两种持久化后端：
 
-## 设计理念
+- **NATS JetStream**：持久化流式系统，支持显式 Ack/Nak、durable consumer 和精确重投。
+- **Redis Stream**：基于 Consumer Group，复用现有 Redis 设施，Nak 语义不同（见下文）。
 
-- **简单优于复杂**：核心接口精简，通过 Option 扩展能力
-- **显式优于隐式**：不做自动注入，用户完全掌控消息流
-- **可扩展性**：Transport 接口设计兼顾未来 Kafka 等重量级 MQ
-
-## 支持的后端
-
-| 驱动             | 说明                | 持久化 | 消息确认 | 队列组 |
-| ---------------- | ------------------- | ------ | -------- | ------ |
-| `nats_core`      | NATS Core（高性能） | ❌     | ❌       | ✅     |
-| `nats_jetstream` | NATS JetStream      | ✅     | ✅       | ✅     |
-| `redis_stream`   | Redis Stream        | ✅     | ✅       | ✅     |
-| `kafka`          | Kafka（预留）       | -      | -        | -      |
-
-## 特性对比
-
-| 特性           | NATS Core | JetStream | Redis Stream |
-| -------------- | --------- | --------- | ------------ |
-| 持久化         | ❌        | ✅        | ✅           |
-| 消息确认 (Ack) | ❌        | ✅        | ✅           |
-| 消息拒绝 (Nak) | ❌        | ✅        | ❌\*         |
-| 队列组         | ✅        | ✅        | ✅           |
-| 批量消费       | ❌        | ✅        | ✅           |
-| 最大在途限制   | ❌        | ✅        | ❌           |
-| 持久化订阅     | ❌        | ✅        | ✅           |
-
-\*Redis Stream 无原生 Nak，消息留在 Pending 列表可被 XCLAIM
+接口设计与取舍详见 [genesis-mq-blog.md](../docs/genesis-mq-blog.md)，完整 API 文档见 `go doc ./mq`。
 
 ## 快速开始
 
-### 安装
-
-```bash
-go get github.com/ceyewan/genesis/mq
-```
-
-### NATS JetStream 示例
+### NATS JetStream
 
 ```go
-package main
+natsConn, _ := connector.NewNATS(&connector.NATSConfig{
+    URLs: []string{"nats://localhost:4222"},
+})
+_ = natsConn.Connect(ctx)
+defer natsConn.Close()
 
-import (
-    "context"
-
-    "github.com/ceyewan/genesis/connector"
-    "github.com/ceyewan/genesis/mq"
-)
-
-func main() {
-    ctx := context.Background()
-
-    // 1. 创建 NATS 连接
-    natsConn, _ := connector.NewNATS(&connector.NATSConfig{
-        URLs: []string{"nats://localhost:4222"},
-    })
-    _ = natsConn.Connect(ctx)
-    defer natsConn.Close()
-
-    // 2. 创建 MQ 实例
-    mq, _ := mq.New(&mq.Config{
-        Driver: mq.DriverNATSJetStream,
-        JetStream: &mq.JetStreamConfig{
-            AutoCreateStream: true,
-        },
-    }, mq.WithNATSConnector(natsConn))
-    defer mq.Close()
-
-    // 3. 订阅消息
-    sub, _ := mq.Subscribe(ctx, "orders.created", func(msg mq.Message) error {
-        // 处理消息，返回 nil 自动 Ack
-        return processOrder(msg.Data())
-    }, mq.WithQueueGroup("order-workers"))
-
-    // 4. 发布消息
-    _ = mq.Publish(ctx, "orders.created", []byte(`{"id": 123}`),
-        mq.WithHeader("trace-id", "abc123"))
-
-    // 5. 等待订阅结束
-    <-sub.Done()
+q, err := mq.New(&mq.Config{
+    Driver: mq.DriverNATSJetStream,
+    JetStream: &mq.JetStreamConfig{
+        AutoCreateStream: true,
+    },
+}, mq.WithNATSConnector(natsConn), mq.WithLogger(logger))
+if err != nil {
+    return err
 }
+defer q.Close()
 
-func processOrder(data []byte) error {
-    // 业务逻辑
-    return nil
+sub, err := q.Subscribe(ctx, "orders.created", func(msg mq.Message) error {
+    return processOrder(msg.Data())
+}, mq.WithQueueGroup("order-workers"), mq.WithAutoAck())
+if err != nil {
+    return err
 }
+defer sub.Unsubscribe()
+
+_ = q.Publish(ctx, "orders.created", []byte(`{"id": 123}`),
+    mq.WithHeader("trace-id", "abc123"))
 ```
 
-### Redis Stream 示例
+### Redis Stream
 
 ```go
-// 创建 Redis 连接
 redisConn, _ := connector.NewRedis(&connector.RedisConfig{
     Addr: "localhost:6379",
 })
 _ = redisConn.Connect(ctx)
 defer redisConn.Close()
 
-// 创建 MQ 实例
-mq, _ := mq.New(&mq.Config{
+q, err := mq.New(&mq.Config{
     Driver: mq.DriverRedisStream,
     RedisStream: &mq.RedisStreamConfig{
-        MaxLen: 10000,
+        MaxLen: 100000,
     },
-}, mq.WithRedisConnector(redisConn))
-defer mq.Close()
+}, mq.WithRedisConnector(redisConn), mq.WithLogger(logger))
+if err != nil {
+    return err
+}
+defer q.Close()
 
-// 订阅（Consumer Group 模式）
-mq.Subscribe(ctx, "events", handler,
+sub, _ := q.Subscribe(ctx, "events", handler,
     mq.WithQueueGroup("event-processors"),
     mq.WithDurable("worker-1"),
-    mq.WithBatchSize(50),
-)
+    mq.WithBatchSize(50))
+defer sub.Unsubscribe()
 ```
 
-## 核心接口
+## Ack/Nak 语义
 
-### MQ
+| 操作 | JetStream | Redis Stream |
+|------|-----------|-------------|
+| `Ack()` | 发送 Ack 到服务端，消息从 pending 移除 | 执行 `XACK` |
+| `Nak()` | 触发消息立即重投 | 返回 `ErrNotSupported`；消息留在 Pending，由 `XAUTOCLAIM` 超时后重认领 |
 
-消息队列核心接口，提供发布订阅能力。
+**默认是手动确认**（ManualAck）。`WithAutoAck()` 开启后，Handler 返回 error 自动调用 Nak；Redis 下的 `ErrNotSupported` 会被静默忽略，不记录为错误。
 
-```go
-type MQ interface {
-    // 发布消息
-    Publish(ctx context.Context, topic string, data []byte, opts ...PublishOption) error
+## 订阅选项
 
-    // 订阅消息
-    Subscribe(ctx context.Context, topic string, handler Handler, opts ...SubscribeOption) (Subscription, error)
-
-    // 关闭客户端
-    Close() error
-}
-```
-
-### Message
-
-消息接口，提供统一的数据访问和确认机制。
-
-```go
-type Message interface {
-    Context() context.Context  // 获取处理上下文
-    Topic() string              // 获取主题
-    Data() []byte               // 获取消息体
-    Headers() Headers           // 获取消息头
-    Ack() error                 // 确认消息
-    Nak() error                 // 拒绝消息
-    ID() string                 // 获取消息ID
-}
-```
-
-### Handler
-
-消息处理函数，只接收 Message 参数，通过 `msg.Context()` 获取上下文。
-
-```go
-type Handler func(msg Message) error
-```
-
-**设计说明**：去掉冗余的 ctx 参数，避免 ctx 和 msg.Context() 同时存在造成的困惑。
-
-### Subscription
-
-订阅句柄，用于管理订阅生命周期。
-
-```go
-type Subscription interface {
-    Unsubscribe() error           // 取消订阅
-    Done() <-chan struct{}        // 订阅结束时关闭
-}
-```
-
-## 配置选项
-
-### 创建 MQ
-
-```go
-mq, err := mq.New(&mq.Config{
-    Driver: mq.DriverNATSJetStream,
-    JetStream: &mq.JetStreamConfig{
-        AutoCreateStream: true,
-        StreamPrefix:     "S-",
-    },
-},
-    mq.WithLogger(logger),      // 注入日志器
-    mq.WithMeter(meter),        // 注入指标收集器
-    mq.WithNATSConnector(conn), // 注入连接器
-)
-```
-
-### 发布选项
-
-```go
-mq.Publish(ctx, "topic", data,
-    mq.WithHeaders(mq.Headers{"trace-id": "abc123"}),  // 设置消息头
-    mq.WithHeader("key", "value"),                      // 设置单个消息头
-    mq.WithKey("routing-key"),                          // 设置路由键（预留）
-)
-```
-
-### 订阅选项
-
-```go
-mq.Subscribe(ctx, "topic", handler,
-    mq.WithQueueGroup("workers"),     // 队列组（负载均衡）
-    mq.WithManualAck(),               // 关闭自动确认，手动调用 msg.Ack()
-    mq.WithAutoAck(),                 // 开启自动确认（默认）
-    mq.WithDurable("durable-1"),      // 持久化订阅名（JetStream/Redis）
-    mq.WithBatchSize(50),             // 批量拉取大小（默认 10）
-    mq.WithMaxInflight(100),          // 最大在途消息数（JetStream）
-    mq.WithBufferSize(100),           // 内部缓冲区大小（默认 100）
-)
-```
+| 选项 | 描述 | 驱动支持 |
+|------|------|----------|
+| `WithQueueGroup(name)` | 消费组，多实例竞争消费 | JetStream: durable consumer 名；Redis: consumer group 名 |
+| `WithAutoAck()` | 开启自动确认 | 两者 |
+| `WithManualAck()` | 手动确认（默认） | 两者 |
+| `WithDurable(name)` | 消费者实例名 | JetStream: durable consumer 名（QueueGroup 为空时）；Redis: consumer name |
+| `WithBatchSize(n)` | 单次拉取大小，默认 10 | Redis 有效；JetStream 当前无效（push 模式） |
+| `WithMaxInflight(n)` | 最大在途消息数 | JetStream 对应 `MaxAckPending`；Redis 无对应 |
 
 ## 中间件
 
-mq 提供中间件机制增强 Handler，支持链式组合。
-
-### 内置中间件
-
-```go
-// 重试中间件
-retryHandler := mq.WithRetry(mq.DefaultRetryConfig, logger)(handler)
-
-// 日志中间件
-loggedHandler := mq.WithLogging(logger)(handler)
-
-// Panic 恢复中间件
-safeHandler := mq.WithRecover(logger)(handler)
-```
-
-### 链式组合
-
-执行顺序：第一个中间件最先执行，最后一个最接近原始 Handler。
-
 ```go
 handler = mq.Chain(
-    mq.WithRecover(logger),            // 最外层：捕获 panic
-    mq.WithLogging(logger),            // 中间层：记录日志
-    mq.WithRetry(mq.DefaultRetryConfig, logger), // 内层：重试
-)(handler)
-
-// 执行顺序：WithRecover -> WithLogging -> WithRetry -> handler
-```
-
-### 重试配置
-
-```go
-type RetryConfig struct {
-    MaxRetries     int           // 最大重试次数（不含首次）
-    InitialBackoff time.Duration // 初始退避时间
-    MaxBackoff     time.Duration // 最大退避时间
-    Multiplier     float64       // 退避倍数
-}
-
-// 默认配置
-var DefaultRetryConfig = RetryConfig{
-    MaxRetries:     3,
-    InitialBackoff: 100 * time.Millisecond,
-    MaxBackoff:     5 * time.Second,
-    Multiplier:     2.0,
-}
-```
-
-## 指标
-
-| 指标名                | 类型      | 描述          |
-| --------------------- | --------- | ------------- |
-| `mq.publish.total`    | Counter   | 发布消息总数  |
-| `mq.publish.duration` | Histogram | 发布延迟 (秒) |
-| `mq.consume.total`    | Counter   | 消费消息总数  |
-| `mq.handle.duration`  | Histogram | 处理耗时 (秒) |
-
-标签：`topic`、`status`、`driver`
-
-## 错误处理
-
-预定义错误常量：
-
-```go
-var (
-    ErrClosed              = xerrors.New("mq: client closed")
-    ErrInvalidConfig       = xerrors.New("mq: invalid config")
-    ErrNotSupported        = xerrors.New("mq: operation not supported by this driver")
-    ErrSubscriptionClosed  = xerrors.New("mq: subscription closed")
-    ErrPanicRecovered      = xerrors.New("mq: handler panic recovered")
-)
-```
-
-## 能力检查
-
-不同后端能力差异较大，可根据配置时的 Driver 判断：
-
-```go
-if cfg.Driver == mq.DriverNATSCore {
-    // NATS Core 不支持持久化，不要用于关键业务
-}
-
-if cfg.Driver == mq.DriverNATSJetStream {
-    // JetStream 支持 Ack/Nak，可配合 WithManualAck 使用
-}
-```
-
-## 配置详情
-
-### JetStream 配置
-
-```go
-type JetStreamConfig struct {
-    AutoCreateStream bool   // 是否自动创建 Stream
-    StreamPrefix     string // Stream 名称前缀，默认 "S-"
-}
-```
-
-### Redis Stream 配置
-
-```go
-type RedisStreamConfig struct {
-    MaxLen      int64  // Stream 最大长度，0 表示不限制
-    Approximate bool   // 是否使用近似裁剪（性能更好）
-}
-```
-
-## 最佳实践
-
-### 1. 手动确认模式
-
-```go
-mq.Subscribe(ctx, "topic", func(msg mq.Message) error {
-    if err := process(msg.Data()); err != nil {
-        msg.Nak() // 拒绝消息，触发重投
-        return err
-    }
-    msg.Ack() // 确认消息
-    return nil
-}, mq.WithManualAck())
-```
-
-### 2. 中间件组合
-
-```go
-// 推荐顺序：Recover -> Logging -> Retry -> Handler
-handler = mq.Chain(
-    mq.WithRecover(logger),
-    mq.WithLogging(logger),
-    mq.WithRetry(mq.DefaultRetryConfig, logger),
+    mq.WithRecover(logger),                          // 最外层：捕获 panic
+    mq.WithLogging(logger),                          // 记录每条消息的处理结果
+    mq.WithRetry(mq.DefaultRetryConfig, logger),     // 内层：指数退避重试
 )(businessHandler)
 ```
 
-### 3. 上下文传递
+内置中间件：`WithRetry`、`WithLogging`、`WithRecover`、`WithDeadLetter`。
+
+## 配置
+
+### JetStreamConfig
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `AutoCreateStream` | `bool` | `false` | 自动建 Stream（生产环境建议关闭） |
+| `StreamPrefix` | `string` | `"S-"` | Stream 名称前缀 |
+| `AckWait` | `time.Duration` | `30s` | Ack 超时，超时后消息自动重投，建议设为最大处理时间的 2 倍 |
+
+### RedisStreamConfig
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `MaxLen` | `int64` | `0`（不限） | Stream 最大长度，超过后裁剪旧消息 |
+| `Approximate` | `bool` | `false` | 近似裁剪（`MAXLEN ~`），性能更好但不精确 |
+| `PendingIdle` | `time.Duration` | `30s` | Pending 消息空闲超时，超时后可被其他消费者认领 |
+
+## 错误与生命周期
 
 ```go
-handler := func(msg mq.Message) error {
-    ctx := msg.Context() // 获取订阅时的上下文
-
-    // 业务逻辑使用 msg.Context()，而非 Subscribe 时的 ctx
-    return processOrder(ctx, msg.Data())
-}
+var (
+    ErrClosed             // Close 后调用 Publish/Subscribe 时返回
+    ErrNotSupported       // 驱动不支持的操作（如 Redis 的 Nak）
+    ErrInvalidConfig      // 配置校验失败
+    ErrSubscriptionClosed // 订阅已关闭
+    ErrPanicRecovered     // WithRecover 捕获到 panic
+)
 ```
+
+`Close()` 是幂等操作，多次调用不报错。关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`，可通过 `errors.Is` 检测。
 
 ## 测试
 
 ```bash
-# 运行单元测试
-go test ./mq/...
-
-# 运行集成测试（需要本地环境）
-make up
-go test ./mq/... -tags=integration
-make down
+go test ./mq/... -count=1
+go test -race ./mq/... -count=1
 ```
 
-## 未来规划
+集成测试通过 testcontainers 自动启动 NATS 和 Redis 容器，直接运行即可，无需手动执行 `make up`。
 
-- [ ] Kafka 支持
-- [ ] 死信队列实现
-- [ ] 延迟消息支持
-- [ ] 事务消息（Kafka）
+## 相关文档
+
+- [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/mq)
+- [组件设计博客](../docs/genesis-mq-blog.md)
+- [Genesis 文档目录](../docs/README.md)

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/clog"
 )
@@ -24,7 +24,7 @@ func TestChain(t *testing.T) {
 		chained := Chain()(original)
 		err := chained(&mockMessage{})
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	t.Run("单个中间件", func(t *testing.T) {
@@ -43,8 +43,8 @@ func TestChain(t *testing.T) {
 		chained := Chain(mw)(original)
 		err := chained(&mockMessage{})
 
-		assert.NoError(t, err)
-		assert.True(t, called, "中间件应该被调用")
+		require.NoError(t, err)
+		require.True(t, called, "中间件应该被调用")
 	})
 
 	t.Run("多个中间件按正确顺序执行", func(t *testing.T) {
@@ -79,7 +79,7 @@ func TestChain(t *testing.T) {
 
 		// 预期：mw1-before, mw2-before, handler, mw2-after, mw1-after
 		expected := []string{"mw1-before", "mw2-before", "handler", "mw2-after", "mw1-after"}
-		assert.Equal(t, expected, order)
+		require.Equal(t, expected, order)
 	})
 
 	t.Run("中间件链中错误传递", func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestChain(t *testing.T) {
 		chained := Chain(mw)(original)
 		err := chained(&mockMessage{})
 
-		assert.Equal(t, expectedErr, err)
+		require.Equal(t, expectedErr, err)
 	})
 }
 
@@ -123,8 +123,8 @@ func TestWithRetry(t *testing.T) {
 		retryHandler := WithRetry(cfg, clog.Discard())(handler)
 		err := retryHandler(&mockMessage{})
 
-		assert.NoError(t, err)
-		assert.Equal(t, 1, callCount, "成功时不应该重试")
+		require.NoError(t, err)
+		require.Equal(t, 1, callCount, "成功时不应该重试")
 	})
 
 	t.Run("Handler 失败时重试指定次数", func(t *testing.T) {
@@ -144,8 +144,8 @@ func TestWithRetry(t *testing.T) {
 		retryHandler := WithRetry(cfg, clog.Discard())(handler)
 		err := retryHandler(&mockMessage{})
 
-		assert.Error(t, err)
-		assert.Equal(t, 3, callCount, "首次 + 2次重试 = 3次调用")
+		require.Error(t, err)
+		require.Equal(t, 3, callCount, "首次 + 2次重试 = 3次调用")
 	})
 
 	t.Run("重试后成功", func(t *testing.T) {
@@ -168,8 +168,8 @@ func TestWithRetry(t *testing.T) {
 		retryHandler := WithRetry(cfg, clog.Discard())(handler)
 		err := retryHandler(&mockMessage{})
 
-		assert.NoError(t, err)
-		assert.Equal(t, 3, callCount, "第3次尝试成功")
+		require.NoError(t, err)
+		require.Equal(t, 3, callCount, "第3次尝试成功")
 	})
 
 	t.Run("Context 取消时停止重试", func(t *testing.T) {
@@ -199,9 +199,9 @@ func TestWithRetry(t *testing.T) {
 		retryHandler := WithRetry(cfg, clog.Discard())(handler)
 		err := retryHandler(msg)
 
-		assert.Error(t, err)
-		assert.Equal(t, context.Canceled, err)
-		assert.LessOrEqual(t, callCount, 2, "Context 取消后应立即停止")
+		require.Error(t, err)
+		require.Equal(t, context.Canceled, err)
+		require.LessOrEqual(t, callCount, 2, "Context 取消后应立即停止")
 	})
 
 	t.Run("Multiplier <= 1 时使用默认值 2.0", func(t *testing.T) {
@@ -220,7 +220,7 @@ func TestWithRetry(t *testing.T) {
 		retryHandler := WithRetry(cfg, clog.Discard())(handler)
 		err := retryHandler(&mockMessage{})
 
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 
 	t.Run("MaxBackoff 限制退避时间", func(t *testing.T) {
@@ -242,7 +242,7 @@ func TestWithRetry(t *testing.T) {
 
 		// 计算预期时间：100 + 150 + 150 + 150 + 150 + 150 = 850ms (受 MaxBackoff 限制)
 		// 但实际时间受调度影响，只验证不超过某个上限
-		assert.Less(t, elapsed, 2*time.Second, "受 MaxBackoff 限制，总时间不应过长")
+		require.Less(t, elapsed, 2*time.Second, "受 MaxBackoff 限制，总时间不应过长")
 	})
 }
 
@@ -251,10 +251,10 @@ func TestWithRetry(t *testing.T) {
 // ============================================================
 
 func TestDefaultRetryConfig(t *testing.T) {
-	assert.Equal(t, 3, DefaultRetryConfig.MaxRetries)
-	assert.Equal(t, 100*time.Millisecond, DefaultRetryConfig.InitialBackoff)
-	assert.Equal(t, 5*time.Second, DefaultRetryConfig.MaxBackoff)
-	assert.Equal(t, 2.0, DefaultRetryConfig.Multiplier)
+	require.Equal(t, 3, DefaultRetryConfig.MaxRetries)
+	require.Equal(t, 100*time.Millisecond, DefaultRetryConfig.InitialBackoff)
+	require.Equal(t, 5*time.Second, DefaultRetryConfig.MaxBackoff)
+	require.Equal(t, 2.0, DefaultRetryConfig.Multiplier)
 }
 
 // ============================================================
@@ -272,7 +272,7 @@ func TestWithLogging(t *testing.T) {
 		loggingHandler := WithLogging(clog.Discard())(handler)
 		err := loggingHandler(&mockMessage{})
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	t.Run("失败时记录 Error 日志", func(t *testing.T) {
@@ -283,7 +283,7 @@ func TestWithLogging(t *testing.T) {
 		loggingHandler := WithLogging(clog.Discard())(handler)
 		err := loggingHandler(&mockMessage{})
 
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 
 	t.Run("日志中间件不改变错误", func(t *testing.T) {
@@ -295,7 +295,7 @@ func TestWithLogging(t *testing.T) {
 		loggingHandler := WithLogging(clog.Discard())(handler)
 		err := loggingHandler(&mockMessage{})
 
-		assert.Equal(t, expectedErr, err)
+		require.Equal(t, expectedErr, err)
 	})
 }
 
@@ -312,8 +312,8 @@ func TestWithRecover(t *testing.T) {
 		recoverHandler := WithRecover(clog.Discard())(handler)
 		err := recoverHandler(&mockMessage{})
 
-		assert.Error(t, err)
-		assert.Equal(t, ErrPanicRecovered, err)
+		require.Error(t, err)
+		require.Equal(t, ErrPanicRecovered, err)
 	})
 
 	t.Run("正常情况不影响执行", func(t *testing.T) {
@@ -324,7 +324,7 @@ func TestWithRecover(t *testing.T) {
 		recoverHandler := WithRecover(clog.Discard())(handler)
 		err := recoverHandler(&mockMessage{})
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	t.Run("正常错误不受影响", func(t *testing.T) {
@@ -336,7 +336,7 @@ func TestWithRecover(t *testing.T) {
 		recoverHandler := WithRecover(clog.Discard())(handler)
 		err := recoverHandler(&mockMessage{})
 
-		assert.Equal(t, expectedErr, err)
+		require.Equal(t, expectedErr, err)
 	})
 
 	t.Run("捕获不同类型的 panic", func(t *testing.T) {
@@ -358,8 +358,8 @@ func TestWithRecover(t *testing.T) {
 				recoverHandler := WithRecover(clog.Discard())(handler)
 				err := recoverHandler(&mockMessage{})
 
-				assert.Error(t, err)
-				assert.Equal(t, ErrPanicRecovered, err)
+				require.Error(t, err)
+				require.Equal(t, ErrPanicRecovered, err)
 			})
 		}
 	})
@@ -400,8 +400,8 @@ func TestMiddlewareCombination(t *testing.T) {
 
 		err := chained(&mockMessage{})
 
-		assert.NoError(t, err)
-		assert.Equal(t, 3, callCount, "重试两次后成功")
+		require.NoError(t, err)
+		require.Equal(t, 3, callCount, "重试两次后成功")
 	})
 
 	t.Run("Recover 捕获 panic，不会触发 Retry 重试", func(t *testing.T) {
@@ -429,9 +429,9 @@ func TestMiddlewareCombination(t *testing.T) {
 		err := chained(&mockMessage{})
 
 		// panic 被恢复，返回 ErrPanicRecovered
-		assert.Error(t, err)
-		assert.Equal(t, ErrPanicRecovered, err)
-		assert.Equal(t, 1, callCount, "panic 被恢复后不会重试")
+		require.Error(t, err)
+		require.Equal(t, ErrPanicRecovered, err)
+		require.Equal(t, 1, callCount, "panic 被恢复后不会重试")
 	})
 
 	t.Run("Retry 在外层时可以重试错误", func(t *testing.T) {
@@ -463,8 +463,8 @@ func TestMiddlewareCombination(t *testing.T) {
 		err := chained(&mockMessage{})
 
 		// 经过重试后成功
-		assert.NoError(t, err)
-		assert.Equal(t, 3, callCount, "前两次 panic 后恢复，第三次成功")
+		require.NoError(t, err)
+		require.Equal(t, 3, callCount, "前两次 panic 后恢复，第三次成功")
 	})
 }
 

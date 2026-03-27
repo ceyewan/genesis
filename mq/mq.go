@@ -1,10 +1,10 @@
-// Package mq 提供消息队列组件，支持 NATS Core, JetStream, Redis Stream 等多种后端。
+// Package mq 提供消息队列组件，支持 NATS JetStream 和 Redis Stream 两种后端。
 //
-// MQ 组件是 Genesis 微服务组件库的消息中间件抽象层，提供统一的发布-订阅语义。
+// MQ 组件是 Genesis L2 业务层组件，提供统一的发布-订阅语义。
 // 设计原则：
 //   - 简单优于复杂：核心接口精简，通过 Option 扩展能力
 //   - 显式优于隐式：不做自动注入，用户完全掌控消息流
-//   - 可扩展性：Transport 接口设计兼顾未来 Kafka 等重量级 MQ
+//   - 语义明确：两个驱动均提供持久化和 At-least-once 投递保证
 package mq
 
 import (
@@ -18,8 +18,9 @@ import (
 
 // MQ 消息队列核心接口
 //
-// 提供统一的发布订阅能力，屏蔽底层实现差异。
-// 支持的后端：NATS Core、NATS JetStream、Redis Stream
+// 提供统一的发布订阅入口，屏蔽底层驱动差异。
+// 当前支持的后端：NATS JetStream、Redis Stream。
+// 两者均提供持久化和 At-least-once 投递，但 Nak 语义不同，详见 Message.Nak()。
 type MQ interface {
 	// Publish 发布消息到指定主题
 	//
@@ -51,7 +52,7 @@ type MQ interface {
 //
 // 根据 Config.Driver 选择底层 Transport 实现。
 // 必需依赖通过 Option 注入：
-//   - NATS 系列: WithNATSConnector
+//   - NATS JetStream: WithNATSConnector
 //   - Redis Stream: WithRedisConnector
 //
 // 示例：
@@ -81,18 +82,13 @@ func New(cfg *Config, opts ...Option) (MQ, error) {
 		transport: transport,
 		logger:    o.logger,
 		meter:     o.meter,
+		driver:    cfg.Driver,
 	}, nil
 }
 
 // newTransport 根据配置创建对应的 Transport 实现
 func newTransport(cfg *Config, o *options) (Transport, error) {
 	switch cfg.Driver {
-	case DriverNATSCore:
-		if o.natsConnector == nil {
-			return nil, xerrors.New("NATS connector required, use WithNATSConnector")
-		}
-		return newNATSCoreTransport(o.natsConnector, o.logger), nil
-
 	case DriverNATSJetStream:
 		if o.natsConnector == nil {
 			return nil, xerrors.New("NATS connector required, use WithNATSConnector")
@@ -103,10 +99,10 @@ func newTransport(cfg *Config, o *options) (Transport, error) {
 		if o.redisConnector == nil {
 			return nil, xerrors.New("Redis connector required, use WithRedisConnector")
 		}
-		return newRedisStreamTransport(o.redisConnector, o.logger), nil
+		return newRedisStreamTransport(o.redisConnector, cfg.RedisStream, o.logger), nil
 
 	default:
-		return nil, xerrors.WithCode(xerrors.New("unsupported driver"), string(cfg.Driver))
+		return nil, xerrors.Wrapf(ErrInvalidConfig, "unsupported driver: %s", cfg.Driver)
 	}
 }
 
