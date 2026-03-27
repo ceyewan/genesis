@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/testkit"
 )
@@ -387,6 +389,47 @@ func TestRedisLocker_ReentrantFails(t *testing.T) {
 	_ = locker.Unlock(ctx, key)
 }
 
+func TestRedisLocker_CloseReleasesLocks(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 30*time.Second)
+	defer cancel()
+
+	conn := testkit.NewRedisContainerConnector(t)
+	locker1 := newRedisLockerWithConn(t, conn)
+	locker2 := newRedisLockerWithConn(t, conn)
+
+	key := "test:" + testkit.NewID()
+
+	require.NoError(t, locker1.Lock(ctx, key))
+	require.NoError(t, locker1.Close())
+
+	ok, err := locker2.TryLock(ctx, key)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, locker2.Unlock(ctx, key))
+	require.NoError(t, locker2.Close())
+}
+
+func TestRedisLocker_WatchdogLostOwnershipClearsLocalState(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 30*time.Second)
+	defer cancel()
+
+	conn := testkit.NewRedisContainerConnector(t)
+	locker := newRedisLockerWithConn(t, conn)
+	defer locker.Close()
+
+	key := "test:" + testkit.NewID()
+
+	require.NoError(t, locker.Lock(ctx, key, WithTTL(2*time.Second)))
+	require.NoError(t, conn.GetClient().Del(ctx, "dlock:test:"+key).Err())
+
+	time.Sleep(1500 * time.Millisecond)
+
+	ok, err := locker.TryLock(ctx, key, WithTTL(2*time.Second))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, locker.Unlock(ctx, key))
+}
+
 // ============================================================================
 // Etcd 集成测试
 // ============================================================================
@@ -538,4 +581,44 @@ func TestEtcdLocker_WithTTL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unlock failed: %v", err)
 	}
+}
+
+func TestEtcdLocker_CloseReleasesCustomTTLSessionLock(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 30*time.Second)
+	defer cancel()
+
+	conn := testkit.NewEtcdContainerConnector(t)
+	locker1 := newEtcdLockerWithConn(t, conn)
+	locker2 := newEtcdLockerWithConn(t, conn)
+
+	key := "test:" + testkit.NewID()
+
+	require.NoError(t, locker1.Lock(ctx, key, WithTTL(5*time.Second)))
+	require.NoError(t, locker1.Close())
+
+	ok, err := locker2.TryLock(ctx, key)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, locker2.Unlock(ctx, key))
+	require.NoError(t, locker2.Close())
+}
+
+func TestEtcdLocker_WithTTLRejectsSubSecond(t *testing.T) {
+	conn := testkit.NewEtcdContainerConnector(t)
+	_, err := New(&Config{
+		Driver:        DriverEtcd,
+		Prefix:        "/dlock/test/",
+		DefaultTTL:    500 * time.Millisecond,
+		RetryInterval: 50 * time.Millisecond,
+	}, WithEtcdConnector(conn), WithLogger(testkit.NewLogger()))
+	require.ErrorIs(t, err, ErrInvalidTTL)
+
+	ctx, cancel := testkit.NewContext(t, 30*time.Second)
+	defer cancel()
+
+	locker := newEtcdLockerWithConn(t, conn)
+	defer locker.Close()
+
+	err = locker.Lock(ctx, "test:"+testkit.NewID(), WithTTL(1500*time.Millisecond))
+	require.ErrorIs(t, err, ErrInvalidTTL)
 }

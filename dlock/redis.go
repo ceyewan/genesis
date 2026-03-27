@@ -19,7 +19,11 @@ type redisLocker struct {
 	cfg    *Config
 	logger clog.Logger
 	locks  map[string]*redisLockEntry
+	lost   map[string]struct{}
 	mu     sync.RWMutex
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 type redisLockEntry struct {
@@ -28,6 +32,7 @@ type redisLockEntry struct {
 	expiration time.Duration
 	renewStop  chan struct{}
 	renewDone  chan struct{}
+	renewOnce  sync.Once
 }
 
 // newRedisLocker 创建 Redis Locker 实例
@@ -44,6 +49,7 @@ func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger) (L
 		cfg:    cfg,
 		logger: logger,
 		locks:  make(map[string]*redisLockEntry),
+		lost:   make(map[string]struct{}),
 	}, nil
 }
 
@@ -66,30 +72,23 @@ func (l *redisLocker) Unlock(ctx context.Context, key string) error {
 	l.mu.Lock()
 	entry, exists := l.locks[key]
 	if !exists {
+		if _, lost := l.lost[key]; lost {
+			delete(l.lost, key)
+			l.mu.Unlock()
+			return xerrors.Wrapf(ErrOwnershipLost, "key: %s", key)
+		}
 		l.mu.Unlock()
 		return xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
 	}
 	delete(l.locks, key)
 	l.mu.Unlock()
 
-	// 停止续约
-	if entry.renewStop != nil {
-		close(entry.renewStop)
-		<-entry.renewDone
-	}
+	l.stopWatchdog(entry)
 
 	// 使用 Lua 脚本安全释放锁
-	script := `
-		if redis.call("GET", KEYS[1]) == ARGV[1] then
-			return redis.call("DEL", KEYS[1])
-		else
-			return 0
-		end
-	`
-	redisKey := l.getRedisKey(key)
-	result, err := l.client.Eval(ctx, script, []string{redisKey}, entry.token).Result()
+	result, err := l.releaseEntry(ctx, key, entry)
 	if err != nil {
-		return xerrors.Wrap(err, "failed to release lock")
+		return err
 	}
 
 	if result.(int64) == 0 {
@@ -131,14 +130,9 @@ func (l *redisLocker) lockWithRetry(ctx context.Context, key string, tryOnce boo
 }
 
 func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockOption) (*redisLockEntry, error) {
-	options := &lockOptions{
-		TTL: l.cfg.DefaultTTL,
-	}
-	for _, opt := range opts {
-		opt(options)
-	}
-	if options.TTL <= 0 {
-		options.TTL = 10 * time.Second
+	ttl, err := resolveLockTTL(l.cfg.DefaultTTL, opts...)
+	if err != nil {
+		return nil, err
 	}
 
 	// 先检查本地是否已持有锁
@@ -147,6 +141,7 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 		l.mu.Unlock()
 		return nil, xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
+	delete(l.lost, key)
 	l.mu.Unlock()
 
 	// 生成随机 token
@@ -157,7 +152,7 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 	token := hex.EncodeToString(randBytes)
 	redisKey := l.getRedisKey(key)
 
-	success, err := l.client.SetNX(ctx, redisKey, token, options.TTL).Result()
+	success, err := l.client.SetNX(ctx, redisKey, token, ttl).Result()
 	if err != nil {
 		return nil, xerrors.Wrap(err, "failed to acquire lock")
 	}
@@ -186,12 +181,13 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 	entry := &redisLockEntry{
 		key:        key,
 		token:      token,
-		expiration: options.TTL,
+		expiration: ttl,
 		renewStop:  make(chan struct{}),
 		renewDone:  make(chan struct{}),
 	}
 
 	l.locks[key] = entry
+	delete(l.lost, key)
 	l.mu.Unlock()
 
 	go l.watchdog(entry, redisKey)
@@ -229,16 +225,55 @@ func (l *redisLocker) watchdog(entry *redisLockEntry, redisKey string) {
 				if l.logger != nil {
 					l.logger.Error("watchdog renew failed", clog.String("key", entry.key), clog.Error(err))
 				}
+				l.markOwnershipLost(entry.key, entry)
 				return
 			}
 			if res.(int64) == 0 {
 				if l.logger != nil {
 					l.logger.Warn("watchdog lost ownership", clog.String("key", entry.key))
 				}
+				l.markOwnershipLost(entry.key, entry)
 				return
 			}
 		}
 	}
+}
+
+func (l *redisLocker) markOwnershipLost(key string, entry *redisLockEntry) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	current, exists := l.locks[key]
+	if exists && current == entry {
+		delete(l.locks, key)
+		l.lost[key] = struct{}{}
+	}
+}
+
+func (l *redisLocker) stopWatchdog(entry *redisLockEntry) {
+	if entry == nil || entry.renewStop == nil {
+		return
+	}
+	entry.renewOnce.Do(func() {
+		close(entry.renewStop)
+		<-entry.renewDone
+	})
+}
+
+func (l *redisLocker) releaseEntry(ctx context.Context, key string, entry *redisLockEntry) (any, error) {
+	script := `
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("DEL", KEYS[1])
+		else
+			return 0
+		end
+	`
+	redisKey := l.getRedisKey(key)
+	result, err := l.client.Eval(ctx, script, []string{redisKey}, entry.token).Result()
+	if err != nil {
+		return nil, xerrors.Wrap(err, "failed to release lock")
+	}
+	return result, nil
 }
 
 func (l *redisLocker) getRedisKey(key string) string {
@@ -251,5 +286,33 @@ func (l *redisLocker) getRedisKey(key string) string {
 // Close 关闭 Redis Locker
 // Redis Locker 不拥有底层连接，因此是 no-op
 func (l *redisLocker) Close() error {
-	return nil
+	l.closeOnce.Do(func() {
+		l.mu.Lock()
+		entries := make(map[string]*redisLockEntry, len(l.locks))
+		for key, entry := range l.locks {
+			entries[key] = entry
+		}
+		l.locks = make(map[string]*redisLockEntry)
+		l.lost = make(map[string]struct{})
+		l.mu.Unlock()
+
+		var errs []error
+		for key, entry := range entries {
+			l.stopWatchdog(entry)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			result, err := l.releaseEntry(ctx, key, entry)
+			cancel()
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if result.(int64) == 0 {
+				errs = append(errs, xerrors.Wrapf(ErrOwnershipLost, "key: %s", key))
+			}
+		}
+
+		l.closeErr = xerrors.Combine(errs...)
+	})
+	return l.closeErr
 }

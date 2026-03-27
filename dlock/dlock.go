@@ -1,25 +1,24 @@
-// Package dlock 提供分布式锁组件，支持 Redis 和 Etcd 后端。
+// Package dlock 提供 Genesis 的分布式锁组件。
 //
-// 特性：
+// `dlock` 的定位是为常见的“跨实例互斥”场景提供一层克制、统一的锁接口，
+// 当前支持 Redis 和 Etcd 两种后端。调用方通过 `Locker` 使用阻塞式 `Lock`、
+// 非阻塞式 `TryLock`、显式 `Unlock` 和 `Close`，不需要直接处理 Redis 的
+// token 校验或 Etcd 的 session / mutex 细节。
 //
-//   - 统一的 Locker 接口，屏蔽后端差异
+// 这个组件的核心目标不是抽象出一个“万能锁框架”，而是把最常见、最稳定的
+// 分布式锁能力收敛成少量接口，并把几个容易出错的边界收紧：
 //
-//   - 阻塞式 Lock / 非阻塞 TryLock
+//   - Redis 使用 token + Lua 脚本，避免误删别人的锁。
+//   - Redis 和 Etcd 都会在锁持有期间自动续期。
+//   - `Close()` 会停止续期，并尽力释放当前 `Locker` 已持有的锁。
+//   - 同一个 `Locker` 不允许本地重入同一个 key。
 //
-//   - 自动续期（Redis Watchdog / Etcd Session KeepAlive）
+// `dlock` 不负责可重入锁、读写锁、公平锁、锁诊断平台或死锁检测。它更适合
+// 任务竞选、资源互斥、短事务串行化这类“需要一把简单分布式锁”的场景。
 //
-//   - 防误删机制（token 校验）
-//
-//     redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
-//     locker, _ := dlock.New(&dlock.Config{
-//     Driver: dlock.DriverRedis,
-//     Prefix: "myapp:lock:",
-//     }, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
-//
-//     if err := locker.Lock(ctx, "resource-key"); err != nil {
-//     return err
-//     }
-//     defer locker.Unlock(ctx, "resource-key")
+// 需要注意的是，Redis 与 Etcd 并不是完全等价的协议实现。尤其在 TTL 语义上，
+// Etcd 依赖 lease，精度为秒级，因此 `DefaultTTL` 和 `WithTTL(...)` 都要求
+// 至少 1 秒且必须是整秒；Redis 则直接使用原生 `time.Duration`。
 package dlock
 
 import (

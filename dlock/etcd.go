@@ -3,6 +3,7 @@ package dlock
 import (
 	"context"
 	"sync"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -19,6 +20,9 @@ type etcdLocker struct {
 	logger  clog.Logger
 	locks   map[string]*etcdLockEntry
 	mu      sync.RWMutex
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 type etcdLockEntry struct {
@@ -77,20 +81,20 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 	}
 	l.mu.RUnlock()
 
-	options := &lockOptions{
-		TTL: l.cfg.DefaultTTL,
+	ttl, err := resolveLockTTL(l.cfg.DefaultTTL, opts...)
+	if err != nil {
+		return err
 	}
-	for _, opt := range opts {
-		opt(options)
+	if err := validateEtcdTTL(ttl); err != nil {
+		return err
 	}
 
 	etcdKey := l.getEtcdKey(key)
 
 	// 如果指定了 TTL，创建新的 session
 	var session *concurrency.Session
-	var err error
-	if options.TTL > 0 && options.TTL != l.cfg.DefaultTTL {
-		session, err = concurrency.NewSession(l.client, concurrency.WithTTL(int(options.TTL.Seconds())))
+	if ttl != l.cfg.DefaultTTL {
+		session, err = concurrency.NewSession(l.client, concurrency.WithTTL(int(ttl.Seconds())))
 		if err != nil {
 			return xerrors.Wrap(err, "failed to create etcd session")
 		}
@@ -111,7 +115,7 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 
 	if lockErr != nil {
 		// 如果是新创建的 session 且加锁失败，需要关闭
-		if options.TTL > 0 && options.TTL != l.cfg.DefaultTTL && session != nil {
+		if ttl != l.cfg.DefaultTTL && session != nil {
 			_ = session.Close()
 		}
 		if lockErr == concurrency.ErrLocked {
@@ -123,10 +127,18 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 	entry := &etcdLockEntry{
 		mutex:   mutex,
 		session: session,
-		isTTL:   options.TTL > 0 && options.TTL != l.cfg.DefaultTTL,
+		isTTL:   ttl != l.cfg.DefaultTTL,
 	}
 
 	l.mu.Lock()
+	if _, exists := l.locks[key]; exists {
+		l.mu.Unlock()
+		_ = mutex.Unlock(ctx)
+		if entry.isTTL && entry.session != nil {
+			_ = entry.session.Close()
+		}
+		return xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
+	}
 	l.locks[key] = entry
 	l.mu.Unlock()
 
@@ -153,7 +165,7 @@ func (l *etcdLocker) Unlock(ctx context.Context, key string) error {
 
 	// 如果是 TTL session，需要关闭它
 	if entry.isTTL && entry.session != nil {
-		entry.session.Close()
+		_ = entry.session.Close()
 	}
 
 	if l.logger != nil {
@@ -171,8 +183,39 @@ func (l *etcdLocker) getEtcdKey(key string) string {
 
 // Close 关闭 Etcd Locker，释放 session
 func (l *etcdLocker) Close() error {
-	if l.session != nil {
-		return l.session.Close()
-	}
-	return nil
+	l.closeOnce.Do(func() {
+		l.mu.Lock()
+		entries := make(map[string]*etcdLockEntry, len(l.locks))
+		for key, entry := range l.locks {
+			entries[key] = entry
+		}
+		l.locks = make(map[string]*etcdLockEntry)
+		defaultSession := l.session
+		l.session = nil
+		l.mu.Unlock()
+
+		var errs []error
+		for key, entry := range entries {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := entry.mutex.Unlock(ctx); err != nil {
+				errs = append(errs, xerrors.Wrapf(err, "failed to unlock key: %s during close", key))
+			}
+			cancel()
+
+			if entry.isTTL && entry.session != nil {
+				if err := entry.session.Close(); err != nil {
+					errs = append(errs, xerrors.Wrapf(err, "failed to close ttl session for key: %s", key))
+				}
+			}
+		}
+
+		if defaultSession != nil {
+			if err := defaultSession.Close(); err != nil {
+				errs = append(errs, xerrors.Wrap(err, "failed to close default etcd session"))
+			}
+		}
+
+		l.closeErr = xerrors.Combine(errs...)
+	})
+	return l.closeErr
 }

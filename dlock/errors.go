@@ -17,4 +17,7 @@ var (
 
 	// ErrOwnershipLost 锁所有权丢失
 	ErrOwnershipLost = xerrors.New("dlock: ownership lost")
+
+	// ErrInvalidTTL TTL 配置非法
+	ErrInvalidTTL = xerrors.New("dlock: invalid ttl")
 )

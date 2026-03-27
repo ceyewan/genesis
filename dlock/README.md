@@ -1,129 +1,124 @@
-# dlock - 分布式锁组件
+# dlock
 
-`dlock` 是 Genesis 的分布式锁组件，支持 Redis 和 Etcd 后端。
+`dlock` 是 Genesis 的 L2 分布式锁组件，提供统一的 `Locker` 接口，支持 Redis 和 Etcd 两种后端。它解决的问题不是“实现所有锁模型”，而是把任务竞选、资源互斥、跨实例串行化这类常见场景收敛成一组稳定、可预测的 API。
 
-## 特性
+## 组件定位
 
-- **后端无关**：支持 Redis、Etcd，通过配置灵活切换
-- **自动续期**：Redis Watchdog / Etcd Session KeepAlive
-- **防误删**：通过 token 机制确保只有锁持有者才能释放
+- 提供 `Lock` / `TryLock` / `Unlock` / `Close` 四个核心方法
+- 支持 Redis token 校验解锁和 Etcd lease/mutex 两种实现
+- 在锁持有期间自动续期，减少长任务执行时的锁过期风险
+- `Close()` 会停止续期，并尽力释放当前 `Locker` 已持有的锁
+- 支持通过 `WithTTL(...)` 覆盖单次加锁 TTL
 
-## 目录结构
-
-```
-dlock/
-├── README.md        # 组件文档
-├── dlock.go         # 公开 API: New()
-├── types.go         # Locker, Config, DriverType
-├── options.go       # Option, WithLogger, With*Connector
-├── lock_options.go  # LockOption, WithTTL
-├── errors.go        # 标准错误定义
-├── redis.go         # Redis 后端
-└── etcd.go          # Etcd 后端
-```
+`dlock` 不提供可重入锁、读写锁、公平锁、锁诊断平台或死锁检测。如果你需要非常定制化的锁协议，应该直接使用底层 Redis 或 Etcd 客户端。
 
 ## 快速开始
 
-### Redis
-
 ```go
-redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+redisConn, err := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+if err != nil {
+    return err
+}
 defer redisConn.Close()
 
-locker, _ := dlock.New(&dlock.Config{
+locker, err := dlock.New(&dlock.Config{
     Driver:        dlock.DriverRedis,
     Prefix:        "myapp:lock:",
     DefaultTTL:    10 * time.Second,
     RetryInterval: 100 * time.Millisecond,
 }, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
-
-ctx := context.Background()
-if err := locker.Lock(ctx, "resource-key"); err != nil {
+if err != nil {
     return err
 }
-defer locker.Unlock(ctx, "resource-key")
-```
+defer locker.Close()
 
-### Etcd
+ctx := context.Background()
+if err := locker.Lock(ctx, "inventory:42"); err != nil {
+    return err
+}
+defer locker.Unlock(ctx, "inventory:42")
 
-```go
-etcdConn, _ := connector.NewEtcd(&cfg.Etcd, connector.WithLogger(logger))
-defer etcdConn.Close()
-
-locker, _ := dlock.New(&dlock.Config{
-    Driver:     dlock.DriverEtcd,
-    Prefix:     "myapp:lock:",
-    DefaultTTL: 30 * time.Second,
-}, dlock.WithEtcdConnector(etcdConn), dlock.WithLogger(logger))
+// critical section
 ```
 
 ## 核心接口
-
-### Locker
 
 ```go
 type Locker interface {
     Lock(ctx context.Context, key string, opts ...LockOption) error
     TryLock(ctx context.Context, key string, opts ...LockOption) (bool, error)
     Unlock(ctx context.Context, key string) error
+    Close() error
 }
 ```
 
-### Config
+`Lock` 适合“拿不到锁就不能继续”的场景，内部按 `RetryInterval` 重试；`TryLock` 适合任务竞选这类“拿不到就跳过”的场景；`Unlock` 只允许持有者释放；`Close` 用于结束当前 `Locker` 生命周期，停止续期并清理它持有的锁。
 
-```go
-type Config struct {
-    Driver        DriverType   // redis | etcd
-    Prefix        string       // 锁 Key 前缀，如 "myapp:lock:"
-    DefaultTTL    time.Duration // 默认锁超时时间
-    RetryInterval time.Duration // 加锁重试间隔
-}
-```
+## TTL 语义
 
-## 应用场景
+`WithTTL(...)` 看起来是统一选项，但两种后端的精度并不完全一样：
+
+- Redis 直接使用原生 `time.Duration`
+- Etcd 基于 lease，TTL 是秒级
+
+因此 Etcd 的 `DefaultTTL` 和 `WithTTL(...)` 都必须满足：
+
+- 至少 `1*time.Second`
+- 必须是整秒，例如 `5*time.Second`
+
+非法 TTL 会返回 `ErrInvalidTTL`，不会再静默回退到默认值。
+
+## 推荐场景
 
 ### 任务竞选
 
 ```go
-acquired, _ := locker.TryLock(ctx, "scheduled-task:cleanup")
-if acquired {
-    defer locker.Unlock(ctx, "scheduled-task:cleanup")
-    runCleanup()
+ok, err := locker.TryLock(ctx, "jobs:daily-settlement")
+if err != nil {
+    return err
 }
+if !ok {
+    return nil
+}
+defer locker.Unlock(ctx, "jobs:daily-settlement")
+
+runSettlement()
 ```
 
-### 库存扣减
+### 短事务串行化
 
 ```go
-locker.Lock(ctx, fmt.Sprintf("inventory:%d", productID),
-    dlock.WithTTL(30*time.Second))
-defer locker.Unlock(ctx, fmt.Sprintf("inventory:%d", productID))
+key := fmt.Sprintf("inventory:%d", productID)
+if err := locker.Lock(ctx, key, dlock.WithTTL(30*time.Second)); err != nil {
+    return err
+}
+defer locker.Unlock(ctx, key)
+
+return updateInventory(ctx, productID)
 ```
 
-## 可观测性
+## 错误语义
 
-通过 `WithLogger` 注入日志器，自动添加 `component=dlock` 字段。
+常见错误包括：
 
-## 工厂函数
+- `ErrLockAlreadyHeld`：当前 `Locker` 已在本地持有同一个 key
+- `ErrLockNotHeld`：尝试释放一个当前 `Locker` 没持有的锁
+- `ErrOwnershipLost`：远端锁已经不属于当前持有者
+- `ErrInvalidTTL`：TTL 非法，常见于 Etcd 子秒级 TTL
 
-```go
-func New(cfg *Config, opts ...Option) (Locker, error)
-```
+业务代码通常只需要区分“锁冲突”“所有权丢失”和“底层异常”三类场景。
 
-选项：`WithRedisConnector`、`WithEtcdConnector`、`WithLogger`。
+## 日志与资源释放
 
-## 标准错误
+通过 `WithLogger` 注入 `clog.Logger` 后，组件会自动附加 `component=dlock` 字段，并在加锁、解锁、续期失败、所有权丢失等关键事件上输出结构化日志。
 
-```go
-var (
-    ErrConfigNil       = xerrors.New("dlock: config is nil")
-    ErrConnectorNil    = xerrors.New("dlock: connector is nil")
-    ErrLockNotHeld     = xerrors.New("dlock: lock not held")
-    ErrLockAlreadyHeld = xerrors.New("dlock: lock already held locally")
-    ErrOwnershipLost   = xerrors.New("dlock: ownership lost")
-)
-```
+`dlock` 不拥有底层 Redis / Etcd 连接，因此：
 
-## 完整示例
+- `locker.Close()` 负责清理当前 `Locker` 自己持有的锁和续期状态
+- `redisConn.Close()` / `etcdConn.Close()` 仍然由调用方负责
 
-参考 [examples/dlock/main.go](../examples/dlock/main.go)。
+## 相关文档
+
+- [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/dlock)
+- [组件设计博客](../docs/genesis-dlock-blog.md)
+- [完整示例](../examples/dlock/main.go)

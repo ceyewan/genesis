@@ -52,6 +52,11 @@ func (c *Config) validate() error {
 	}
 	switch c.Driver {
 	case DriverRedis, DriverEtcd:
+		if c.Driver == DriverEtcd {
+			if err := validateEtcdTTL(c.DefaultTTL); err != nil {
+				return err
+			}
+		}
 		return nil
 	default:
 		return xerrors.New("dlock: unsupported driver: " + string(c.Driver))
@@ -81,7 +86,8 @@ type Locker interface {
 	// 只有锁的持有者才能成功释放
 	Unlock(ctx context.Context, key string) error
 
-	// Close 关闭 Locker，释放底层资源
-	// 对于 Etcd 会关闭 session，对于 Redis 是 no-op
+	// Close 关闭 Locker 的持有状态。
+	// 它会停止自动续期，并尽力释放当前 Locker 已持有的锁。
+	// 底层 Redis / Etcd 连接器仍由调用方负责关闭。
 	Close() error
 }
