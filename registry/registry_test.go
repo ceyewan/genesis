@@ -2,13 +2,18 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/resolver"
+	"google.golang.org/grpc/serviceconfig"
 
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/testkit"
@@ -144,7 +149,7 @@ func TestRegister(t *testing.T) {
 		Version: "1.0.0",
 		Endpoints: []string{
 			"grpc://127.0.0.1:8080",
-			"http://127.0.0.1:8081",
+			"grpc://127.0.0.1:8081",
 		},
 		Metadata: map[string]string{
 			"region": "us-west-1",
@@ -229,6 +234,34 @@ func TestRegisterInvalidTTL(t *testing.T) {
 	err = reg.Register(ctx, service, 500*time.Millisecond)
 	if err != ErrInvalidTTL {
 		t.Errorf("Expected ErrInvalidTTL, got %v", err)
+	}
+}
+
+func TestRegisterInvalidEndpoints(t *testing.T) {
+	reg := setupRegistry(t, "/test/invalid-endpoints")
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		endpoints []string
+	}{
+		{name: "empty endpoints", endpoints: nil},
+		{name: "http endpoint", endpoints: []string{"http://127.0.0.1:18080"}},
+		{name: "https endpoint", endpoints: []string{"https://127.0.0.1:18443"}},
+		{name: "invalid hostport", endpoints: []string{"grpc://127.0.0.1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &ServiceInstance{
+				ID:        "invalid-endpoint-" + tt.name,
+				Name:      "invalid-endpoint-test",
+				Version:   "1.0.0",
+				Endpoints: tt.endpoints,
+			}
+			err := reg.Register(ctx, service, 10*time.Second)
+			require.ErrorIs(t, err, ErrInvalidServiceInstance)
+		})
 	}
 }
 
@@ -573,6 +606,106 @@ func TestClose(t *testing.T) {
 	if err != nil {
 		t.Errorf("Close should be idempotent, got error: %v", err)
 	}
+}
+
+func TestEmitSnapshotDiff(t *testing.T) {
+	reg := setupRegistry(t, "/test/watch-compaction").(*etcdRegistry)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	known := map[string]*ServiceInstance{
+		"svc-001": {
+			ID:        "svc-001",
+			Name:      "watch-compaction-test",
+			Version:   "1.0.0",
+			Endpoints: []string{"grpc://127.0.0.1:19001"},
+		},
+	}
+	eventCh := make(chan ServiceEvent, 4)
+
+	kvs := []*mvccpb.KeyValue{
+		mustKV(t, &ServiceInstance{
+			ID:        "svc-002",
+			Name:      "watch-compaction-test",
+			Version:   "1.0.0",
+			Endpoints: []string{"grpc://127.0.0.1:19002"},
+		}),
+	}
+
+	err := reg.emitSnapshotDiff(ctx, "watch-compaction-test", eventCh, known, kvs)
+	require.NoError(t, err)
+
+	first := waitForRegistryEvent(t, eventCh, time.Second)
+	second := waitForRegistryEvent(t, eventCh, time.Second)
+	got := map[string]EventType{
+		first.Service.ID:  first.Type,
+		second.Service.ID: second.Type,
+	}
+	require.Equal(t, EventTypePut, got["svc-002"])
+	require.Equal(t, EventTypeDelete, got["svc-001"])
+	require.Len(t, known, 1)
+	require.Contains(t, known, "svc-002")
+}
+
+func TestParseGRPCEndpoint(t *testing.T) {
+	require.Equal(t, "127.0.0.1:9000", parseGRPCEndpoint("grpc://127.0.0.1:9000"))
+	require.Equal(t, "127.0.0.1:9000", parseGRPCEndpoint("127.0.0.1:9000"))
+	require.Equal(t, "", parseGRPCEndpoint("http://127.0.0.1:9000"))
+	require.Equal(t, "", parseGRPCEndpoint("https://127.0.0.1:9000"))
+	require.Equal(t, "", parseGRPCEndpoint("grpc://127.0.0.1"))
+}
+
+func waitForRegistryEvent(t *testing.T, ch <-chan ServiceEvent, timeout time.Duration) ServiceEvent {
+	t.Helper()
+
+	select {
+	case event := <-ch:
+		return event
+	case <-time.After(timeout):
+		t.Fatal("timeout waiting for registry event")
+		return ServiceEvent{}
+	}
+}
+
+func mustKV(t *testing.T, service *ServiceInstance) *mvccpb.KeyValue {
+	t.Helper()
+
+	value, err := json.Marshal(service)
+	require.NoError(t, err)
+	return &mvccpb.KeyValue{Value: value}
+}
+
+func TestResolverPushesEmptyState(t *testing.T) {
+	cc := &testResolverClientConn{}
+	r := &etcdResolver{
+		registry:    &etcdRegistry{logger: testkit.NewLogger()},
+		serviceName: "empty-state-test",
+		cc:          cc,
+		localCache:  map[string]resolver.Address{},
+	}
+
+	r.pushStateLocked()
+	require.NotNil(t, cc.lastState)
+	require.Empty(t, cc.lastState.Addresses)
+}
+
+type testResolverClientConn struct {
+	resolver.ClientConn
+	lastState *resolver.State
+}
+
+func (t *testResolverClientConn) UpdateState(state resolver.State) error {
+	stateCopy := state
+	t.lastState = &stateCopy
+	return nil
+}
+
+func (t *testResolverClientConn) ReportError(err error) {}
+
+func (t *testResolverClientConn) NewAddress(addresses []resolver.Address) {}
+
+func (t *testResolverClientConn) ParseServiceConfig(serviceConfigJSON string) *serviceconfig.ParseResult {
+	return nil
 }
 
 // TestRegistryClosed 测试 Close 后不可再用

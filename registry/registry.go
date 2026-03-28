@@ -1,76 +1,40 @@
-// Package registry 提供了基于 Etcd 的服务注册发现组件，支持 gRPC 集成和客户端负载均衡。
+// Package registry 提供了基于 Etcd 的服务注册发现组件，以及面向 gRPC 的 resolver 集成。
 //
-// registry 组件是 Genesis 治理层的核心组件，它在 Etcd 连接器的基础上提供了：
-// - 服务注册与发现能力
-// - 实时服务变化监听
-// - gRPC Resolver 集成，支持 `etcd://<service_name>` 解析
-// - 自动租约续约和优雅下线
-// - 与 L0 基础组件（日志、指标、错误）的深度集成
+// registry 位于 Genesis 的治理层，核心职责是把 Etcd 的租约、KV 和 watch 机制收敛成
+// 一套更稳定的服务注册发现语义。它适合“一个进程对应一个 active 服务角色”的使用方式，
+// 因此进程内只允许存在一个 active registry 实例。
 //
-// ## 基本使用
+// 这个组件当前有三个核心能力：
+//   - Register / Deregister：把服务实例注册到 Etcd，并用 lease 管理实例生命周期
+//   - GetService / Watch：获取实例列表，并订阅服务实例变化
+//   - GetConnection：把服务发现结果接入 gRPC resolver，返回可用于 RPC 的 ClientConn
 //
-//	etcdConn, _ := connector.NewEtcd(&cfg.Etcd, connector.WithLogger(logger))
-//	defer etcdConn.Close()
-//	etcdConn.Connect(ctx)
+// registry 不负责 Etcd 连接的生命周期，它借用外部注入的 connector。调用方负责关闭
+// connector，也负责在 registry 不再使用时调用 Close。
 //
-//	reg, _ := registry.New(etcdConn, &registry.Config{
-//		Namespace:  "/genesis/services",
-//		DefaultTTL: 30 * time.Second,
-//	}, registry.WithLogger(logger))
-//	defer reg.Close()
+// ServiceInstance.Endpoints 在 registry 里不是通用 URL 列表，而是 gRPC 服务地址列表。
+// 当前仅接受两种格式：
+//   - grpc://host:port
+//   - host:port
 //
-//	// 注册服务
-//	service := &registry.ServiceInstance{
-//		ID:        "user-service-001",
-//		Name:      "user-service",
-//		Endpoints: []string{"grpc://127.0.0.1:8080"},
-//	}
-//	err := reg.Register(ctx, service, 30*time.Second)
+// http://、https:// 或其他协议地址不会通过注册校验，也不会进入 resolver。
 //
-//	// 服务发现
-//	instances, err := reg.GetService(ctx, "user-service")
+// GetConnection 返回的是已经绑定 etcd resolver 的 gRPC 连接对象。如果调用方希望在
+// 返回前主动等待连接 Ready，应传入带 deadline 的 context；如果传入没有 deadline 的
+// context，GetConnection 只保证 resolver 已配置，不保证连接已经 Ready。
 //
-//	// gRPC 集成
-//	conn, err := reg.GetConnection(ctx, "user-service")
-//	defer conn.Close()
-//	client := pb.NewUserServiceClient(conn)
+// Watch 会在 Etcd compaction 后回到最新快照，并基于快照与本地已知状态做 diff，
+// 补发必要的 PUT / DELETE 事件，尽量维持事件流语义。
 //
-// ## Etcd 存储结构
-//
-// 服务实例在 Etcd 中的存储采用层级结构：
-//
-//	<namespace>/<service_name>/<instance_id> -> JSON(ServiceInstance)
-//
-// 例如：
-// - `/genesis/services/user-service/uuid-1234-5678`
-// - `/genesis/services/order-service/uuid-abcd-efgh`
-//
-// ## gRPC 集成
-//
-// Registry 组件实现了 gRPC resolver.Builder 接口，支持原生 gRPC 服务发现：
-//
-//	// 方式一：使用 GetConnection（推荐）
-//	conn, err := reg.GetConnection(ctx, "user-service")
-//
-//	// 方式二：使用原生 gRPC Dial
-//	conn, err := grpc.NewClient(
-//		"etcd:///user-service",
-//		grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
-//		grpc.WithTransportCredentials(insecure.NewCredentials()),
-//	)
-//
-// ## 设计原则
-//
-// - **借用模型**：registry 组件借用 Etcd 连接器的连接，不负责连接的生命周期
-// - **显式依赖**：通过构造函数显式注入连接器和选项
-// - **gRPC 原生支持**：深度集成 gRPC 生态，提供开箱即用的服务发现
-// - **可观测性**：集成 clog 和 metrics，提供完整的日志和指标能力
+// Close 会停止后台 watch / keepalive 任务，并尽力撤销当前 registry 创建的 lease。
+// 如果 lease 撤销失败，Close 会把错误返回给调用方，而不是只写日志。
 package registry
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -80,6 +44,7 @@ import (
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/xerrors"
 
+	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
@@ -136,11 +101,16 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 	}
 
 	if opt.logger == nil {
-		opt.logger, _ = clog.New(&clog.Config{
+		logger, err := clog.New(&clog.Config{
 			Level:  "info",
 			Format: "console",
 			Output: "stdout",
 		})
+		if err != nil {
+			opt.logger = clog.Discard()
+		} else {
+			opt.logger = logger
+		}
 	}
 
 	r := &etcdRegistry{
@@ -201,8 +171,8 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 	if err := r.ensureOpen(); err != nil {
 		return err
 	}
-	if service == nil || service.ID == "" || service.Name == "" {
-		return ErrInvalidServiceInstance
+	if err := validateServiceInstance(service); err != nil {
+		return err
 	}
 	if ttl < 0 {
 		return ErrInvalidTTL
@@ -398,6 +368,7 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 		}()
 
 		var lastRev int64 = 0
+		knownInstances := make(map[string]*ServiceInstance)
 		retryInterval := r.cfg.RetryInterval
 		if retryInterval == 0 {
 			retryInterval = 1 * time.Second
@@ -450,6 +421,11 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 									clog.Duration("retry_after", retryInterval))
 							} else {
 								lastRev = resp.Header.Revision
+								if err := r.emitSnapshotDiff(watchCtx, serviceName, eventCh, knownInstances, resp.Kvs); err != nil {
+									r.logger.Warn("failed to emit snapshot diff after compaction",
+										clog.String("service_name", serviceName),
+										clog.Error(err))
+								}
 							}
 							break innerLoop
 						}
@@ -482,6 +458,7 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 								Type:    EventTypePut,
 								Service: &instance,
 							}
+							knownInstances[instance.ID] = cloneServiceInstance(&instance)
 						case clientv3.EventTypeDelete:
 							// DELETE 事件：从 key 中提取服务 ID
 							// Key 格式: /namespace/service_name/instance_id
@@ -494,6 +471,7 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 								Type:    EventTypeDelete,
 								Service: &instance,
 							}
+							delete(knownInstances, instance.ID)
 						}
 
 						// 发送事件
@@ -612,11 +590,13 @@ func (r *etcdRegistry) Close() error {
 	r.mu.Unlock()
 
 	// 撤销所有租约
+	var revokeErrs []error
 	for serviceID, leaseID := range leaseSnapshot {
 		if _, err := r.client.Revoke(ctx, leaseID); err != nil {
 			r.logger.Warn("failed to revoke lease during shutdown",
 				clog.String("service_id", serviceID),
 				clog.Error(err))
+			revokeErrs = append(revokeErrs, xerrors.Wrapf(err, "revoke lease failed for service %s", serviceID))
 		}
 	}
 
@@ -624,7 +604,7 @@ func (r *etcdRegistry) Close() error {
 	r.wg.Wait()
 
 	r.logger.Info("registry stopped")
-	return nil
+	return xerrors.Combine(revokeErrs...)
 }
 
 // buildKey 构建存储键
@@ -695,4 +675,131 @@ func (r *etcdRegistry) monitorKeepAlive(ka *leaseKeepAlive) {
 // buildPrefix 构建前缀
 func (r *etcdRegistry) buildPrefix(serviceName string) string {
 	return fmt.Sprintf("%s/%s/", r.cfg.Namespace, serviceName)
+}
+
+func validateServiceInstance(service *ServiceInstance) error {
+	if service == nil || service.ID == "" || service.Name == "" {
+		return ErrInvalidServiceInstance
+	}
+	if len(service.Endpoints) == 0 {
+		return xerrors.Wrap(ErrInvalidServiceInstance, "service endpoints are required")
+	}
+	for _, endpoint := range service.Endpoints {
+		if !isValidGRPCEndpoint(endpoint) {
+			return xerrors.Wrapf(ErrInvalidServiceInstance, "invalid grpc endpoint: %s", endpoint)
+		}
+	}
+	return nil
+}
+
+func isValidGRPCEndpoint(endpoint string) bool {
+	if endpoint == "" {
+		return false
+	}
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		return false
+	}
+	addr := strings.TrimPrefix(endpoint, "grpc://")
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	return host != "" && port != ""
+}
+
+func cloneServiceInstance(service *ServiceInstance) *ServiceInstance {
+	if service == nil {
+		return nil
+	}
+	cloned := &ServiceInstance{
+		ID:        service.ID,
+		Name:      service.Name,
+		Version:   service.Version,
+		Endpoints: append([]string(nil), service.Endpoints...),
+	}
+	if len(service.Metadata) > 0 {
+		cloned.Metadata = make(map[string]string, len(service.Metadata))
+		for k, v := range service.Metadata {
+			cloned.Metadata[k] = v
+		}
+	}
+	return cloned
+}
+
+func (r *etcdRegistry) emitSnapshotDiff(
+	ctx context.Context,
+	serviceName string,
+	eventCh chan<- ServiceEvent,
+	known map[string]*ServiceInstance,
+	kvs []*mvccpb.KeyValue,
+) error {
+	latest := make(map[string]*ServiceInstance, len(kvs))
+	for _, kv := range kvs {
+		var instance ServiceInstance
+		if err := json.Unmarshal(kv.Value, &instance); err != nil {
+			r.logger.Warn("failed to unmarshal service instance during resync",
+				clog.String("key", string(kv.Key)),
+				clog.Error(err))
+			continue
+		}
+		latest[instance.ID] = cloneServiceInstance(&instance)
+	}
+
+	for id, instance := range latest {
+		previous, exists := known[id]
+		if exists && serviceInstancesEqual(previous, instance) {
+			continue
+		}
+		select {
+		case eventCh <- ServiceEvent{Type: EventTypePut, Service: cloneServiceInstance(instance)}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	for id := range known {
+		if _, exists := latest[id]; exists {
+			continue
+		}
+		select {
+		case eventCh <- ServiceEvent{
+			Type: EventTypeDelete,
+			Service: &ServiceInstance{
+				ID:   id,
+				Name: serviceName,
+			},
+		}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	clear(known)
+	for id, instance := range latest {
+		known[id] = cloneServiceInstance(instance)
+	}
+	return nil
+}
+
+func serviceInstancesEqual(a, b *ServiceInstance) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.ID != b.ID || a.Name != b.Name || a.Version != b.Version {
+		return false
+	}
+	if len(a.Endpoints) != len(b.Endpoints) || len(a.Metadata) != len(b.Metadata) {
+		return false
+	}
+	for i := range a.Endpoints {
+		if a.Endpoints[i] != b.Endpoints[i] {
+			return false
+		}
+	}
+	for k, v := range a.Metadata {
+		if b.Metadata[k] != v {
+			return false
+		}
+	}
+	return true
 }

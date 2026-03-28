@@ -158,7 +158,7 @@ func (r *etcdResolver) initializeCache() {
 	r.localCache = make(map[string]resolver.Address)
 	for _, instance := range instances {
 		for _, endpoint := range instance.Endpoints {
-			addr := parseEndpoint(endpoint)
+			addr := parseGRPCEndpoint(endpoint)
 			if addr != "" {
 				// 使用 instanceID 作为 key，一个实例可能有多个 endpoint
 				key := instance.ID + "_" + addr
@@ -193,7 +193,7 @@ func (r *etcdResolver) handleEvent(event ServiceEvent) {
 	case EventTypePut:
 		// 服务注册或更新
 		for _, endpoint := range event.Service.Endpoints {
-			addr := parseEndpoint(endpoint)
+			addr := parseGRPCEndpoint(endpoint)
 			if addr != "" {
 				key := event.Service.ID + "_" + addr
 				r.localCache[key] = resolver.Address{
@@ -233,12 +233,9 @@ func (r *etcdResolver) pushStateLocked() {
 		addrs = append(addrs, addr)
 	}
 
-	// 如果地址列表为空，不更新状态（避免导致连接完全中断）
-	// 这是 gRPC resolver 的常见做法：保留旧状态直到有新地址可用
 	if len(addrs) == 0 {
 		r.registry.logger.Warn("no available service instances in resolver cache",
 			clog.String("service_name", r.serviceName))
-		return
 	}
 
 	state := resolver.State{
@@ -263,13 +260,11 @@ func (r *etcdResolver) Close() {
 	r.cancel()
 }
 
-// parseEndpoint 解析 endpoint 地址
-// 支持格式: grpc://host:port, http://host:port, host:port
-func parseEndpoint(endpoint string) string {
-	// 移除协议前缀
-	endpoint = strings.TrimPrefix(endpoint, "grpc://")
-	endpoint = strings.TrimPrefix(endpoint, "http://")
-	endpoint = strings.TrimPrefix(endpoint, "https://")
-
-	return endpoint
+// parseGRPCEndpoint 解析 gRPC endpoint 地址。
+// 支持格式: grpc://host:port, host:port
+func parseGRPCEndpoint(endpoint string) string {
+	if !isValidGRPCEndpoint(endpoint) {
+		return ""
+	}
+	return strings.TrimPrefix(endpoint, "grpc://")
 }
