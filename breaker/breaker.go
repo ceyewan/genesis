@@ -1,39 +1,18 @@
-// Package breaker 提供了熔断器组件，专注于 gRPC 客户端的故障隔离与自动恢复。
+// Package breaker 提供了面向 gRPC 客户端场景的轻量熔断组件。
 //
-// breaker 是 Genesis 治理层的核心组件，它提供了：
-// - 基于 gobreaker 的熔断器实现
-// - 服务级粒度的熔断管理（按目标服务名独立熔断）
-// - 自动故障隔离和自动恢复（通过半开状态探测）
-// - 灵活的降级策略（快速失败或自定义降级逻辑）
-// - gRPC Unary Interceptor 无侵入集成
+// breaker 在 Genesis 治理层中承担“故障隔离”职责：当下游服务出现系统性错误时，
+// 组件会按 key 维度独立统计失败并驱动 closed/open/half-open 状态迁移，避免故障
+// 扩散到整个调用链。
 //
-// ## 基本使用
+// 当前组件的定位比较克制：
+//   - 核心能力是 Execute、State 和 gRPC UnaryClientInterceptor
+//   - 默认以 cc.Target() 作为服务级熔断 key，也支持通过 WithKeyFunc 自定义粒度
+//   - gRPC 拦截器会区分系统性错误与业务错误，避免把 InvalidArgument、NotFound
+//     等明显业务错误直接计入熔断统计
+//   - WithFallback 只负责处理“请求被 breaker 拒绝”这一类情况，不负责生成替代结果
 //
-//	// 创建熔断器
-//	brk, _ := breaker.New(&breaker.Config{
-//		MaxRequests:         5,
-//		Interval:            60 * time.Second,
-//		Timeout:             30 * time.Second,
-//		FailureRatio:        0.6,
-//		MinimumRequests:     10,
-//	}, breaker.WithLogger(logger))
-//
-//	// 使用 gRPC Interceptor
-//	conn, _ := grpc.NewClient(
-//		"localhost:9001",
-//		grpc.WithUnaryInterceptor(brk.UnaryClientInterceptor()),
-//	)
-//
-// ## 降级策略
-//
-//	// 自定义降级逻辑
-//	brk, _ := breaker.New(cfg,
-//		breaker.WithLogger(logger),
-//		breaker.WithFallback(func(ctx context.Context, serviceName string, err error) error {
-//			// 返回缓存数据或默认值
-//			return nil
-//		}),
-//	)
+// breaker 不试图替业务统一建模所有失败语义。对于不同调用场景，最重要的设计点
+// 不是状态机本身，而是 key 粒度和失败口径。
 package breaker
 
 import (
@@ -41,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/xerrors"
 
 	"google.golang.org/grpc"
 )
@@ -54,7 +34,9 @@ type Breaker interface {
 	// Execute 执行受熔断保护的函数
 	// key: 熔断键（可以是服务名、后端地址、方法名等）
 	// fn: 要执行的函数
-	// 返回: 函数执行结果和错误
+	// 返回: 函数执行结果和错误。
+	// 若执行被熔断器拒绝，返回组件自己的拒绝错误；若配置了 Fallback，
+	// Fallback 成功时返回 nil, nil。
 	Execute(ctx context.Context, key string, fn func() (any, error)) (any, error)
 
 	// UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器
@@ -102,7 +84,7 @@ type Config struct {
 	MaxRequests uint32 `json:"max_requests" yaml:"max_requests"`
 
 	// Interval 闭合状态下的统计周期（默认：0，不清空统计）
-	// 设置后会定期清空计数器
+	// 设置后会按周期重置闭合状态下的统计计数
 	Interval time.Duration `json:"interval" yaml:"interval"`
 
 	// Timeout 打开状态持续时间（默认：60s）
@@ -118,20 +100,30 @@ type Config struct {
 	MinimumRequests uint32 `json:"minimum_requests" yaml:"minimum_requests"`
 }
 
-// validate 验证配置并设置默认值（内部使用）
-func (c *Config) validate() {
+// validate 验证配置并设置默认值（内部使用）。
+func (c *Config) validate() error {
 	if c.MaxRequests == 0 {
 		c.MaxRequests = 1
+	}
+	if c.Interval < 0 {
+		return xerrors.Wrap(ErrInvalidConfig, "interval must be greater than or equal to 0")
 	}
 	if c.Timeout == 0 {
 		c.Timeout = 60 * time.Second
 	}
+	if c.Timeout < 0 {
+		return xerrors.Wrap(ErrInvalidConfig, "timeout must be greater than 0")
+	}
 	if c.FailureRatio == 0 {
 		c.FailureRatio = 0.6
+	}
+	if c.FailureRatio <= 0 || c.FailureRatio > 1 {
+		return xerrors.Wrap(ErrInvalidConfig, "failure_ratio must be within (0, 1]")
 	}
 	if c.MinimumRequests == 0 {
 		c.MinimumRequests = 10
 	}
+	return nil
 }
 
 // ========================================
@@ -145,13 +137,15 @@ func (c *Config) validate() {
 //   - cfg: 熔断器配置，传 nil 时使用默认配置
 //   - opts: 可选参数 (Logger, Fallback)
 //
-// 返回: Breaker 实例和错误（仅当配置无效时返回错误）
+// 返回: Breaker 实例和错误。
 func New(cfg *Config, opts ...Option) (Breaker, error) {
 	// nil cfg 时使用默认配置
 	if cfg == nil {
 		cfg = &Config{}
 	}
-	cfg.validate()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 
 	// 应用选项
 	opt := options{}

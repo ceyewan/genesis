@@ -6,10 +6,13 @@ import (
 	"github.com/ceyewan/genesis/clog"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器
-// 为每个 gRPC 调用提供熔断保护，支持 InterceptorOption 配置 Key 生成策略
+// UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器。
+// 它会为每个 gRPC 调用提供熔断保护，并区分系统性错误与明显业务错误，
+// 以避免把 InvalidArgument、NotFound 等业务错误直接计入熔断统计。
 //
 // 使用示例:
 //
@@ -36,10 +39,17 @@ func (cb *circuitBreaker) UnaryClientInterceptor(opts ...InterceptorOption) grpc
 		}
 
 		// 使用熔断器执行调用
+		var callErr error
 		_, err := cb.Execute(ctx, key, func() (any, error) {
-			err := invoker(ctx, method, req, reply, cc, opts...)
-			return nil, err
+			callErr = invoker(ctx, method, req, reply, cc, opts...)
+			if shouldCountGRPCFailure(callErr) {
+				return nil, callErr
+			}
+			return nil, nil
 		})
+		if err == nil {
+			return callErr
+		}
 
 		return err
 	}
@@ -47,4 +57,46 @@ func (cb *circuitBreaker) UnaryClientInterceptor(opts ...InterceptorOption) grpc
 
 func defaultKeyFunc(ctx context.Context, fullMethod string, cc *grpc.ClientConn) string {
 	return cc.Target()
+}
+
+func shouldCountGRPCFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	switch {
+	case err == context.Canceled:
+		return false
+	case err == context.DeadlineExceeded:
+		return false
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		return true
+	}
+
+	switch st.Code() {
+	case codes.OK,
+		codes.Canceled,
+		codes.InvalidArgument,
+		codes.NotFound,
+		codes.AlreadyExists,
+		codes.PermissionDenied,
+		codes.FailedPrecondition,
+		codes.Aborted,
+		codes.OutOfRange,
+		codes.Unauthenticated:
+		return false
+	case codes.Unknown,
+		codes.DeadlineExceeded,
+		codes.ResourceExhausted,
+		codes.Unimplemented,
+		codes.Internal,
+		codes.Unavailable,
+		codes.DataLoss:
+		return true
+	default:
+		return true
+	}
 }

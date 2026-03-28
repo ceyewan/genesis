@@ -54,22 +54,21 @@ func (cb *circuitBreaker) Execute(ctx context.Context, key string, fn func() (an
 	// 执行熔断保护的函数
 	result, err := breaker.Execute(fn)
 
-	// 如果熔断器打开且配置了降级函数
-	if err != nil && xerrors.Is(err, gobreaker.ErrOpenState) {
-		cb.logger.Info("circuit breaker open, initiating fallback",
+	rejectionErr, rejected := mapBreakerError(err)
+	if rejected {
+		cb.logger.Info("Circuit breaker rejected request",
 			clog.String("key", key),
-			clog.Error(err))
+			clog.Error(rejectionErr))
 
-		// 执行降级逻辑
 		if cb.fallback != nil {
-			fallbackErr := cb.fallback(ctx, key, err)
+			fallbackErr := cb.fallback(ctx, key, rejectionErr)
 			if fallbackErr == nil {
 				return nil, nil
 			}
 			return nil, fallbackErr
 		}
 
-		return nil, ErrOpenState
+		return nil, rejectionErr
 	}
 
 	return result, err
@@ -162,5 +161,18 @@ func stateToString(state gobreaker.State) string {
 		return "open"
 	default:
 		return "unknown"
+	}
+}
+
+func mapBreakerError(err error) (error, bool) {
+	switch {
+	case err == nil:
+		return nil, false
+	case xerrors.Is(err, gobreaker.ErrOpenState):
+		return ErrOpenState, true
+	case xerrors.Is(err, gobreaker.ErrTooManyRequests):
+		return ErrTooManyRequests, true
+	default:
+		return nil, false
 	}
 }

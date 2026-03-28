@@ -1,288 +1,95 @@
-# Genesis breaker：服务级熔断的设计与实现
+# Genesis breaker：面向 gRPC 客户端的故障隔离设计
 
-Genesis `breaker` 是治理层（L3）的熔断组件，面向 gRPC 客户端场景，核心目的是在下游异常时快速失败、隔离故障，并在冷却后自动探测恢复。它遵循 Genesis 基础规范，使用 `clog` 记录状态迁移，通过 `WithLogger` 注入依赖，支持 nil 配置时使用默认值。
+Genesis `breaker` 是治理层组件，定位很明确：它服务于 gRPC 客户端调用链，在下游出现系统性异常时快速失败，避免请求继续堆积和故障扩散。这篇文章不讲“怎么把 gobreaker 包一层”，而是重点解释三个设计判断：为什么要按 key 独立熔断，为什么必须区分系统错误和业务错误，以及为什么当前 `fallback` 只能被定义成“拒绝处理”而不是“结果降级”。
 
 ---
 
 ## 0 摘要
 
-- `breaker` 基于 `sony/gobreaker` 实现，按 `key` 维度维护独立熔断器
-- 默认集成点是 `UnaryClientInterceptor`，无侵入接入 gRPC 客户端
-- 熔断判定由 `FailureRatio + MinimumRequests` 控制
-- 状态机为 `closed → open → half_open → closed/open`
-- 支持 `Fallback` 降级函数，在 `open` 状态下执行替代逻辑
-- 默认 Key 是 `cc.Target()`（服务级）；可通过 `WithKeyFunc` 自定义到方法级等粒度
+- `breaker` 基于 `gobreaker`，但真正重要的是 Genesis 对失败口径和接入边界的收敛。
+- 组件按 key 维护独立 breaker，默认 key 是 `cc.Target()`，也支持用 `WithKeyFunc` 改成方法级或业务分片级。
+- gRPC 拦截器默认只把系统性错误计入熔断统计，`InvalidArgument`、`NotFound` 等业务错误不会推动 breaker 打开。
+- breaker 的拒绝语义现在被统一成组件自己的错误，不再直接泄漏底层 `gobreaker` 错误。
+- `WithFallback` 当前只处理“请求被拒绝”这一刻，不负责生成替代业务结果。
 
 ---
 
-## 1 背景：熔断组件要解决的"真实问题"
+## 1 背景与问题
 
-在微服务调用中，当下游服务异常时，上游服务如果持续重试或等待，会造成：
+熔断器要解决的问题不是“某次请求失败了怎么办”，而是“当下游已经明显不稳定时，是否还要继续把流量送过去”。如果一个服务对已经失效或明显过载的依赖持续发请求，最常见的后果不是一个接口报错，而是连接池、goroutine、线程、重试预算和超时窗口被一起耗尽，最终把故障从下游放大到整条调用链。
 
-- **资源耗尽**：线程/连接堆积，拖垮自身服务
-- **雪崩效应**：故障向上游传播，影响整个调用链
-- **恢复延迟**：下游恢复后，上游仍在积压请求，无法快速感知
-
-熔断器的核心思路是"先断后探"：检测到异常时快速失败（断），冷却后放少量探测请求（探），确认恢复后再放开流量。
+这也是为什么 Genesis 需要单独有一个 `breaker` 组件。直接使用 `gobreaker` 并不难，但在微服务项目里，真正容易出问题的从来不是“状态机怎么切”，而是两个更实际的问题：第一，隔离域到底按服务、方法还是租户来分；第二，什么错误应该算作 breaker failure。没有这两层约束，熔断器很容易要么太钝，要么误伤。
 
 ---
 
-## 2 核心设计
+## 2 基础原理与前置知识
 
-### 2.1 接口抽象
+`gobreaker` 底层是一个典型的三态状态机：`closed`、`open` 和 `half-open`。闭合状态下正常放行请求，并统计成功与失败；当失败率在达到最小样本量后超过阈值，状态切到打开；打开状态会直接拒绝后续请求，直到超时进入半开；半开阶段只放少量探测请求，根据探测结果决定回到闭合还是重新打开。
 
-`Breaker` 接口聚焦三类能力：
-
-```go
-type Breaker interface {
-    Execute(ctx, key, fn) (result, error)    // 执行受熔断保护的调用
-    UnaryClientInterceptor(opts...)          // 返回 gRPC 拦截器
-    State(key) (State, error)                // 查询熔断状态
-}
-```
-
-定位上，它不是"通用限流器"或"重试器"，而是"失败隔离器"。常见组合是 `breaker + retry + timeout`，分别处理不同故障维度。
-
-### 2.2 配置模型
-
-`Config` 字段与默认值：
-
-| 字段              | 类型     | 默认值 | 说明                             |
-| ----------------- | -------- | ------ | -------------------------------- |
-| `MaxRequests`     | uint32   | 1      | 半开状态允许通过的请求数         |
-| `Interval`        | duration | 0      | 闭合状态统计窗口（0 表示不清空） |
-| `Timeout`         | duration | 60s    | 打开状态持续时间                 |
-| `FailureRatio`    | float64  | 0.6    | 触发熔断的失败率阈值             |
-| `MinimumRequests` | uint32   | 10     | 最小采样请求数                   |
-
-触发条件可概括为：
-
-1. `requests >= MinimumRequests`
-2. `total_failures / requests >= FailureRatio`
-
-满足后从 `closed` 进入 `open`。
-
-### 2.3 依赖注入
-
-组件遵循 Genesis 规范：
-
-```go
-brk, _ := breaker.New(cfg,
-    breaker.WithLogger(logger),    // 自动添加 namespace: "breaker"
-    breaker.WithFallback(fn),      // 可选降级函数
-)
-```
-
-- `nil cfg`：使用默认配置
-- `nil logger`：使用 `clog.Discard()`
-- Logger 通过 `WithNamespace("breaker")` 派生，避免手动添加字段
+Genesis 没有重写这套状态机，而是把设计重点放在“状态机外面”的工程语义上。也就是说，状态迁移仍然交给成熟库处理，但 key 的设计、错误的分类、日志和拒绝行为，则由组件自己控制。这种分工能让组件保持小而稳，同时把真正影响治理效果的判断留在 Genesis 这一层。
 
 ---
 
-## 3 服务级熔断：按 Key 独立隔离
+## 3 设计目标
 
-### 3.1 多实例管理
+`breaker` 当前的设计目标有四个。第一，保持内核简单，不重新发明熔断状态机。第二，默认服务于 gRPC 客户端场景，而不是试图一次抽象所有协议。第三，把“失败口径”收得足够清楚，避免把大量业务错误误计入熔断。第四，让 key 粒度成为显式决策点，而不是隐藏在实现细节里。
 
-实现使用 `sync.Map` 维护 `map[key]*CircuitBreaker`。每个 `key` 拥有自己的统计、状态和迁移，不会互相污染。
-
-```go
-type circuitBreaker struct {
-    cfg      *Config
-    logger   clog.Logger
-    fallback FallbackFunc
-    breakers sync.Map  // map[string]*gobreaker.CircuitBreaker[interface{}]
-}
-```
-
-### 3.2 Key 设计原则
-
-默认 gRPC 拦截器 Key 为 `cc.Target()`（如 `etcd:///logic-service`），因此同一目标地址共享一套熔断状态。通过 `WithKeyFunc` 可切换粒度：
-
-- **服务级**（默认）：`cc.Target()`
-- **方法级**：`fullMethod`（如 `/pkg.Service/Method`）
-- **业务分片级**：`target + tenant`
-
-Key 设计决定隔离域大小，是 breaker 的第一优先级配置。
+这四个目标决定了组件今天的边界：它是一个 gRPC 友好的故障隔离器，不是一个通用降级框架，也不是一个万能的错误分类系统。
 
 ---
 
-## 4 执行路径与状态迁移
+## 4 核心接口与配置
 
-### 4.1 Execute 路径
+对外接口并不大，核心只有三项能力：执行受保护调用、生成 gRPC 客户端一元拦截器、查询指定 key 的 breaker 状态。这个接口刻意保持克制，因为治理组件最容易失控的地方不是方法不够多，而是每个方法都想同时解决重试、超时、降级、限流和缓存回源。
 
-```
-1. 检查 key 非空
-2. 根据 key 获取或创建 breaker（sync.Map.LoadOrStore）
-3. 调用 gobreaker.Execute(fn)
-4. 若返回 open state 错误：
-   - 有 fallback：执行 fallback
-   - 无 fallback：返回 ErrOpenState
-```
+配置也只有五个字段：`MaxRequests` 控制半开阶段允许通过的探测请求数，`Interval` 控制闭合状态下计数的重置周期，`Timeout` 决定打开状态持续多久，`FailureRatio` 和 `MinimumRequests` 一起决定何时触发熔断。新版本里，Genesis 对配置加了基础校验：`FailureRatio` 必须位于 `(0, 1]`，`Interval` 不能为负，`Timeout` 也不能为负。零值仍然保留为“使用默认值”的语义。
 
-### 4.2 状态机语义
-
-| 状态        | 行为                               | 迁移条件                       |
-| ----------- | ---------------------------------- | ------------------------------ |
-| `closed`    | 请求正常通过，统计成功/失败        | 失败率达到阈值 → open          |
-| `open`      | 快速失败，不调用下游               | 冷却时间到期 → half_open       |
-| `half_open` | 放少量探测请求（MaxRequests 控制） | 探测成功 → closed，失败 → open |
-
-### 4.3 状态迁移日志
-
-状态变更通过 `OnStateChange` 回调记录日志：
-
-```go
-cb.logger.Info("circuit breaker state changed",
-    clog.String("service", name),
-    clog.String("from", stateToString(from)),
-    clog.String("to", stateToString(to)))
-```
-
-使用 `Info` 级别，因为熔断打开是预期保护行为，而非异常。
+这个约束看起来简单，但很重要。熔断器最怕的不是“参数保守一点”，而是让非法配置静默进入怪异语义，比如失败率大于 1 导致永远不熔断，或失败率小于等于 0 导致几乎总会触发。
 
 ---
 
-## 5 底层实现原理：gobreaker 机制
+## 5 核心概念与数据模型
 
-### 5.1 核心结构
+组件内部最重要的概念不是“一个 breaker”，而是“每个 key 一个 breaker”。实现里用 `sync.Map` 维护 `map[string]*CircuitBreaker`，每个 key 各自拥有统计、状态和迁移过程，不会互相污染。这个设计让同一个组件实例既可以做服务级熔断，也可以做方法级或租户级熔断，差别仅仅在于 key 如何生成。
 
-`gobreaker` 的核心是一个带状态机的并发安全计数器：
+另一个关键概念是“拒绝错误”。Genesis 现在把 breaker 的拒绝统一成组件自己的错误模型：打开状态会返回 `ErrOpenState`，半开阶段超过探测请求上限会返回 `ErrTooManyRequests`。这样外部看到的都是组件语义，而不是直接暴露 `gobreaker` 的底层错误常量。
 
-- `mutex`：保证并发安全，所有状态读写都需要加锁
-- `state`：记录当前状态（closed/open/half_open）
-- `counts`：滑动窗口计数器，记录成功/失败数
-- `expiry`：状态过期时间，用于触发自动迁移
-
-### 5.2 Generation 机制
-
-gobreaker 有一个关键设计叫 `generation`，用于处理"时序错乱"问题。每次状态切换时 generation 会递增，请求完成时会检查 generation 是否匹配——如果不匹配说明是旧周期的请求，其结果不会被统计。
-
-这避免了"熔断已触发，但慢请求的结果还在累加到新统计周期"的问题。
-
-### 5.3 滑动窗口
-
-当配置了 `Interval` 时，gobreaker 使用环形缓冲区实现滑动窗口统计。时间窗口被分成多个桶，每个桶独立计数，超出窗口的旧数据自动丢弃。这样可以避免某个时刻的突发流量影响整体判断。
+这一步看起来像细节，但实际上很重要。治理组件如果把底层依赖的错误模型直接透出，后续就很难稳定演进。
 
 ---
 
-## 6 gRPC 拦截器集成
+## 6 关键实现思路
 
-### 6.1 拦截器逻辑
+执行路径本身并不复杂。`Execute` 先根据 key 获取或创建 breaker，再调用底层 `gobreaker.Execute(fn)`。真正的差异化逻辑发生在底层拒绝返回之后：Genesis 会把打开状态和半开拒绝都映射成自己的错误，并在这两个时刻统一触发 `fallback`。因此，`fallback` 的触发条件已经从“只有 open 状态”扩展成“breaker 拒绝请求”。
 
-`UnaryClientInterceptor` 的核心逻辑是把一次 gRPC 调用包装进 `Execute`：
+gRPC 拦截器这次的调整更关键。旧实现把 `invoker` 返回的任何非 nil 错误都交给 breaker 计入失败，这会让大量业务错误误熔断。现在拦截器会先对 gRPC 错误做分类：`Unavailable`、`Internal`、`ResourceExhausted`、`DataLoss` 以及其他明显系统性的错误会计入 breaker failure；`InvalidArgument`、`NotFound`、`AlreadyExists`、`PermissionDenied`、`FailedPrecondition`、`Aborted` 等明显业务语义错误则不会推动 breaker 打开。对于这些不该计入熔断的错误，拦截器仍会把原始错误返回给调用方，只是不把它们记进 breaker 的失败统计。
 
-```go
-func (cb *circuitBreaker) UnaryClientInterceptor(opts ...InterceptorOption) grpc.UnaryClientInterceptor {
-    cfg := &interceptorConfig{keyFunc: defaultKeyFunc}
-    for _, opt := range opts { opt(cfg) }
-
-    return func(ctx, method, req, reply, cc, invoker, opts...) error {
-        key := cfg.keyFunc(ctx, method, cc)
-        _, err := cb.Execute(ctx, key, func() (interface{}, error) {
-            return nil, invoker(ctx, method, req, reply, cc, opts...)
-        })
-        return err
-    }
-}
-```
-
-### 6.2 默认 Key 策略
-
-```go
-func defaultKeyFunc(ctx, fullMethod, cc) string {
-    return cc.Target()  // 如 "etcd:///logic-service"
-}
-```
-
-默认行为是服务级熔断，适合大多数场景；当单个方法异常会拖累整服务时，建议改为方法级 Key。
+这意味着 breaker 不再简单等价于“任何 error 都算失败”。它开始具备了面向 gRPC 客户端的最基本治理判断力。
 
 ---
 
-## 7 失败判定边界（非常关键）
+## 7 工程取舍与设计权衡
 
-### 7.1 当前实现
+这里最核心的取舍是：Genesis 选择保留一个统一的 breaker 组件，而不是让每个业务自己写一套熔断器；但与此同时，Genesis 也不再把“统一组件”理解成“所有错误都用同一条规则判断”。统一的是状态机、日志和 key 管理，不统一的是具体协议的失败口径。
 
-未自定义 `IsSuccessful`，因此 `fn` 返回的任意非 `nil` 错误都会计入失败统计。这意味着：
+另一个重要取舍是 `fallback`。很多人一看到这个名字，会自然联想到“返回缓存值”“构造默认响应”“做业务降级”。但对于当前这个 API，这种承诺太强了。`FallbackFunc` 只有 `error` 返回值，没有结果值；对 gRPC 客户端拦截器来说，它也没有通用办法凭空构造业务响应对象。因此 Genesis 没有继续把它包装成“结果降级”，而是把它收紧为“拒绝处理函数”。它适合统一改写错误、补日志、吞掉某些拒绝，不适合承诺替代业务结果。
 
-- 网络错误会计入失败（合理）
-- 下游业务错误（如参数错误）也会计入失败（需注意）
-
-### 7.2 业务误触发风险
-
-如果你的业务错误占比较高，可能导致"被业务错误误触发熔断"。常见做法是：
-
-- 在进入 breaker 前，把可预期业务错误转换为成功返回（由上层单独处理）
-- 或者按方法粒度拆分 Key，减少互相影响
+这个判断看上去像是在收窄能力，实际上是在保护组件边界。治理层组件最怕的就是接口名字听起来什么都能做，结果真正使用时处处例外。
 
 ---
 
-## 8 降级策略（Fallback）
+## 8 适用场景与实践建议
 
-### 8.1 Fallback 签名
+如果你面对的是典型的 gRPC 下游调用，服务整体偶发不可用、超时或过载，希望在异常期快速失败并在恢复后自动探测，那么 `breaker` 很适合直接接到客户端调用链中。推荐起点是服务级 key，也就是默认的 `cc.Target()`，然后观察真实错误分布，再决定是否需要改成方法级。
 
-```go
-type FallbackFunc func(ctx context.Context, key string, err error) error
-```
+如果某个服务只有少数方法会频繁返回稳定的业务错误，那么更好的做法不是把 `FailureRatio` 一路调高，而是先把 key 拆细，或者让这些错误在进入 breaker 之前就被识别为业务错误。熔断器的职责是隔离不稳定依赖，不是替业务系统吞掉领域层错误。
 
-### 8.2 行为语义
-
-- 仅在 breaker 打开时触发
-- fallback 返回 `nil` 视为降级成功，`Execute` 返回 `nil, nil`
-- fallback 返回错误则向上透传该错误
-
-### 8.3 实践建议
-
-建议 fallback 明确记录"降级来源"和"降级结果"，便于排障与容量评估：
-
-```go
-breaker.WithFallback(func(ctx, key, err) error {
-    logger.Info("circuit breaker open, using fallback",
-        clog.String("key", key),
-        clog.String("strategy", "cache"))
-    return getCachedResult(ctx, key)
-})
-```
+如果你的目标是“当 breaker 打开时直接返回缓存对象”，那当前组件并不适合单独承担这层职责。你仍然可以在上层组合缓存、重试和拒绝处理，但不应把这种结果组装逻辑强行塞进 breaker 本体里。
 
 ---
 
-## 9 实践建议
+## 9 总结
 
-### 9.1 参数起点
+Genesis `breaker` 的价值，不在于它把 `gobreaker` 包成了一个更长的 API，而在于它为 gRPC 客户端场景补上了两层真正关键的工程语义：按 key 明确隔离域，以及按错误类型收敛失败口径。
 
-| 参数              | 推荐范围  | 说明                     |
-| ----------------- | --------- | ------------------------ |
-| `FailureRatio`    | 0.5 ~ 0.7 | 过高反应慢，过低误触发   |
-| `MinimumRequests` | 10 ~ 50   | 避免小样本误判           |
-| `Timeout`         | 10s ~ 60s | 冷却时间，给下游恢复窗口 |
-| `MaxRequests`     | 1 ~ 5     | 探探测请求数             |
-
-先保守，再基于真实错误分布做压测和回放调优。
-
-### 9.2 Key 设计
-
-| 场景           | Key 策略   | 示例                  |
-| -------------- | ---------- | --------------------- |
-| 服务整体不稳定 | 服务级 Key | `cc.Target()`（默认） |
-| 个别接口不稳定 | 方法级 Key | `/pkg.Service/Method` |
-| 多租户隔离需求 | 组合 Key   | `target + tenant`     |
-
-### 9.3 与重试协同
-
-- 先短超时，再有限重试，最后 breaker 兜底
-- 避免在 `open` 状态继续重试，造成无效流量放大
-
-推荐顺序：`timeout → retry → breaker`
-
----
-
-## 10 总结
-
-`breaker` 在 Genesis 中承担的是"故障隔离"职责：通过按键独立熔断、状态迁移与可选降级，避免单点故障放大为系统雪崩。
-
-真正用好它的关键不在 API，而在三件事：
-
-1. **合理的 Key 粒度**：决定隔离域大小
-2. **准确的失败口径**：区分网络错误与业务错误
-3. **与重试超时策略的协同配置**：避免无效重试放大流量
-
-它与 `retry`、`timeout`、`ratelimit` 等组件组合使用，共同构成治理层的流量控制能力。
+这次调整之后，组件的定位更清楚了：它是一个针对系统性下游失败的故障隔离器，而不是一个通用降级工厂。真正决定它是否好用的，不是状态机有多复杂，而是你是否选对了 key 粒度，以及是否把业务错误和系统错误分清楚。
