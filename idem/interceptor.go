@@ -23,6 +23,9 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 	// 应用选项
 	opt := interceptorOptions{
 		metadataKey: "x-idem-key",
+		shouldCache: func(msg proto.Message) bool {
+			return true
+		},
 	}
 	for _, o := range opts {
 		o(&opt)
@@ -54,7 +57,7 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 				clog.String("method", info.FullMethod))
 		}
 
-		cachedResp, token, locked, err := i.waitForResultOrLock(ctx, key)
+		cachedResp, token, locked, err := i.loadResultOrAcquireLock(ctx, key, decodeCachedGRPCResponse)
 		if err != nil {
 			if i.logger != nil {
 				i.logger.Error("failed to wait for gRPC idem result", clog.Error(err), clog.String("key", key))
@@ -65,13 +68,7 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 			if i.logger != nil {
 				i.logger.Debug("idem cache hit for gRPC call", clog.String("key", key))
 			}
-			if msg, ok := decodeCachedGRPCResponse(cachedResp); ok {
-				return msg, nil
-			}
-			if i.logger != nil {
-				i.logger.Error("failed to decode cached gRPC response", clog.String("key", key))
-			}
-			return nil, ErrResultNotFound
+			return cachedResp, nil
 		}
 
 		lockReleased := false
@@ -85,13 +82,25 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 				}
 			}
 		}()
-		stopRefresh := i.startLockRefresh(key, token)
+		execCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		stopRefresh, refreshErrCh := i.startLockRefresh(key, token, cancel)
 		defer stopRefresh()
 
-		result, err := handler(ctx, req)
+		result, err := handler(execCtx, req)
 
 		if err == nil && result != nil {
 			if msg, ok := result.(proto.Message); ok {
+				if refreshErr := collectRefreshError(refreshErrCh); refreshErr != nil {
+					if i.logger != nil {
+						i.logger.Error("lock refresh failed during gRPC execution", clog.Error(refreshErr), clog.String("key", key))
+					}
+					return nil, refreshErr
+				}
+				if !opt.shouldCache(msg) {
+					return result, nil
+				}
 				if anyMsg, err := anypb.New(msg); err == nil {
 					if respBytes, err := proto.Marshal(anyMsg); err == nil {
 						if err := i.store.SetResult(ctx, key, respBytes, i.cfg.DefaultTTL, token); err != nil {
@@ -108,19 +117,25 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 			} else if i.logger != nil {
 				i.logger.Warn("skip caching non-proto gRPC response", clog.String("key", key))
 			}
+		} else if refreshErr := collectRefreshError(refreshErrCh); refreshErr != nil {
+			if i.logger != nil {
+				i.logger.Error("lock refresh failed during gRPC execution", clog.Error(refreshErr), clog.String("key", key))
+			}
+			return nil, refreshErr
 		}
 
 		return result, err
 	}
 }
 
-func decodeCachedGRPCResponse(cachedResp []byte) (proto.Message, bool) {
+func decodeCachedGRPCResponse(cachedResp []byte, _ clog.Logger, _ string) (any, error) {
 	var anyMsg anypb.Any
-	if err := proto.Unmarshal(cachedResp, &anyMsg); err == nil {
-		msg, err := anypb.UnmarshalNew(&anyMsg, proto.UnmarshalOptions{})
-		if err == nil {
-			return msg, true
-		}
+	if err := proto.Unmarshal(cachedResp, &anyMsg); err != nil {
+		return nil, err
 	}
-	return nil, false
+	msg, err := anypb.UnmarshalNew(&anyMsg, proto.UnmarshalOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return msg, nil
 }

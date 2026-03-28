@@ -119,11 +119,22 @@ func (rs *redisStore) Refresh(ctx context.Context, key string, token LockToken, 
 		ttlMs = int64(time.Second / time.Millisecond)
 	}
 
-	_, err := redisRefreshScript.Run(ctx, rs.client.GetClient(), []string{lockKey}, string(token), ttlMs).Result()
+	result, err := redisRefreshScript.Run(ctx, rs.client.GetClient(), []string{lockKey}, string(token), ttlMs).Int64()
 	if err != nil && err != redis.Nil {
 		return xerrors.Wrap(err, "failed to refresh lock")
 	}
+	if result == 0 {
+		return ErrLockLost
+	}
 
+	return nil
+}
+
+func (rs *redisStore) DeleteResult(ctx context.Context, key string) error {
+	resultKey := rs.prefix + key + resultSuffix
+	if err := rs.client.GetClient().Del(ctx, resultKey).Err(); err != nil && err != redis.Nil {
+		return xerrors.Wrap(err, "failed to delete result")
+	}
 	return nil
 }
 

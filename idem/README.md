@@ -1,150 +1,88 @@
-# idem - 幂等性组件
+# idem
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/idem.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/idem)
+`idem` 是 Genesis 业务层的幂等组件，用来抑制同一请求、同一消息或同一 RPC 的重复成功提交。它的核心机制是“结果缓存 + 锁保护”：第一次执行成功后缓存结果，后续相同 key 直接复用；如果执行还在进行中，则通过锁避免并发穿透。
 
-分布式幂等性组件，确保操作的"一次且仅一次"执行。支持手动调用、Gin 中间件、gRPC 拦截器。
+这里的语义边界需要先说清。`idem` 不是严格的 exactly-once 执行器，它更准确地说是“防重复成功提交”和“结果复用”组件。成功结果会被缓存，失败结果不会缓存；如果执行过程中锁丢失或存储异常，也不能承诺绝对的一次且仅一次。
 
-## 特性
+## 适用场景
 
-- **多场景支持**：手动调用、Gin 中间件、gRPC 拦截器
-- **结果缓存**：自动缓存执行结果，重复请求直接返回
-- **并发控制**：内置分布式锁，防止并发穿透
-- **双驱动**：Redis / Memory（Memory 仅单机）
+适合的场景包括：HTTP 接口幂等提交、gRPC 一元调用去重、消息消费去重，以及业务层显式控制的“只希望成功一次”的操作。
+
+不太适合的场景包括：你需要强类型结果恢复、复杂流式响应缓存、严格的分布式事务语义，或者希望组件替你保证数据库层面的 exactly-once 提交。当前 `idem` 更适合做应用层幂等保护，而不是事务系统。
 
 ## 快速开始
 
-### 手动模式
-
-适用于 MQ 消费、RPC 调用等需要显式控制的场景。
-
 ```go
-redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
-defer redisConn.Close()
-
-idem, _ := idem.New(&idem.Config{
-    Driver:     idem.DriverRedis,
-    Prefix:     "myapp:idem:",
-    DefaultTTL: 24 * time.Hour,
+idemComp, err := idem.New(&idem.Config{
+	Driver:     idem.DriverRedis,
+	Prefix:     "myapp:idem:",
+	DefaultTTL: 24 * time.Hour,
+	LockTTL:    30 * time.Second,
 }, idem.WithRedisConnector(redisConn), idem.WithLogger(logger))
+if err != nil {
+	return err
+}
 
-result, err := idem.Execute(ctx, "order:create:12345", func(ctx context.Context) (interface{}, error) {
-    // 只在第一次请求时执行
-    return createOrder(ctx, req)
+result, err := idemComp.Execute(ctx, "order:create:req-123", func(ctx context.Context) (any, error) {
+	return map[string]any{"order_id": "123"}, nil
 })
 ```
 
-### Gin 中间件
+`Execute` 会把首次成功执行与缓存命中都统一成同一套 JSON 编解码后的结果形态，因此返回值适合按通用 JSON 结构读取，而不是依赖第一次执行时的原始 Go 类型。
 
-自动从 `X-Idempotency-Key` 头提取幂等键，缓存 HTTP 响应。
+## 核心能力
+
+`Execute` 适合业务层直接调用。它会先查结果缓存，未命中时抢锁执行，成功后写入缓存并释放锁；失败则不缓存，后续允许重试。
+
+`Consume` 适合消息消费去重。它只关心“是否已处理”，不会返回业务结果；如果发现同 key 已完成，直接返回 `executed=false`。
+
+`GinMiddleware` 和 `UnaryServerInterceptor` 则把这套逻辑分别接到 HTTP 和 gRPC 服务端入口。默认情况下，Gin 只缓存 `2xx` 响应，gRPC 只缓存成功的 `proto.Message` 响应。这两个策略现在都可以通过 option 显式调整。
+
+## 配置说明
+
+| 字段 | 类型 | 默认值 | 说明 |
+| :-- | :-- | :-- | :-- |
+| `Driver` | `DriverType` | `redis` | 后端类型，支持 `redis` 和 `memory`。 |
+| `Prefix` | `string` | `idem:` | 存储 key 前缀。 |
+| `DefaultTTL` | `time.Duration` | `24h` | 成功结果的缓存有效期。 |
+| `LockTTL` | `time.Duration` | `30s` | 执行阶段锁的有效期。 |
+| `WaitTimeout` | `time.Duration` | `0` | 等待结果或锁的超时；`0` 表示仅受上层 ctx 控制。 |
+| `WaitInterval` | `time.Duration` | `50ms` | 等待轮询间隔。 |
+
+负数配置现在会被显式拒绝，而不是静默回退默认值。
+
+## 缓存策略
+
+HTTP 中间件默认缓存 `2xx` 响应。如果你希望把某些 `4xx` 也视为可复用结果，可以通过 `WithHTTPStatusCacheFunc` 显式指定：
 
 ```go
-r := gin.Default()
-r.POST("/orders",
-    gin.HandlerFunc(idem.GinMiddleware().(func(*gin.Context))),
-    handler,
+middleware := idemComp.GinMiddleware(
+	idem.WithHTTPStatusCacheFunc(func(status int) bool {
+		return status == http.StatusConflict
+	}),
+).(func(*gin.Context))
+```
+
+gRPC 拦截器默认缓存成功的 `proto.Message` 响应。你也可以通过 `WithGRPCResponseCacheFunc` 进一步缩小缓存范围：
+
+```go
+interceptor := idemComp.UnaryServerInterceptor(
+	idem.WithGRPCResponseCacheFunc(func(msg proto.Message) bool {
+		return msg.ProtoReflect().Descriptor().FullName() == "demo.OrderReply"
+	}),
 )
 ```
 
-### 消息消费去重
+需要注意的是，当前 gRPC 幂等缓存仍然只支持 `proto.Message`。非 proto 成功结果不会被缓存。
 
-仅需判断是否消费过，不缓存结果。
+## 续期与异常边界
 
-```go
-executed, err := idem.Consume(ctx, "msg:"+msgID, 30*time.Minute, func(ctx context.Context) error {
-    return handleMessage(ctx, msg)
-})
-if !executed {
-    return // 已消费过
-}
-```
+对于耗时较长的执行，`idem` 会在锁生命周期过半时尝试自动续期，避免执行过程中锁提前过期。如果续期失败，组件现在会把它视为真实错误，而不是只记 warning。对 `Execute` 和 `Consume` 这类直接调用场景，这会阻止成功结果被继续缓存，降低“锁已经丢了但本地还在提交结果”的风险。
 
-### gRPC 拦截器
+对 HTTP/gRPC 中间件场景，续期失败同样会阻止结果进入缓存，但如果业务 handler 已经把响应写给客户端，组件无法回滚已经发送出去的响应。这是应用层幂等组件的天然边界。
 
-客户端在 metadata 中传递幂等键，服务端自动处理。
+## 推荐实践
 
-```go
-s := grpc.NewServer(
-    grpc.UnaryInterceptor(idem.UnaryServerInterceptor()),
-)
-```
+最重要的设计点仍然是 **key 设计**。幂等 key 必须和业务操作绑定，至少要能区分“同一个用户的同一次提交”和“两个不同请求”。常见做法是 `source + business_id + request_id`。
 
-## 核心 API
-
-### Idempotency
-
-```go
-type Idempotency interface {
-    // Execute 执行幂等操作，返回结果或缓存
-    Execute(ctx, key string, fn func(ctx) (interface{}, error)) (interface{}, error)
-
-    // Consume 消息消费去重，返回是否执行了 fn
-    Consume(ctx, key string, ttl time.Duration, fn func(ctx) error) (bool, error)
-
-    // GinMiddleware 返回 Gin 中间件
-    GinMiddleware(opts ...MiddlewareOption) interface{}
-
-    // UnaryServerInterceptor 返回 gRPC 拦截器
-    UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServerInterceptor
-}
-```
-
-### Config
-
-```go
-type Config struct {
-    Driver      DriverType   // redis | memory
-    Prefix      string       // Key 前缀，默认 "idem:"
-    DefaultTTL  time.Duration // 结果有效期，默认 24h
-    LockTTL     time.Duration // 锁超时，默认 30s
-    WaitTimeout time.Duration // 等待结果超时，默认 0
-    WaitInterval time.Duration // 轮询间隔，默认 50ms
-}
-```
-
-## 工作原理
-
-| 状态   | Redis Key              | 说明                   |
-| ------ | ---------------------- | ---------------------- |
-| 锁定中 | `{prefix}{key}:lock`   | 正在处理，其他请求等待 |
-| 已完成 | `{prefix}{key}:result` | 处理完成，返回缓存结果 |
-
-锁使用随机 token 保证安全性，避免误删。
-
-## 中间件选项
-
-```go
-// 自定义 HTTP 头名称
-idem.GinMiddleware(idem.WithHeaderKey("X-Request-ID"))
-
-// 自定义 gRPC metadata 键
-idem.UnaryServerInterceptor(idem.WithMetadataKey("idem-key"))
-```
-
-## 标准错误
-
-```go
-var (
-    ErrConfigNil        = xerrors.New("idem: config is nil")
-    ErrKeyEmpty         = xerrors.New("idem: key is empty")
-    ErrConcurrentRequest = xerrors.New("idem: concurrent request detected")
-    ErrResultNotFound   = xerrors.New("idem: result not found")
-)
-```
-
-## 最佳实践
-
-1. **Key 设计**：确保全局唯一，如 `source_id:event_id` 或 `user_id:request_id`
-2. **TTL 设置**：根据业务"重复窗口"设置，订单支付 1h，财务操作可能更长
-3. **错误不缓存**：`fn` 返回 error 时不会缓存结果，允许重试
-4. **响应大小**：Gin/gRPC 会缓存完整响应，注意 Redis 存储压力
-5. **4xx 响应**：HTTP 中间件仅缓存 2xx 响应，4xx 不缓存（客户端参数错误）
-
-## 测试
-
-```bash
-go test -v ./idem
-```
-
-## 示例
-
-参考 [examples/idem](../examples/idem)。
+第二个关键点是 **把返回值当作 JSON 友好数据读取**。如果你在 `Execute` 的返回值上依赖具体 Go 结构体类型断言，那么第一次执行和缓存命中都很容易出问题。对于强类型恢复需求，更合适的方向通常是业务层自带编解码，或者后续引入显式 codec。

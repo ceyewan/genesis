@@ -42,6 +42,13 @@ type RefreshableStore interface {
 	Refresh(ctx context.Context, key string, token LockToken, ttl time.Duration) error
 }
 
+// DeletableStore 可删除缓存结果的存储实现。
+// 用于清理损坏的缓存数据并触发重新执行。
+type DeletableStore interface {
+	Store
+	DeleteResult(ctx context.Context, key string) error
+}
+
 // ========================================
 // 存储状态常量
 // ========================================

@@ -1,39 +1,19 @@
-// Package idem 提供了幂等性组件，用于确保在分布式环境中操作的"一次且仅一次"执行。
+// Package idem 提供结果复用型幂等组件，用于抑制同一请求或消息的重复成功提交。
 //
-// idem 是 Genesis 业务层的核心组件，它提供了：
-// - 统一的 Idempotency 接口，支持手动调用、Gin 中间件、gRPC 拦截器
-// - 结果缓存：自动缓存执行结果，重复请求直接返回缓存数据
-// - 并发控制：内置分布式锁机制，防止同一幂等键的并发穿透
-// - 后端可配置：支持 Redis / Memory
-// - 与 L0 基础组件（日志）的深度集成
+// idem 在 Genesis 业务层中承担“去重和结果复用”职责。它的核心语义不是严格的
+// exactly-once 执行，而是：
+//   - 同一 key 的成功结果会被缓存，后续请求直接复用
+//   - 同一 key 的并发执行会被锁保护，避免并发穿透
+//   - 业务执行失败不会缓存结果，后续允许重试
 //
-// ## 基本使用
+// 当前组件提供四个入口：
+//   - Execute：手动幂等执行，适合业务逻辑直接调用
+//   - Consume：消息消费去重，只关心“是否已执行”
+//   - GinMiddleware：HTTP 幂等中间件
+//   - UnaryServerInterceptor：gRPC 一元服务端幂等拦截器
 //
-//	// 创建幂等组件
-//	idem, _ := idem.New(&idem.Config{
-//	    Driver:     idem.DriverRedis,
-//	    Prefix:     "myapp:idem:",
-//	    DefaultTTL: 24 * time.Hour,
-//	}, idem.WithRedisConnector(redisConn), idem.WithLogger(logger))
-//
-//	// 执行幂等操作
-//	result, err := idem.Execute(ctx, "order:create:12345", func(ctx context.Context) (interface{}, error) {
-//	    // 业务逻辑
-//	    return map[string]interface{}{"order_id": "12345"}, nil
-//	})
-//
-// ## Gin 中间件
-//
-//	r := gin.Default()
-//	r.POST("/orders", idem.GinMiddleware(), func(c *gin.Context) {
-//	    c.JSON(200, gin.H{"order_id": "123"})
-//	})
-//
-// ## gRPC 拦截器
-//
-//	s := grpc.NewServer(
-//	    grpc.UnaryInterceptor(idem.UnaryServerInterceptor()),
-//	)
+// 组件同时支持 Redis 和 Memory 两种后端。Redis 适合分布式环境，Memory 适合单机、
+// 本地开发和测试。
 package idem
 
 import (
@@ -61,8 +41,8 @@ type Idempotency interface {
 	//
 	// 工作流程：
 	//   1. 如果 key 已存在且完成 → 直接返回缓存结果
-	//   2. 如果 key 正在处理中 → 返回 ErrConcurrentRequest
-	//   3. 如果 key 不存在 → 执行 fn 并缓存结果
+	//   2. 如果 key 正在处理中 → 等待结果或重新尝试获取锁
+	//   3. 如果 key 不存在 → 执行 fn 并缓存成功结果
 	//
 	// 参数：
 	//   - ctx: 上下文，用于取消和超时控制
@@ -70,8 +50,8 @@ type Idempotency interface {
 	//   - fn: 业务逻辑函数，只在第一次请求时执行
 	//
 	// 返回：
-	//   - 执行结果或缓存的结果
-	//   - 错误：ErrKeyEmpty, ErrConcurrentRequest 等
+	//   - 执行结果或缓存的结果。为保证首次执行与缓存命中的类型一致，返回值会经过同一套 JSON 编解码规范化。
+	//   - 错误：ErrKeyEmpty、上下文错误、锁丢失错误等
 	Execute(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error)
 
 	// Consume 用于消息消费的幂等处理
@@ -97,7 +77,7 @@ type Idempotency interface {
 	// 工作原理：
 	//   1. 从 HTTP 请求头 X-Idempotency-Key 提取幂等性键
 	//   2. 如果缓存命中，直接返回缓存的响应
-	//   3. 如果未命中，执行 handler 并缓存响应
+	//   3. 如果未命中，执行 handler 并按缓存策略缓存响应
 	//
 	// 参数：
 	//   - opts: 中间件选项，可自定义请求头名称等
@@ -122,7 +102,7 @@ type Idempotency interface {
 	//   1. 从 gRPC metadata 提取 x-idem-key
 	//   2. 使用分布式锁防止并发执行
 	//   3. 如果缓存命中，返回缓存的 protobuf 响应
-	//   4. 如果未命中，执行 RPC handler 并缓存结果
+	//   4. 如果未命中，执行 RPC handler 并按缓存策略缓存成功响应
 	//
 	// 参数：
 	//   - opts: 拦截器选项，可自定义 metadata 键名称等
@@ -132,6 +112,7 @@ type Idempotency interface {
 	//
 	// 注意：
 	//   只支持一元 RPC 调用，不支持流式 RPC（因为流式交互的复杂性）。
+	//   当前默认只缓存成功的 proto.Message 响应。
 	UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServerInterceptor
 }
 

@@ -3,6 +3,7 @@ package idem
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -27,6 +28,9 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) any {
 	// 应用选项
 	opt := middlewareOptions{
 		headerKey: "X-Idempotency-Key",
+		shouldCache: func(status int) bool {
+			return status >= 200 && status < 300
+		},
 	}
 	for _, o := range opts {
 		o(&opt)
@@ -41,7 +45,7 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) any {
 			return
 		}
 
-		cachedResp, token, locked, err := i.waitForResultOrLock(c.Request.Context(), key)
+		cachedResp, token, locked, err := i.loadResultOrAcquireLock(c.Request.Context(), key, decodeCachedHTTPResponse)
 		if err != nil {
 			if i.logger != nil {
 				i.logger.Error("failed to wait for HTTP idem result", clog.Error(err), clog.String("key", key))
@@ -53,11 +57,8 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) any {
 			if i.logger != nil {
 				i.logger.Debug("idem cache hit for HTTP request", clog.String("key", key))
 			}
-			if ok := writeCachedHTTPResponse(c, cachedResp, i.logger, key); ok {
-				c.Abort()
-				return
-			}
-			c.AbortWithStatus(http.StatusInternalServerError)
+			writeCachedHTTPResponse(c, cachedResp.(cachedHTTPResponse))
+			c.Abort()
 			return
 		}
 
@@ -70,7 +71,11 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) any {
 				i.logger.Error("failed to unlock after HTTP execution failure", clog.Error(err), clog.String("key", key))
 			}
 		}()
-		stopRefresh := i.startLockRefresh(key, token)
+		execCtx, cancel := context.WithCancel(c.Request.Context())
+		defer cancel()
+		c.Request = c.Request.WithContext(execCtx)
+
+		stopRefresh, refreshErrCh := i.startLockRefresh(key, token, cancel)
 		defer stopRefresh()
 
 		// 使用 ResponseWriter 包装器捕获响应
@@ -84,7 +89,14 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) any {
 		c.Next()
 
 		// 如果请求成功，缓存响应
-		if c.Writer.Status() >= 200 && c.Writer.Status() < 300 {
+		if refreshErr := collectRefreshError(refreshErrCh); refreshErr != nil {
+			if i.logger != nil {
+				i.logger.Error("lock refresh failed during HTTP execution", clog.Error(refreshErr), clog.String("key", key))
+			}
+			return
+		}
+
+		if opt.shouldCache(c.Writer.Status()) {
 			resp := cachedHTTPResponse{
 				Status: c.Writer.Status(),
 				Header: cloneHeader(c.Writer.Header()),
@@ -111,14 +123,18 @@ type cachedHTTPResponse struct {
 	Body   []byte      `json:"body"`
 }
 
-func writeCachedHTTPResponse(c *gin.Context, cachedResp []byte, logger clog.Logger, key string) bool {
+func decodeCachedHTTPResponse(cachedResp []byte, logger clog.Logger, key string) (any, error) {
 	var resp cachedHTTPResponse
 	if err := json.Unmarshal(cachedResp, &resp); err != nil {
 		if logger != nil {
 			logger.Error("failed to unmarshal cached HTTP response", clog.Error(err), clog.String("key", key))
 		}
-		return false
+		return nil, err
 	}
+	return resp, nil
+}
+
+func writeCachedHTTPResponse(c *gin.Context, resp cachedHTTPResponse) {
 	for name, values := range resp.Header {
 		for _, v := range values {
 			c.Writer.Header().Add(name, v)
@@ -126,7 +142,6 @@ func writeCachedHTTPResponse(c *gin.Context, cachedResp []byte, logger clog.Logg
 	}
 	c.Status(resp.Status)
 	_, _ = c.Writer.Write(resp.Body)
-	return true
 }
 
 func cloneHeader(header http.Header) http.Header {

@@ -33,7 +33,7 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 		return nil, ErrKeyEmpty
 	}
 
-	cachedResult, token, locked, err := i.waitForResultOrLock(ctx, key)
+	cachedResult, token, locked, err := i.loadResultOrAcquireLock(ctx, key, decodeJSONResult)
 	if err != nil {
 		if i.logger != nil {
 			i.logger.Error("failed to wait for result or lock", clog.Error(err), clog.String("key", key))
@@ -44,7 +44,7 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 		if i.logger != nil {
 			i.logger.Debug("idem cache hit", clog.String("key", key))
 		}
-		return decodeJSONResult(cachedResult, i.logger, key)
+		return cachedResult, nil
 	}
 
 	lockReleased := false
@@ -56,11 +56,14 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 			i.logger.Error("failed to unlock after execution failure", clog.Error(err), clog.String("key", key))
 		}
 	}()
-	stopRefresh := i.startLockRefresh(key, token)
+	execCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stopRefresh, refreshErrCh := i.startLockRefresh(key, token, cancel)
 	defer stopRefresh()
 
 	// 执行业务逻辑
-	result, err := fn(ctx)
+	result, err := fn(execCtx)
 
 	// 处理执行结果
 	if err != nil {
@@ -70,13 +73,16 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 		return nil, err
 	}
 
-	// 执行成功，序列化并保存结果
-	resultBytes, err := json.Marshal(result)
-	if err != nil {
+	if refreshErr := collectRefreshError(refreshErrCh); refreshErr != nil {
 		if i.logger != nil {
-			i.logger.Error("failed to marshal result", clog.Error(err), clog.String("key", key))
+			i.logger.Error("lock refresh failed during execution", clog.Error(refreshErr), clog.String("key", key))
 		}
-		return nil, xerrors.Wrap(err, "failed to marshal result")
+		return nil, refreshErr
+	}
+
+	normalizedResult, resultBytes, err := normalizeJSONResult(result, i.logger, key)
+	if err != nil {
+		return nil, err
 	}
 
 	// 保存结果
@@ -92,7 +98,7 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 		i.logger.Debug("execution completed and cached", clog.String("key", key))
 	}
 
-	return result, nil
+	return normalizedResult, nil
 }
 
 // Consume 用于消息消费的幂等处理
@@ -142,14 +148,24 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 			i.logger.Error("failed to unlock after consume failure", clog.Error(err), clog.String("key", key))
 		}
 	}()
-	stopRefresh := i.startLockRefresh(key, token)
+	execCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stopRefresh, refreshErrCh := i.startLockRefresh(key, token, cancel)
 	defer stopRefresh()
 
-	if err := fn(ctx); err != nil {
+	if err := fn(execCtx); err != nil {
 		if i.logger != nil {
 			i.logger.Error("consume execution failed", clog.Error(err), clog.String("key", key))
 		}
 		return false, err
+	}
+
+	if refreshErr := collectRefreshError(refreshErrCh); refreshErr != nil {
+		if i.logger != nil {
+			i.logger.Error("lock refresh failed during consume", clog.Error(refreshErr), clog.String("key", key))
+		}
+		return false, refreshErr
 	}
 
 	if err := i.store.SetResult(ctx, key, []byte(processedMarker), ttl, token); err != nil {
@@ -165,6 +181,31 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 	}
 
 	return true, nil
+}
+
+type cachedResultDecoder func(cached []byte, logger clog.Logger, key string) (any, error)
+
+func (i *idem) loadResultOrAcquireLock(ctx context.Context, key string, decode cachedResultDecoder) (any, LockToken, bool, error) {
+	for range 2 {
+		cachedResult, token, locked, err := i.waitForResultOrLock(ctx, key)
+		if err != nil {
+			return nil, "", false, err
+		}
+		if locked {
+			return nil, token, true, nil
+		}
+
+		result, err := decode(cachedResult, i.logger, key)
+		if err == nil {
+			return result, "", false, nil
+		}
+
+		if deleteErr := i.deleteCorruptedResult(ctx, key); deleteErr != nil {
+			return nil, "", false, deleteErr
+		}
+	}
+
+	return nil, "", false, xerrors.New("failed to recover corrupted cached result")
 }
 
 func (i *idem) waitForResultOrLock(ctx context.Context, key string) ([]byte, LockToken, bool, error) {
@@ -223,23 +264,30 @@ func (i *idem) withWaitTimeout(ctx context.Context) (context.Context, context.Ca
 	return context.WithTimeout(ctx, i.cfg.WaitTimeout)
 }
 
-func (i *idem) startLockRefresh(key string, token LockToken) func() {
+func (i *idem) startLockRefresh(key string, token LockToken, onFailure context.CancelFunc) (func(), <-chan error) {
 	rs, ok := i.store.(RefreshableStore)
 	if !ok || i.cfg.LockTTL <= 0 || token == "" {
-		return func() {}
+		return func() {}, nil
 	}
 
 	interval := max(i.cfg.LockTTL/2, 500*time.Millisecond)
 
-	stopCtx, cancel := context.WithCancel(context.Background())
+	stopCtx, stop := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
 	ticker := time.NewTicker(interval)
 	go func() {
+		defer close(errCh)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				if err := rs.Refresh(stopCtx, key, token, i.cfg.LockTTL); err != nil && i.logger != nil {
-					i.logger.Warn("failed to refresh lock", clog.Error(err), clog.String("key", key))
+				if err := rs.Refresh(stopCtx, key, token, i.cfg.LockTTL); err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					onFailure()
+					return
 				}
 			case <-stopCtx.Done():
 				return
@@ -247,7 +295,7 @@ func (i *idem) startLockRefresh(key string, token LockToken) func() {
 		}
 	}()
 
-	return cancel
+	return stop, errCh
 }
 
 func decodeJSONResult(cached []byte, logger clog.Logger, key string) (any, error) {
@@ -259,4 +307,50 @@ func decodeJSONResult(cached []byte, logger clog.Logger, key string) (any, error
 		return nil, xerrors.Wrap(err, "failed to unmarshal cached result")
 	}
 	return result, nil
+}
+
+func normalizeJSONResult(result any, logger clog.Logger, key string) (any, []byte, error) {
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		if logger != nil {
+			logger.Error("failed to marshal result", clog.Error(err), clog.String("key", key))
+		}
+		return nil, nil, xerrors.Wrap(err, "failed to marshal result")
+	}
+
+	normalizedResult, err := decodeJSONResult(resultBytes, logger, key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return normalizedResult, resultBytes, nil
+}
+
+func (i *idem) deleteCorruptedResult(ctx context.Context, key string) error {
+	ds, ok := i.store.(DeletableStore)
+	if !ok {
+		return ErrResultNotFound
+	}
+	if err := ds.DeleteResult(ctx, key); err != nil {
+		if i.logger != nil {
+			i.logger.Error("failed to delete corrupted cached result", clog.Error(err), clog.String("key", key))
+		}
+		return err
+	}
+	if i.logger != nil {
+		i.logger.Warn("deleted corrupted cached result", clog.String("key", key))
+	}
+	return nil
+}
+
+func collectRefreshError(errCh <-chan error) error {
+	if errCh == nil {
+		return nil
+	}
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
 }

@@ -51,13 +51,13 @@ func (c *Config) setDefaults() {
 	if c.Prefix == "" {
 		c.Prefix = "idem:"
 	}
-	if c.DefaultTTL <= 0 {
+	if c.DefaultTTL == 0 {
 		c.DefaultTTL = 24 * time.Hour
 	}
-	if c.LockTTL <= 0 {
+	if c.LockTTL == 0 {
 		c.LockTTL = 30 * time.Second
 	}
-	if c.WaitInterval <= 0 {
+	if c.WaitInterval == 0 {
 		c.WaitInterval = 50 * time.Millisecond
 	}
 }
@@ -65,6 +65,18 @@ func (c *Config) setDefaults() {
 func (c *Config) validate() error {
 	if c == nil {
 		return ErrConfigNil
+	}
+	if c.DefaultTTL < 0 {
+		return xerrors.New("idem: default_ttl must be greater than or equal to 0")
+	}
+	if c.LockTTL < 0 {
+		return xerrors.New("idem: lock_ttl must be greater than or equal to 0")
+	}
+	if c.WaitTimeout < 0 {
+		return xerrors.New("idem: wait_timeout must be greater than or equal to 0")
+	}
+	if c.WaitInterval < 0 {
+		return xerrors.New("idem: wait_interval must be greater than or equal to 0")
 	}
 	switch c.Driver {
 	case DriverRedis, DriverMemory:

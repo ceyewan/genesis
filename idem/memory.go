@@ -151,9 +151,23 @@ func (ms *memoryStore) Refresh(ctx context.Context, key string, token LockToken,
 
 	entry, ok := ms.locks[lockKey]
 	if !ok || entry.token != token {
-		return nil
+		return ErrLockLost
 	}
 	entry.expiresAt = now.Add(ttl)
 	ms.locks[lockKey] = entry
+	return nil
+}
+
+func (ms *memoryStore) DeleteResult(ctx context.Context, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	resultKey := ms.prefix + key + resultSuffix
+
+	ms.mu.Lock()
+	delete(ms.results, resultKey)
+	ms.mu.Unlock()
+
 	return nil
 }
