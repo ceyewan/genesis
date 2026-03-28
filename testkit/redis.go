@@ -12,9 +12,11 @@ import (
 	"github.com/ceyewan/genesis/connector"
 )
 
-// NewRedisContainerConfig 使用 testcontainers 创建 Redis 容器并返回配置
-// 生命周期由 t.Cleanup 管理
+// NewRedisContainerConfig 使用 testcontainers 创建 Redis 容器并返回配置。
+// 生命周期由 t.Cleanup 管理。
 func NewRedisContainerConfig(t *testing.T) *connector.RedisConfig {
+	t.Helper()
+
 	ctx := context.Background()
 
 	container, err := rediscontainer.Run(ctx, "redis:7.2-alpine")
@@ -43,9 +45,11 @@ func NewRedisContainerConfig(t *testing.T) *connector.RedisConfig {
 	}
 }
 
-// NewRedisContainerConnector 使用 testcontainers 创建并连接 Redis 连接器
-// 生命周期由 t.Cleanup 管理
+// NewRedisContainerConnector 使用 testcontainers 创建并连接 Redis 连接器。
+// 生命周期由 t.Cleanup 管理。
 func NewRedisContainerConnector(t *testing.T) connector.RedisConnector {
+	t.Helper()
+
 	cfg := NewRedisContainerConfig(t)
 
 	conn, err := connector.NewRedis(cfg, connector.WithLogger(NewLogger()))
@@ -61,8 +65,9 @@ func NewRedisContainerConnector(t *testing.T) connector.RedisConnector {
 	return conn
 }
 
-// NewRedisContainerClient 使用 testcontainers 创建并返回原生 Redis 客户端
-// 生命周期由 t.Cleanup 管理
+// NewRedisContainerClient 使用 testcontainers 创建并返回原生 Redis 客户端。
+// 生命周期由 t.Cleanup 管理。
 func NewRedisContainerClient(t *testing.T) *redis.Client {
+	t.Helper()
 	return NewRedisContainerConnector(t).GetClient()
 }

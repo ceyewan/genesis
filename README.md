@@ -1,33 +1,35 @@
 # Genesis
 
-> 一个轻量级、标准化、高可扩展的 Go 微服务组件库。
+> 一个面向 Go 微服务的轻量组件库，而不是框架。
 
-Genesis 旨在为 Go 微服务开发提供一套**统一的架构规范**和**开箱即用的组件集合**。它通过显式依赖注入和扁平化设计，帮助开发者快速构建健壮、可维护的微服务应用。
+Genesis 提供一组可以直接组合的基础设施与治理组件，目标不是接管应用，而是把日志、配置、连接管理、缓存、分布式锁、消息、认证、限流、熔断、注册发现等通用能力沉淀成统一积木。
 
-**Genesis 不是框架**——我们提供积木，用户自己搭建。
+项目的核心约束只有三条：
+- 显式依赖注入，不使用运行时 DI 容器。
+- 组件边界清楚，能力按层组织但包结构保持扁平。
+- 谁创建，谁 `Close()`；连接器拥有资源，业务组件只借用资源。
 
-## ✨ 核心特性
+## 架构分层
 
-- **四层扁平化架构:** 清晰的分层设计，职责明确
-- **Go Native DI:** 显式依赖注入，依赖关系一目了然
-- **标准化组件:** 统一的 API 设计和使用模式
-- **生产级就绪:** 完整的错误处理、日志、指标和可观测性
+| 层次 | 核心组件 | 职责 |
+| :--- | :--- | :--- |
+| **Level 3: Governance** | `auth`, `ratelimit`, `breaker`, `registry` | 认证与流量治理 |
+| **Level 2: Business** | `cache`, `idgen`, `dlock`, `idem`, `mq` | 业务通用能力 |
+| **Level 1: Infrastructure** | `connector`, `db` | 连接管理与数据库访问 |
+| **Level 0: Base** | `clog`, `config`, `metrics`, `trace`, `xerrors` | 基础能力与统一约束 |
 
-## 🏗️ 架构概览
+## 项目状态
 
-| 层次                        | 核心组件                                   | 职责                         |
-| :-------------------------- | :----------------------------------------- | :--------------------------- |
-| **Level 3: Governance**     | `auth`, `ratelimit`, `breaker`, `registry` | 流量治理，身份认证，切面能力 |
-| **Level 2: Business**       | `cache`, `idgen`, `dlock`, `mq`, `idem`    | 业务能力封装                 |
-| **Level 1: Infrastructure** | `connector`, `db`                          | 连接管理，底层 I/O           |
-| **Level 0: Base**           | `clog`, `config`, `metrics`, `xerrors`     | 框架基石                     |
+当前分支已经系统收敛并重写了所有核心组件的实现边界与文档，重点包括：
+- `auth` 已切换为双 JWT 令牌模型。
+- `idgen` 已收紧 snowflake 位布局、allocator 所有权和 sequencer 语义。
+- `ratelimit` 已收紧分布式 key 设计、Redis 时间语义与错误策略。
+- `dlock` 已收紧锁生命周期、TTL 校验与 `Close()` 语义。
+- `registry` 已收紧 gRPC-only endpoint、resolver 空状态、watch 恢复语义与 `Close()` 返回值。
+- `breaker` 已补 gRPC 错误分类、统一拒绝错误模型与配置校验。
+- `idem` 已收紧返回值稳定性、缓存策略和锁续期语义。
 
-## 📚 文档
-
-- [架构设计](docs/genesis-design.md) - 总体架构和设计理念
-- [文档索引](docs/) - 查看所有设计文档
-
-## 🚀 快速开始
+## 快速开始
 
 ```go
 package main
@@ -37,99 +39,62 @@ import (
     "os/signal"
     "syscall"
 
+    "github.com/ceyewan/genesis/cache"
     "github.com/ceyewan/genesis/clog"
     "github.com/ceyewan/genesis/config"
     "github.com/ceyewan/genesis/connector"
-    "github.com/ceyewan/genesis/db"
-    "github.com/ceyewan/genesis/dlock"
 )
 
 func main() {
     ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer cancel()
 
-    // 1. 加载配置
     cfg, _ := config.Load("config.yaml")
-
-    // 2. 初始化 Logger
     logger, _ := clog.New(&cfg.Log)
+    defer logger.Close()
 
-    // 3. 创建连接器 (defer 自动释放资源)
     redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
     defer redisConn.Close()
 
-    mysqlConn, _ := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
-    defer mysqlConn.Close()
+    cacheClient, _ := cache.New(&cfg.Cache, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
 
-    // 4. 初始化组件 (显式注入依赖)
-    database, _ := db.New(mysqlConn, &cfg.DB, db.WithLogger(logger))
-    locker, _ := dlock.New(&cfg.DLock, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
-
-    // 5. 使用组件
-    logger.InfoContext(ctx, "service started")
-
-    var user struct{ ID int64 }
-    database.DB(ctx).First(&user, 1)
-
-    if err := locker.Lock(ctx, "my_resource"); err == nil {
-        defer locker.Unlock(ctx, "my_resource")
-        // do business logic...
-    }
+    _, _ = cacheClient.Get(ctx, "demo:key")
 }
 ```
 
-## 🔧 组件列表
+更完整的总体设计见 [docs/genesis-design.md](docs/genesis-design.md)。各组件的定位、边界、接入方式和设计取舍见 [docs/README.md](docs/README.md)。
 
-### Level 0 - 基础设施
-
-- **[clog](./clog)** - 标准化日志库，基于 slog，支持 Context 和 Namespace
-- **[config](./config)** - 统一配置管理，支持多源加载
-- **[metrics](./metrics)** - 基于 OpenTelemetry 的指标收集
-- **[xerrors](./xerrors)** - 增强型错误处理
-
-### Level 1 - 连接管理
-
-- **[connector](./connector)** - 统一连接管理器，支持 MySQL/Redis/Etcd/NATS
-- **[db](./db)** - 基于 GORM 的数据库组件，支持分库分表
-
-### Level 2 - 业务组件
-
-- **[cache](./cache)** - 统一缓存接口，支持 Redis / Memory
-- **[dlock](./dlock)** - 分布式锁，支持 Redis/Etcd，内置自动续期
-- **[idgen](./idgen)** - ID 生成器，支持 UUID/Snowflake/Sequencer
-- **[idem](./idem)** - 幂等性组件，支持手动调用、Gin、gRPC
-- **[mq](./mq)** - 消息队列组件，支持 NATS (Core/JetStream) / Redis Stream
-
-### Level 3 - 流量治理
-
-- **[auth](./auth)** - 认证授权组件
-- **[ratelimit](./ratelimit)** - 限流组件
-- **[breaker](./breaker)** - 熔断器组件
-- **[registry](./registry)** - 服务注册发现
-
-## 📖 使用示例
+## 常用命令
 
 ```bash
-# 查看所有可用示例
+# 代码质量
+go test ./...
+go test -race -count=1 ./...
+make lint
+make modernize
+make modernize-check
+
+# 文档
+go doc -all ./<component>
+
+# 示例
 make examples
-
-# 运行特定组件示例
-make example-cache
-make example-dlock
-
-# 运行所有示例
-make example-all
+make example-<component>
 ```
 
-## 🗺️ 版本状态
+## 测试约束
 
-### v0.4.0 (即将发布)
+- 优先使用 `testkit` 提供的容器化 helper，例如 `testkit.NewRedisContainerClient(t)`、`testkit.NewMySQLDB(t)`。
+- 集成测试通过 `testcontainers` 自动拉起依赖，不要在测试前手动执行 `make up`。
+- 测试断言使用 `require`，不要新增 `assert`。
 
-- **Base (L0):** clog, config, metrics, trace, xerrors
-- **Infrastructure (L1):** connector, db
-- **Business (L2):** cache, dlock, idgen, mq, idem
-- **Governance (L3):** auth, ratelimit, breaker, registry
+## 文档入口
 
-## 📄 License
+- [总体设计](docs/genesis-design.md)
+- [组件设计文档索引](docs/README.md)
+- [示例索引](examples/README.md)
+- [测试指南](testkit/README.md)
+
+## License
 
 MIT

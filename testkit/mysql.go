@@ -13,9 +13,11 @@ import (
 	"github.com/ceyewan/genesis/connector"
 )
 
-// NewMySQLContainerConfig 使用 testcontainers 创建 MySQL 容器并返回配置
-// 生命周期由 t.Cleanup 管理
+// NewMySQLContainerConfig 使用 testcontainers 创建 MySQL 容器并返回配置。
+// 生命周期由 t.Cleanup 管理。
 func NewMySQLContainerConfig(t *testing.T) *connector.MySQLConfig {
+	t.Helper()
+
 	ctx := context.Background()
 
 	container, err := mysql.Run(ctx,
@@ -53,9 +55,11 @@ func NewMySQLContainerConfig(t *testing.T) *connector.MySQLConfig {
 	}
 }
 
-// NewMySQLConnector 获取 MySQL 连接器（基于 testcontainers）
-// 生命周期由 t.Cleanup 管理
+// NewMySQLConnector 获取 MySQL 连接器（基于 testcontainers）。
+// 生命周期由 t.Cleanup 管理。
 func NewMySQLConnector(t *testing.T) connector.MySQLConnector {
+	t.Helper()
+
 	cfg := NewMySQLContainerConfig(t)
 	conn, err := connector.NewMySQL(cfg, connector.WithLogger(NewLogger()))
 	require.NoError(t, err, "failed to create mysql connector")
@@ -85,7 +89,8 @@ func NewMySQLConnector(t *testing.T) connector.MySQLConnector {
 	return conn
 }
 
-// NewMySQLDB 获取 GORM DB 实例（基于 testcontainers）
+// NewMySQLDB 获取 GORM DB 实例（基于 testcontainers）。
 func NewMySQLDB(t *testing.T) *gorm.DB {
+	t.Helper()
 	return NewMySQLConnector(t).GetClient()
 }

@@ -11,24 +11,31 @@ import (
 	"github.com/ceyewan/genesis/metrics"
 )
 
-// Kit 包含通用的测试依赖
+// Kit 包含通用的测试依赖。
 type Kit struct {
 	Ctx    context.Context
 	Logger clog.Logger
 	Meter  metrics.Meter
 }
 
-// NewKit 返回一个包含默认依赖的测试工具包
+// NewKit 返回一个包含默认依赖的测试工具包。
 func NewKit(t *testing.T) *Kit {
+	t.Helper()
+
+	logger := NewLogger()
+	t.Cleanup(func() {
+		_ = logger.Close()
+	})
+
 	return &Kit{
 		Ctx:    context.Background(),
-		Logger: NewLogger(),
+		Logger: logger,
 		Meter:  NewMeter(),
 	}
 }
 
-// NewLogger 返回一个用于测试的 logger
-// 输出到开发环境格式，适合本地调试
+// NewLogger 返回一个用于测试的 logger。
+// 输出到开发环境格式，适合本地调试。
 func NewLogger() clog.Logger {
 	logger, err := clog.New(clog.NewDevDefaultConfig("genesis"))
 	if err != nil {
@@ -37,8 +44,8 @@ func NewLogger() clog.Logger {
 	return logger
 }
 
-// NewMeter 返回一个用于测试的 meter
-// 使用 Discard 模式，不实际输出指标
+// NewMeter 返回一个用于测试的 meter。
+// 使用 Discard 模式，不实际输出指标。
 func NewMeter() metrics.Meter {
 	meter, err := metrics.New(metrics.NewDevDefaultConfig("test"))
 	if err != nil {
@@ -47,13 +54,17 @@ func NewMeter() metrics.Meter {
 	return meter
 }
 
-// NewContext 返回一个带有超时的测试上下文
+// NewContext 返回一个带有超时的测试上下文。
 func NewContext(t *testing.T, timeout time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), timeout)
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	t.Cleanup(cancel)
+	return ctx, cancel
 }
 
-// NewID 返回一个唯一的测试 ID (UUID v4 前 8 位)
-// 用于生成唯一的 Key、Topic 或表名后缀，避免测试间数据冲突
+// NewID 返回一个唯一的测试 ID（UUID v4 前 8 位）。
+// 用于生成唯一的 Key、Topic 或表名后缀，避免测试间数据冲突。
 func NewID() string {
 	return uuid.New().String()[0:8]
 }

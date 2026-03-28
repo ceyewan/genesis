@@ -34,6 +34,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"strings"
 	"sync"
@@ -719,9 +720,7 @@ func cloneServiceInstance(service *ServiceInstance) *ServiceInstance {
 	}
 	if len(service.Metadata) > 0 {
 		cloned.Metadata = make(map[string]string, len(service.Metadata))
-		for k, v := range service.Metadata {
-			cloned.Metadata[k] = v
-		}
+		maps.Copy(cloned.Metadata, service.Metadata)
 	}
 	return cloned
 }

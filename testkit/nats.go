@@ -12,9 +12,11 @@ import (
 	"github.com/ceyewan/genesis/connector"
 )
 
-// NewNATSContainerConfig 使用 testcontainers 创建 NATS 容器并返回配置
-// 生命周期由 t.Cleanup 管理
+// NewNATSContainerConfig 使用 testcontainers 创建 NATS 容器并返回配置。
+// 生命周期由 t.Cleanup 管理。
 func NewNATSContainerConfig(t *testing.T) *connector.NATSConfig {
+	t.Helper()
+
 	ctx := context.Background()
 
 	container, err := natscontainer.Run(ctx, "nats:2.10-alpine")
@@ -39,9 +41,11 @@ func NewNATSContainerConfig(t *testing.T) *connector.NATSConfig {
 	}
 }
 
-// NewNATSContainerConnector 使用 testcontainers 创建并连接 NATS 连接器
-// 生命周期由 t.Cleanup 管理
+// NewNATSContainerConnector 使用 testcontainers 创建并连接 NATS 连接器。
+// 生命周期由 t.Cleanup 管理。
 func NewNATSContainerConnector(t *testing.T) connector.NATSConnector {
+	t.Helper()
+
 	cfg := NewNATSContainerConfig(t)
 
 	conn, err := connector.NewNATS(cfg, connector.WithLogger(NewLogger()))
@@ -57,8 +61,9 @@ func NewNATSContainerConnector(t *testing.T) connector.NATSConnector {
 	return conn
 }
 
-// NewNATSContainerConn 使用 testcontainers 创建并返回原生 NATS 连接
-// 生命周期由 t.Cleanup 管理
+// NewNATSContainerConn 使用 testcontainers 创建并返回原生 NATS 连接。
+// 生命周期由 t.Cleanup 管理。
 func NewNATSContainerConn(t *testing.T) *nats.Conn {
+	t.Helper()
 	return NewNATSContainerConnector(t).GetClient()
 }

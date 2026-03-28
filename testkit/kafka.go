@@ -12,9 +12,11 @@ import (
 	"github.com/ceyewan/genesis/connector"
 )
 
-// NewKafkaContainerConfig 使用 testcontainers 创建 Kafka 容器并返回配置
-// 生命周期由 t.Cleanup 管理
+// NewKafkaContainerConfig 使用 testcontainers 创建 Kafka 容器并返回配置。
+// 生命周期由 t.Cleanup 管理。
 func NewKafkaContainerConfig(t *testing.T) *connector.KafkaConfig {
+	t.Helper()
+
 	ctx := context.Background()
 
 	kafkaContainer, err := kafkacontainer.Run(ctx, "confluentinc/confluent-local:7.5.0",
@@ -38,9 +40,11 @@ func NewKafkaContainerConfig(t *testing.T) *connector.KafkaConfig {
 	}
 }
 
-// NewKafkaContainerConnector 使用 testcontainers 创建并连接 Kafka 连接器
-// 生命周期由 t.Cleanup 管理
+// NewKafkaContainerConnector 使用 testcontainers 创建并连接 Kafka 连接器。
+// 生命周期由 t.Cleanup 管理。
 func NewKafkaContainerConnector(t *testing.T) connector.KafkaConnector {
+	t.Helper()
+
 	cfg := NewKafkaContainerConfig(t)
 
 	conn, err := connector.NewKafka(cfg, connector.WithLogger(NewLogger()))
@@ -56,8 +60,9 @@ func NewKafkaContainerConnector(t *testing.T) connector.KafkaConnector {
 	return conn
 }
 
-// NewKafkaContainerClient 使用 testcontainers 创建并返回原生 Kafka 客户端
-// 生命周期由 t.Cleanup 管理
+// NewKafkaContainerClient 使用 testcontainers 创建并返回原生 Kafka 客户端。
+// 生命周期由 t.Cleanup 管理。
 func NewKafkaContainerClient(t *testing.T) *kgo.Client {
+	t.Helper()
 	return NewKafkaContainerConnector(t).GetClient()
 }

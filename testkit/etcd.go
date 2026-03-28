@@ -12,9 +12,11 @@ import (
 	"github.com/ceyewan/genesis/connector"
 )
 
-// NewEtcdContainerConfig 使用 testcontainers 创建 Etcd 容器并返回配置
-// 生命周期由 t.Cleanup 管理
+// NewEtcdContainerConfig 使用 testcontainers 创建 Etcd 容器并返回配置。
+// 生命周期由 t.Cleanup 管理。
 func NewEtcdContainerConfig(t *testing.T) *connector.EtcdConfig {
+	t.Helper()
+
 	ctx := context.Background()
 
 	container, err := etcdcontainer.Run(ctx, "quay.io/coreos/etcd:v3.5.12")
@@ -38,9 +40,11 @@ func NewEtcdContainerConfig(t *testing.T) *connector.EtcdConfig {
 	}
 }
 
-// NewEtcdContainerConnector 使用 testcontainers 创建并连接 Etcd 连接器
-// 生命周期由 t.Cleanup 管理
+// NewEtcdContainerConnector 使用 testcontainers 创建并连接 Etcd 连接器。
+// 生命周期由 t.Cleanup 管理。
 func NewEtcdContainerConnector(t *testing.T) connector.EtcdConnector {
+	t.Helper()
+
 	cfg := NewEtcdContainerConfig(t)
 
 	conn, err := connector.NewEtcd(cfg, connector.WithLogger(NewLogger()))
@@ -56,8 +60,9 @@ func NewEtcdContainerConnector(t *testing.T) connector.EtcdConnector {
 	return conn
 }
 
-// NewEtcdContainerClient 使用 testcontainers 创建并返回原生 Etcd 客户端
-// 生命周期由 t.Cleanup 管理
+// NewEtcdContainerClient 使用 testcontainers 创建并返回原生 Etcd 客户端。
+// 生命周期由 t.Cleanup 管理。
 func NewEtcdContainerClient(t *testing.T) *clientv3.Client {
+	t.Helper()
 	return NewEtcdContainerConnector(t).GetClient()
 }

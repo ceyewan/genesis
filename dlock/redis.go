@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"maps"
 	"sync"
 	"time"
 
@@ -289,9 +290,7 @@ func (l *redisLocker) Close() error {
 	l.closeOnce.Do(func() {
 		l.mu.Lock()
 		entries := make(map[string]*redisLockEntry, len(l.locks))
-		for key, entry := range l.locks {
-			entries[key] = entry
-		}
+		maps.Copy(entries, l.locks)
 		l.locks = make(map[string]*redisLockEntry)
 		l.lost = make(map[string]struct{})
 		l.mu.Unlock()

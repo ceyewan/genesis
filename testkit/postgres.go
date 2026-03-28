@@ -13,9 +13,11 @@ import (
 	"github.com/ceyewan/genesis/connector"
 )
 
-// NewPostgreSQLContainerConfig 使用 testcontainers 创建 PostgreSQL 容器并返回配置
-// 生命周期由 t.Cleanup 管理
+// NewPostgreSQLContainerConfig 使用 testcontainers 创建 PostgreSQL 容器并返回配置。
+// 生命周期由 t.Cleanup 管理。
 func NewPostgreSQLContainerConfig(t *testing.T) *connector.PostgreSQLConfig {
+	t.Helper()
+
 	ctx := context.Background()
 
 	container, err := postgres.Run(ctx, "postgres:17-alpine",
@@ -54,9 +56,11 @@ func NewPostgreSQLContainerConfig(t *testing.T) *connector.PostgreSQLConfig {
 	}
 }
 
-// NewPostgreSQLConnector 获取 PostgreSQL 连接器（基于 testcontainers）
-// 生命周期由 t.Cleanup 管理
+// NewPostgreSQLConnector 获取 PostgreSQL 连接器（基于 testcontainers）。
+// 生命周期由 t.Cleanup 管理。
 func NewPostgreSQLConnector(t *testing.T) connector.PostgreSQLConnector {
+	t.Helper()
+
 	cfg := NewPostgreSQLContainerConfig(t)
 	conn, err := connector.NewPostgreSQL(cfg, connector.WithLogger(NewLogger()))
 	require.NoError(t, err, "failed to create postgresql connector")
@@ -73,7 +77,8 @@ func NewPostgreSQLConnector(t *testing.T) connector.PostgreSQLConnector {
 	return conn
 }
 
-// NewPostgreSQLDB 获取 GORM DB 实例（基于 testcontainers）
+// NewPostgreSQLDB 获取 GORM DB 实例（基于 testcontainers）。
 func NewPostgreSQLDB(t *testing.T) *gorm.DB {
+	t.Helper()
 	return NewPostgreSQLConnector(t).GetClient()
 }

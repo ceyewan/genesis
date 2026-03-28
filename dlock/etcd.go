@@ -2,6 +2,7 @@ package dlock
 
 import (
 	"context"
+	"maps"
 	"sync"
 	"time"
 
@@ -186,9 +187,7 @@ func (l *etcdLocker) Close() error {
 	l.closeOnce.Do(func() {
 		l.mu.Lock()
 		entries := make(map[string]*etcdLockEntry, len(l.locks))
-		for key, entry := range l.locks {
-			entries[key] = entry
-		}
+		maps.Copy(entries, l.locks)
 		l.locks = make(map[string]*etcdLockEntry)
 		defaultSession := l.session
 		l.session = nil
