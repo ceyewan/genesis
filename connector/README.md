@@ -7,7 +7,7 @@
 ## 组件定位
 
 - 两阶段初始化：`New` 验证配置，`Connect` 建立 I/O 连接，Fail-fast 且幂等可重试
-- 借用模型：连接器拥有底层连接生命周期，上层组件（cache、db、mq、dlock）仅借用，`Close` 是 no-op
+- 借用模型：连接器拥有底层连接生命周期，上层组件不应关闭连接器；它们的 `Close` 只处理自身资源，通常不接管底层连接
 - 类型安全：泛型接口 `TypedConnector[T]` 提供编译期类型检查，无运行时类型断言
 - 健康检查：`HealthCheck` 主动探测（有 I/O），`IsHealthy` 读取缓存（无 I/O）
 - 集成 `clog`，自动注入 `namespace=connector` 与连接器名称，方便按组件过滤日志
@@ -49,7 +49,7 @@ client.Set(ctx, "key", "value", time.Hour)
 
 ### 资源所有权
 
-连接器遵循"谁创建，谁释放"原则。上层组件（cache、dlock 等）不应调用 `Close()`，应用层通过 `defer` 按 LIFO 顺序释放：
+连接器遵循"谁创建，谁释放"原则。上层组件（cache、dlock 等）不应调用连接器的 `Close()`，应用层通过 `defer` 按 LIFO 顺序释放：
 
 ```go
 redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))

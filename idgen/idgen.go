@@ -1,4 +1,4 @@
-// Package idgen 提供 Genesis 的 ID 生成能力。
+// Package idgen 提供 Genesis L2 业务层的 ID 生成能力。
 //
 // 这个组件覆盖四类能力：
 //
@@ -24,6 +24,12 @@
 //
 // Sequencer 当前只支持 Redis。Allocator 支持 Redis 和 Etcd，其中 KeepAlive 会启动后台保活并返回错误通道，
 // Stop 负责释放租约资源，且实现应被视为幂等清理方法。
+//
+// 示例：
+//
+//	gen, _ := idgen.NewGenerator(&idgen.GeneratorConfig{WorkerID: 1})
+//	id, _ := gen.Next()
+//	fmt.Println(id)
 package idgen
 
 import "context"

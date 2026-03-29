@@ -1,10 +1,12 @@
 // Package mq 提供消息队列组件，支持 NATS JetStream 和 Redis Stream 两种后端。
 //
-// MQ 组件是 Genesis L2 业务层组件，提供统一的发布-订阅语义。
+// MQ 组件是 Genesis L2 业务层组件，提供统一的发布-订阅接入方式，但不伪装成
+// 两个驱动完全一致的语义。
 // 设计原则：
 //   - 简单优于复杂：核心接口精简，通过 Option 扩展能力
 //   - 显式优于隐式：不做自动注入，用户完全掌控消息流
-//   - 语义明确：两个驱动均提供持久化和 At-least-once 投递保证
+//   - 语义明确：两个驱动都提供持久化和 At-least-once 投递，但 Ack/Nak、
+//     QueueGroup、Durable、BatchSize 等细节保留各自差异
 package mq
 
 import (
@@ -18,7 +20,7 @@ import (
 
 // MQ 消息队列核心接口
 //
-// 提供统一的发布订阅入口，屏蔽底层驱动差异。
+// 提供统一的发布订阅入口，并保留底层驱动的语义差异。
 // 当前支持的后端：NATS JetStream、Redis Stream。
 // 两者均提供持久化和 At-least-once 投递，但 Nak 语义不同，详见 Message.Nak()。
 type MQ interface {

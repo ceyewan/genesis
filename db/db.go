@@ -2,7 +2,7 @@
 //
 // db 在 connector 提供的连接之上封装 GORM 的初始化、事务管理与可观测性接入。
 // 业务代码通过 DB(ctx) 获得 *gorm.DB，继续使用原生 GORM API，
-// 同时自动获得 clog SQL 日志与 OpenTelemetry trace 能力。
+// 在注入 logger / tracer 时可接入 clog SQL 日志与 OpenTelemetry trace 能力。
 //
 // # 基本用法
 //

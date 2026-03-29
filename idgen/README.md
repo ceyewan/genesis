@@ -11,6 +11,8 @@
 
 如果你需要的是“数据库主键”“会话内消息序号”“实例唯一 WorkerID”这几类不同问题，`idgen` 提供的是一组可组合的解法，而不是单一算法。
 
+接口边界和设计取舍见 [Genesis IDGen：多种 ID 生成能力的设计与取舍](../docs/genesis-idgen-blog.md)，完整 API 文档见 `go doc -all ./idgen`。
+
 ## 适用场景
 
 - 用 `Generator` 生成趋势递增的整数主键，例如订单 ID、支付流水 ID。
@@ -129,5 +131,3 @@ if err != nil {
 - `multi_dc` 模式下 `WorkerID` 范围是 `0..31`，`DatacenterID` 范围是 `0..31`。
 - `Sequencer` 当前不支持 Etcd。
 - `Allocator.KeepAlive()` 会启动后台保活并返回错误通道；如果不消费错误，租约丢失可能不会被上层及时感知。
-
-更完整的设计背景、取舍和场景分析见：[Genesis IDGen：多种 ID 生成能力的设计与取舍](../docs/genesis-idgen-blog.md)

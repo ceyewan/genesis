@@ -5,6 +5,7 @@
 ## 文档列表
 
 - [架构设计](./genesis-design.md) - Genesis 的总体架构设计和核心理念
+- [组件文档审计规范](./component-doc-audit-guide.md) - `go doc`、README 与组件 blog 的统一审计标准
 - [Auth 设计与 JWT 原理](./genesis-auth-blog.md) - Auth 组件设计、JWT 底层机制与认证扩展方案
 - [Breaker 设计与实现](./genesis-breaker-blog.md) - 服务级熔断、状态迁移与 gRPC 客户端降级策略
 - [Cache 设计与实现](./genesis-cache-blog.md) - Cache 双驱动架构、TTL/序列化策略与实践建议
@@ -22,6 +23,7 @@
 - [Registry 核心原理](./genesis-registry-blog.md) - 服务注册发现、Watch 增量同步与 gRPC Resolver 机制
 - [Trace 设计与取舍](./genesis-trace-blog.md) - 全局链路追踪初始化、传播与 MQ 关系建模
 - [XErrors 设计与取舍](./genesis-xerrors-blog.md) - 轻量错误封装、错误链兼容与能力边界
+- [Testkit 测试辅助包](../testkit/README.md) - 测试基础设施 helper、testcontainers 容器与生命周期约定
 
 ## 架构概览
 
@@ -39,3 +41,4 @@ Genesis 采用四层扁平化架构：
 - [项目主页](../README.md) - 返回项目主页
 - [组件列表](../README.md#-组件列表) - 查看所有组件
 - [使用示例](../examples/) - 查看代码示例
+- [测试辅助包](../testkit/README.md) - 查看 `testkit` 的测试 helper 和使用约束

@@ -2,6 +2,8 @@
 
 `testkit` 是 Genesis 的测试辅助包，目标不是提供一套庞大的测试框架，而是把项目里反复出现的测试基础设施和通用 helper 沉淀成统一入口。
 
+接口文档见 `go doc -all ./testkit`。这个包没有单独的设计 blog，因为它是测试辅助包，不是面向生产接入的组件。
+
 它当前主要解决三类问题：
 - 为测试提供统一的 `logger`、`meter`、`context` 和随机 ID helper。
 - 通过 `testcontainers` 自动拉起 Redis、MySQL、PostgreSQL、Etcd、NATS、Kafka。
@@ -13,6 +15,8 @@
 - 集成测试尽量贴近真实依赖。
 - 运行测试前不需要手动执行 `make up`。
 - 所有资源都挂在 `*testing.T` 生命周期上，由 `t.Cleanup` 自动回收。
+- 需要文件持久化的 helper 会使用 `t.TempDir()`，不会把临时文件留在仓库里。
+- 它不会替你自动建表、造业务数据或模拟完整调用链。
 
 ## 通用 helper
 
@@ -118,3 +122,7 @@ func TestPersistentSQLite(t *testing.T) {
 ## 当前边界
 
 `testkit` 目前提供的是基础设施级 helper，而不是完整测试 DSL。它不会替你自动建表、造业务数据或模拟完整调用链，这些仍应由各组件测试自行控制。
+
+相关入口：
+- `go doc -all ./testkit`
+- [项目测试约束](../README.md#测试约束)

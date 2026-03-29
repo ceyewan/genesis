@@ -2,14 +2,14 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/db.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/db)
 
-`db` 是 Genesis 的 L1 基础设施层组件，在 `connector` 提供的连接之上封装 GORM 的初始化、事务管理与可观测性接入，让业务代码继续使用原生 `*gorm.DB`，同时获得统一的日志和链路追踪能力。
+`db` 是 Genesis 的 L1 基础设施层组件，在 `connector` 提供的连接之上封装 GORM 的初始化、事务管理与可观测性接入，让业务代码继续使用原生 `*gorm.DB`，同时通过选项接入统一的日志和链路追踪能力。
 
 ## 组件定位
 
 - 配置驱动：通过 `Config.Driver` 选择底层实现（mysql / postgresql / sqlite），无需关心 DSN 构造和驱动注册细节
 - 借用模型：`db` 借用 `connector` 中的客户端，`Close()` 为 no-op，连接生命周期由 `connector` 负责
 - 原生体验：`DB(ctx)` 直接返回 `*gorm.DB`，业务继续使用熟悉的 GORM API，不引入新的查询抽象
-- 自动可观测：SQL 日志统一输出到 `clog`（支持慢查询标注），注入 `WithTracer` 后自动生成数据库 span
+- 自动可观测：通过 `WithLogger` 接入 `clog` SQL 日志（支持慢查询标注），注入 `WithTracer` 后生成数据库 span
 
 `db` 不负责 ORM 查询语法封装、分表路由、连接池调参。分表建议使用数据库原生分区能力（PG / MySQL `PARTITION BY`），对应用层完全透明。
 

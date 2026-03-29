@@ -91,6 +91,7 @@ make example-<component>
 ## 文档入口
 
 - [总体设计](docs/genesis-design.md)
+- [组件文档审计规范](docs/component-doc-audit-guide.md)
 - [组件设计文档索引](docs/README.md)
 - [示例索引](examples/README.md)
 - [测试指南](testkit/README.md)

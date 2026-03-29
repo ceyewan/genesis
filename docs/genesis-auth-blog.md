@@ -75,7 +75,9 @@ type Authenticator interface {
 
 `Claims` 仍然基于 `jwt.RegisteredClaims` 扩展，但现在增加了 `TokenType` 字段，用来标识令牌到底是 `access` 还是 `refresh`。这一点看起来只是多了一个字段，实际意义非常大，因为它把"令牌用途"从隐式约定变成了显式声明。后续 `ValidateAccessToken` 和 `ValidateRefreshToken` 会同时校验签名、标准声明和 `TokenType`，从而保证 refresh token 不能拿去访问业务接口，access token 也不能伪装成 refresh token。
 
-`TokenPair` 是登录和刷新接口的统一返回结构，它同时返回 access token、refresh token 以及两者的过期时间。这么设计的目的是让前端逻辑简单而稳定。登录成功时前端拿到一对 token，普通业务请求只发送 access token；当接口因为 access token 过期返回 401 时，前端再用 refresh token 调刷新接口，拿到一对新的 token 并覆盖本地状态。
+`TokenPair` 是登录和刷新接口的统一返回结构，它同时返回 access token、refresh token、两者的过期时间，以及 HTTP `Authorization` 头使用的认证方案。这么设计的目的是让前端逻辑简单而稳定。登录成功时前端拿到一对 token，普通业务请求只发送 access token；当接口因为 access token 过期返回 401 时，前端再用 refresh token 调刷新接口，拿到一对新的 token 并覆盖本地状态。
+
+这里还需要刻意区分两个容易混淆的概念：`Claims.TokenType` 表示 JWT 的业务用途，值是 `access` 或 `refresh`；`TokenPair.AuthorizationScheme` 表示 HTTP 头里的认证方案，默认是 `Bearer`。前者参与签发与校验，后者只是帮助客户端正确组装 `Authorization` 头，不能混为一谈。
 
 从这个模型可以看出，`auth` 当前更接近"应用内认证组件"而不是"认证平台"。它管理的是令牌本身，而不是更完整的会话生命周期。
 

@@ -58,7 +58,7 @@ import (
 // 参数:
 //   - conn: Etcd 连接器
 //   - cfg: Registry 配置
-//   - opts: 可选参数 (Logger, Meter, Tracer)
+//   - opts: 可选参数 (Logger)
 //
 // 使用示例:
 //

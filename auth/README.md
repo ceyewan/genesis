@@ -57,6 +57,7 @@ if err != nil {
 // pair.AccessToken     用于业务接口访问
 // pair.RefreshToken    用于刷新
 // pair.AccessTokenExpiresAt / RefreshTokenExpiresAt 可返回给前端做过期管理
+// pair.AuthorizationScheme 表示 Authorization 头前缀，默认是 "Bearer"
 ```
 
 ### 3. 业务接口使用 access token
@@ -137,9 +138,14 @@ type TokenPair struct {
     RefreshToken          string
     AccessTokenExpiresAt  time.Time
     RefreshTokenExpiresAt time.Time
-    TokenType             string
+    AuthorizationScheme   string
 }
 ```
+
+说明：
+
+- `AuthorizationScheme` 表示 HTTP `Authorization` 头里的认证方案，默认是 `Bearer`。
+- 它不是 JWT claims 里的 `TokenType`，不会返回 `access` 或 `refresh`。
 
 ---
 

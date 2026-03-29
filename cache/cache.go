@@ -1,7 +1,7 @@
-// Package cache 提供 Genesis 的缓存组件族，支持分布式缓存、本地缓存和多级缓存。
+// Package cache 提供 Genesis L2 业务层的缓存组件族，支持分布式缓存、本地缓存和多级缓存。
 //
 // 组件分类：
-//   - Distributed: 基于 Redis 的分布式缓存，支持 KV / Hash / ZSet / Batch。
+//   - Distributed: 基于 Redis 的分布式缓存，支持 KV / Hash / Sorted Set / Batch。
 //   - Local: 基于进程内存的本地缓存，提供稳定的 KV 语义。
 //   - Multi: 组合 Local + Distributed 的两级缓存。
 //
@@ -9,8 +9,21 @@
 //   - Get 等读取操作未命中时返回 ErrMiss。
 //   - Has 不返回 ErrMiss，而是通过 bool 表达存在性。
 //   - Set 和 Expire 在 ttl<=0 时使用组件配置中的 DefaultTTL。
-//   - Local 与 Multi 仅提供 KV 能力；Hash、ZSet、Batch 仅由 Distributed 提供。
+//   - Local 与 Multi 仅提供 KV 能力；Hash、Sorted Set、Batch 仅由 Distributed 提供。
 //   - RawClient 用于 Pipeline、Lua 脚本等高级场景，不保证跨后端兼容。
+//
+// 示例：
+//
+//	ctx := context.Background()
+//	dist, _ := cache.NewDistributed(&cache.DistributedConfig{
+//		Driver:    cache.DriverRedis,
+//		KeyPrefix: "myapp:",
+//	})
+//	defer dist.Close()
+//
+//	if err := dist.Set(ctx, "user:1001", map[string]any{"name": "alice"}, time.Hour); err != nil {
+//		return err
+//	}
 package cache
 
 import (
@@ -93,6 +106,7 @@ type Local interface {
 //   - 读路径：local -> distributed -> backfill local。
 //   - 写路径：write distributed -> write local。
 //   - 删路径：delete distributed + delete local。
+//   - local 与 remote 由调用方持有，Multi 不接管它们的生命周期，Close 也不会关闭它们。
 type Multi interface {
 	KV
 }
@@ -142,8 +156,8 @@ func NewLocal(cfg *LocalConfig, opts ...Option) (Local, error) {
 
 // NewMulti 根据配置创建多级缓存实例。
 //
-// local 与 remote 是核心依赖，必须显式传入。Multi 不扩展 Hash、ZSet 等远程能力，
-// 仅提供两级 KV 策略。
+// local 与 remote 是核心依赖，必须显式传入，且它们的生命周期仍由调用方负责。
+// Multi 不扩展 Hash、Sorted Set 等远程能力，仅提供两级 KV 策略。
 func NewMulti(local Local, remote Distributed, cfg *MultiConfig) (Multi, error) {
 	if local == nil {
 		return nil, ErrLocalCacheRequired

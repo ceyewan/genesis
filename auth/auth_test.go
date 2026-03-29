@@ -73,7 +73,7 @@ func TestAuthenticator_GenerateTokenPair(t *testing.T) {
 	assert.NotEmpty(t, pair.AccessToken)
 	assert.NotEmpty(t, pair.RefreshToken)
 	assert.NotEqual(t, pair.AccessToken, pair.RefreshToken)
-	assert.Equal(t, "Bearer", pair.TokenType)
+	assert.Equal(t, "Bearer", pair.AuthorizationScheme)
 	assert.True(t, pair.AccessTokenExpiresAt.Before(pair.RefreshTokenExpiresAt))
 }
 

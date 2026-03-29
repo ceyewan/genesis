@@ -38,7 +38,7 @@ counter.Inc(ctx, metrics.L("method", "GET"), metrics.L("status", "200"))
 
 - `ServiceName` 必填
 - `Port > 0` 且 `Path` 非空时，组件会启动 Prometheus HTTP 端点
-- `Port == 0` 时不启动 HTTP 服务，只保留进程内指标能力
+- 只要 `Port <= 0` 或 `Path` 为空，就不会启动 HTTP 服务，只保留进程内指标能力
 
 当前若 metrics HTTP 端口监听失败，`New()` 会直接返回错误，而不是在后台异步失败。
 

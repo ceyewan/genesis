@@ -2,9 +2,9 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/ceyewan/genesis/mq.svg)](https://pkg.go.dev/github.com/ceyewan/genesis/mq)
 
-`mq` 是 Genesis 的 L2 业务层组件，提供统一的发布订阅接口，当前支持两种持久化后端：
+`mq` 是 Genesis 的 L2 业务层组件，提供统一的发布订阅接入方式，但不把不同后端伪装成完全一致的语义。当前支持两种持久化后端：
 
-- **NATS JetStream**：持久化流式系统，支持显式 Ack/Nak、durable consumer 和精确重投。
+- **NATS JetStream**：持久化流式系统，支持显式 Ack/Nak、durable consumer 和消息重投。
 - **Redis Stream**：基于 Consumer Group，复用现有 Redis 设施，Nak 语义不同（见下文）。
 
 接口设计与取舍详见 [genesis-mq-blog.md](../docs/genesis-mq-blog.md)，完整 API 文档见 `go doc ./mq`。

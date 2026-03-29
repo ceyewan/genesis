@@ -42,7 +42,7 @@ type TokenPair struct {
 	RefreshToken          string
 	AccessTokenExpiresAt  time.Time
 	RefreshTokenExpiresAt time.Time
-	TokenType             string
+	AuthorizationScheme   string
 }
 
 // Authenticator 认证器接口。
@@ -174,7 +174,7 @@ func (a *jwtAuth) GenerateTokenPair(ctx context.Context, claims *Claims) (*Token
 		RefreshToken:          refreshToken,
 		AccessTokenExpiresAt:  accessExpiresAt,
 		RefreshTokenExpiresAt: refreshExpiresAt,
-		TokenType:             a.config.TokenHeadName,
+		AuthorizationScheme:   a.config.TokenHeadName,
 	}, nil
 }
 

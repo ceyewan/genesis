@@ -92,7 +92,7 @@ type Generator interface {
 | `WorkerID` | `single_dc` 范围 `0..1023`，`multi_dc` 范围 `0..31` |
 | `DatacenterID` | `single_dc` 必须为 `0`，`multi_dc` 范围 `0..31` |
 
-这里最重要的设计点，是**模式必须显式配置**。我们没有继续保留“`DatacenterID == 0` 时自动切到 10bit worker”这种隐式规则，因为它会把“多机房模式里的 0 号机房”和“单机房不占位”两个语义混在一起。显式 `Mode` 虽然多一个字段，但协议更清楚，解析也更稳定。
+这里最重要的设计点，是**建议显式配置 `Mode`**。当前实现默认是 `multi_dc`，我们没有继续保留“`DatacenterID == 0` 时自动切到 10bit worker”这种隐式规则，因为它会把“多机房模式里的 0 号机房”和“单机房不占位”两个语义混在一起。显式 `Mode` 虽然多一个字段，但协议更清楚，解析也更稳定。
 
 `Sequencer` 的接口是：
 
