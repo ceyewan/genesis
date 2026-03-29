@@ -1,4 +1,7 @@
-.PHONY: help up down test lint modernize modernize-check clean logs status examples
+.PHONY: help up down test lint modernize modernize-check clean logs status examples buf-lint
+
+DEV_COMPOSE_FILE := deploy/dev/docker-compose.yml
+BUF_DIR := examples/proto
 
 help:
 	@echo "Genesis 开发环境"
@@ -8,6 +11,7 @@ help:
 	@echo "  make down      - 停止所有开发服务"
 	@echo "  make test      - 运行测试"
 	@echo "  make lint      - 运行代码检查"
+	@echo "  make buf-lint  - 检查共享示例 proto 定义"
 	@echo "  make modernize - 运行 go fix 现代化代码"
 	@echo "  make modernize-check - 检查是否存在 go fix 建议"
 	@echo "  make clean     - 清理卷和网络"
@@ -18,10 +22,10 @@ up:
 	@echo "创建 genesis-net 网络（如果不存在）..."
 	@docker network create genesis-net 2>/dev/null || true
 	@echo "启动开发服务..."
-	@docker compose -f docker-compose.yml up -d
+	@docker compose -f $(DEV_COMPOSE_FILE) up -d
 down:
 	@echo "停止开发服务..."
-	@docker compose -f docker-compose.yml down
+	@docker compose -f $(DEV_COMPOSE_FILE) down
 test:
 	@echo "运行测试..."
 	@go test ./...
@@ -29,6 +33,10 @@ test:
 lint:
 	@echo "运行代码检查..."
 	@golangci-lint run
+
+buf-lint:
+	@echo "检查共享示例 proto 定义..."
+	@cd $(BUF_DIR) && buf lint
 
 modernize:
 	@echo "运行 go fix..."
@@ -46,14 +54,14 @@ modernize-check:
 
 clean:
 	@echo "清理卷和网络..."
-	@docker compose -f docker-compose.yml down -v
+	@docker compose -f $(DEV_COMPOSE_FILE) down -v
 	@docker network rm genesis-net 2>/dev/null || true
 logs:
 	@echo "显示服务日志..."
-	@docker compose -f docker-compose.yml logs -f
+	@docker compose -f $(DEV_COMPOSE_FILE) logs -f
 status:
 	@echo "查看服务状态..."
-	@docker compose -f docker-compose.yml ps
+	@docker compose -f $(DEV_COMPOSE_FILE) ps
 # 显示所有示例
 examples:
 	@echo "列出所有示例:"
