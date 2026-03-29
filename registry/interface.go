@@ -35,7 +35,7 @@ type Registry interface {
 
 	// GetConnection 获取指定服务的 gRPC 连接。
 	//
-	// 它内部封装了 resolver 和默认的 round_robin 负载均衡配置。只有当 ctx 带有 deadline 时，
+	// 它内部封装了 resolver，并使用 gRPC 默认的 `pick_first` 负载均衡策略。只有当 ctx 带有 deadline 时，
 	// 方法才会主动等待连接进入 Ready；否则仅返回已绑定 resolver 的 ClientConn。
 	GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
 

@@ -163,7 +163,7 @@ defer conn.Close()
 说明：
 
 - service name 会被解析成 `etcd:///order-service`。
-- 默认使用 `round_robin` 负载均衡策略。
+- 默认使用 gRPC 默认的 `pick_first` 负载均衡策略。
 - 如果 `ctx` 没有 deadline，`GetConnection` 不会主动等待连接进入 `Ready`。
 
 ## 配置

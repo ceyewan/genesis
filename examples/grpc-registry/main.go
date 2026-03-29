@@ -244,7 +244,7 @@ func main() {
 	fmt.Println("✅ gRPC resolver 成功实现了动态服务发现和负载均衡！")
 	fmt.Println("\n主要特性:")
 	fmt.Println("  • 动态服务发现：自动检测新增的服务实例")
-	fmt.Println("  • 负载均衡：使用 round_robin 策略分发请求")
+	fmt.Println("  • 负载均衡：默认使用 gRPC 的 pick_first 策略分发请求")
 	fmt.Println("  • 故障转移：服务实例下线时自动切换到可用实例")
 	fmt.Println("  • 实时更新：通过 etcd watch 机制实时感知服务变化")
 }
