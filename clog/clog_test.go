@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestNew 测试 Logger 创建
@@ -477,31 +479,39 @@ func TestConfigValidation(t *testing.T) {
 
 // TestParseLevel 测试日志级别解析
 func TestParseLevel(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
-		input    string
-		expected Level
-		wantErr  bool
+		input       string
+		expected    Level
+		wantErr     bool
+		errContains string
 	}{
-		{"debug", DebugLevel, false},
-		{"info", InfoLevel, false},
-		{"warn", WarnLevel, false},
-		{"error", ErrorLevel, false},
-		{"fatal", FatalLevel, false},
-		{"DEBUG", DebugLevel, false}, // 测试大小写不敏感
-		{"Info", InfoLevel, false},
-		{"invalid", InfoLevel, true}, // 默认返回 info 级别但报错
+		{"debug", DebugLevel, false, ""},
+		{"info", InfoLevel, false, ""},
+		{"warn", WarnLevel, false, ""},
+		{"error", ErrorLevel, false, ""},
+		{"fatal", FatalLevel, false, ""},
+		{"DEBUG", DebugLevel, false, ""}, // 测试大小写不敏感
+		{"Info", InfoLevel, false, ""},
+		{"invalid", InfoLevel, true, "unknown log level: invalid"}, // 默认返回 info 级别但报错
+		{"", InfoLevel, true, "unknown log level: "},
+		{" warn ", InfoLevel, true, "unknown log level:  warn "},
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+
 			level, err := ParseLevel(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseLevel(%s) error = %v, wantErr %v", tt.input, err, tt.wantErr)
-				return
+			if tt.wantErr {
+				require.Error(t, err)
+				require.EqualError(t, err, tt.errContains)
+			} else {
+				require.NoError(t, err)
 			}
-			if !tt.wantErr && level != tt.expected {
-				t.Errorf("ParseLevel(%s) = %v, want %v", tt.input, level, tt.expected)
-			}
+			require.Equal(t, tt.expected, level)
 		})
 	}
 }
