@@ -40,10 +40,13 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
+      - name: Download modules
+        run: go mod download
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          args: --go=1.24
 
   modernize:
     name: Modernize
