@@ -10,7 +10,25 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+// TestNewDevDefaultConfig 测试 NewDevDefaultConfig 函数
+func TestNewDevDefaultConfig(t *testing.T) {
+	t.Parallel()
+
+	sourceRoot := "test-genesis-root"
+	cfg := NewDevDefaultConfig(sourceRoot)
+
+	require.NotNil(t, cfg, "Config should not be nil")
+	require.Equal(t, "info", cfg.Level, "Expected default level to be info")
+	require.Equal(t, "console", cfg.Format, "Expected default format to be console")
+	require.Equal(t, "stdout", cfg.Output, "Expected default output to be stdout")
+	require.True(t, cfg.EnableColor, "Expected default EnableColor to be true")
+	require.True(t, cfg.AddSource, "Expected default AddSource to be true")
+	require.Equal(t, sourceRoot, cfg.SourceRoot, "Expected SourceRoot to match input")
+}
 
 // TestNew 测试 Logger 创建
 func TestNew(t *testing.T) {
