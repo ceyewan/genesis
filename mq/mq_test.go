@@ -184,6 +184,51 @@ func TestOptions(t *testing.T) {
 }
 
 // ============================================================
+// PublishOption 测试
+// ============================================================
+
+func TestPublishOptions(t *testing.T) {
+	t.Run("WithHeaders 设置和克隆 Headers", func(t *testing.T) {
+		t.Parallel()
+
+		origHeaders := Headers{
+			"trace-id": "abc123",
+			"user-id":  "user-456",
+		}
+
+		opts := defaultPublishOptions()
+
+		// 应用选项
+		opt := WithHeaders(origHeaders)
+		opt(&opts)
+
+		// 断言设置成功
+		require.NotNil(t, opts.Headers)
+		require.Equal(t, origHeaders, opts.Headers)
+
+		// 断言是深拷贝（修改原始 Headers 不应影响 opts.Headers）
+		origHeaders["trace-id"] = "modified"
+		require.Equal(t, "abc123", opts.Headers["trace-id"])
+
+		// 恢复原值供后续断言
+		origHeaders["trace-id"] = "abc123"
+	})
+
+	t.Run("WithHeaders 传入 nil", func(t *testing.T) {
+		t.Parallel()
+
+		opts := defaultPublishOptions()
+
+		// 应用选项
+		opt := WithHeaders(nil)
+		opt(&opts)
+
+		// 断言不报错且 Headers 为 nil
+		require.Nil(t, opts.Headers)
+	})
+}
+
+// ============================================================
 // Publish 测试
 // ============================================================
 
