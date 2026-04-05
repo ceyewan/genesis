@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -437,7 +438,7 @@ func TestDistributedLimiter_MultipleInstances(t *testing.T) {
 			for range 50 {
 				allowed, _ := limiter1.Allow(ctx, key, limit)
 				if allowed {
-					totalCount++
+					atomic.AddInt64(&totalCount, 1)
 				}
 			}
 		})
@@ -447,7 +448,7 @@ func TestDistributedLimiter_MultipleInstances(t *testing.T) {
 			for range 50 {
 				allowed, _ := limiter2.Allow(ctx, key, limit)
 				if allowed {
-					totalCount++
+					atomic.AddInt64(&totalCount, 1)
 				}
 			}
 		})
