@@ -360,9 +360,7 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 	r.mu.Unlock()
 
 	// 启动 watch goroutine
-		r.wg.Add(1)
-		go func() {
-			defer r.wg.Done()
+	r.wg.Go(func() {
 		defer close(eventCh)
 		defer func() {
 			r.mu.Lock()
@@ -499,7 +497,7 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 				time.Sleep(retryInterval)
 			}
 		}
-		}()
+	})
 
 	return eventCh, nil
 }

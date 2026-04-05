@@ -334,9 +334,7 @@ func TestRedisLocker_ConcurrentLock(t *testing.T) {
 	numGoroutines := 10
 
 	for range numGoroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 
 			// 每个 goroutine 使用独立的 locker（模拟独立客户端）
 			locker := newRedisLockerWithConn(t, conn)
