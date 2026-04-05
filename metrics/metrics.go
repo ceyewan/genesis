@@ -118,7 +118,7 @@ type meterImpl struct {
 	logger     clog.Logger
 }
 
-func (m *meterImpl) Counter(name string, desc string, opts ...MetricOption) (Counter, error) {
+func (m *meterImpl) Counter(name, desc string, opts ...MetricOption) (Counter, error) {
 	options := &metricOptions{}
 	for _, o := range opts {
 		o(options)
@@ -136,7 +136,7 @@ func (m *meterImpl) Counter(name string, desc string, opts ...MetricOption) (Cou
 	return &counterImpl{c: c}, nil
 }
 
-func (m *meterImpl) Gauge(name string, desc string, opts ...MetricOption) (Gauge, error) {
+func (m *meterImpl) Gauge(name, desc string, opts ...MetricOption) (Gauge, error) {
 	options := &metricOptions{}
 	for _, o := range opts {
 		o(options)
@@ -154,7 +154,7 @@ func (m *meterImpl) Gauge(name string, desc string, opts ...MetricOption) (Gauge
 	return &gaugeImpl{g: g, values: make(map[string]float64)}, nil
 }
 
-func (m *meterImpl) Histogram(name string, desc string, opts ...MetricOption) (Histogram, error) {
+func (m *meterImpl) Histogram(name, desc string, opts ...MetricOption) (Histogram, error) {
 	options := &metricOptions{}
 	for _, o := range opts {
 		o(options)
@@ -247,15 +247,15 @@ func (h *histogramImpl) Record(ctx context.Context, val float64, labels ...Label
 
 type noopMeter struct{}
 
-func (n *noopMeter) Counter(name string, desc string, opts ...MetricOption) (Counter, error) {
+func (n *noopMeter) Counter(name, desc string, opts ...MetricOption) (Counter, error) {
 	return &noopCounter{}, nil
 }
 
-func (n *noopMeter) Gauge(name string, desc string, opts ...MetricOption) (Gauge, error) {
+func (n *noopMeter) Gauge(name, desc string, opts ...MetricOption) (Gauge, error) {
 	return &noopGauge{}, nil
 }
 
-func (n *noopMeter) Histogram(name string, desc string, opts ...MetricOption) (Histogram, error) {
+func (n *noopMeter) Histogram(name, desc string, opts ...MetricOption) (Histogram, error) {
 	return &noopHistogram{}, nil
 }
 

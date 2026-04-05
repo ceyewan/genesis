@@ -154,7 +154,6 @@ func (l *loggerImpl) log(ctx context.Context, level Level, msg string, fields ..
 		// 处理日志处理错误（可选）
 		return
 	}
-
 }
 
 // SetLevel 动态调整日志级别

@@ -119,7 +119,7 @@ func (c *redisCache) Expire(ctx context.Context, key string, ttl time.Duration) 
 
 // --- 哈希（Hash） ---
 
-func (c *redisCache) HSet(ctx context.Context, key string, field string, value any) error {
+func (c *redisCache) HSet(ctx context.Context, key, field string, value any) error {
 	data, err := c.marshal(value)
 	if err != nil {
 		return err
@@ -127,7 +127,7 @@ func (c *redisCache) HSet(ctx context.Context, key string, field string, value a
 	return c.client.HSet(ctx, c.getKey(key), field, data).Err()
 }
 
-func (c *redisCache) HGet(ctx context.Context, key string, field string, dest any) error {
+func (c *redisCache) HGet(ctx context.Context, key, field string, dest any) error {
 	data, err := c.client.HGet(ctx, c.getKey(key), field).Bytes()
 	if err != nil {
 		return normalizeRedisError(err)
@@ -169,7 +169,7 @@ func (c *redisCache) HDel(ctx context.Context, key string, fields ...string) err
 	return c.client.HDel(ctx, c.getKey(key), fields...).Err()
 }
 
-func (c *redisCache) HIncrBy(ctx context.Context, key string, field string, increment int64) (int64, error) {
+func (c *redisCache) HIncrBy(ctx context.Context, key, field string, increment int64) (int64, error) {
 	return c.client.HIncrBy(ctx, c.getKey(key), field, increment).Result()
 }
 

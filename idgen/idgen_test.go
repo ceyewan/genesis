@@ -27,15 +27,15 @@ type testMeter struct {
 	counter metrics.Counter
 }
 
-func (m *testMeter) Counter(name string, desc string, opts ...metrics.MetricOption) (metrics.Counter, error) {
+func (m *testMeter) Counter(name, desc string, opts ...metrics.MetricOption) (metrics.Counter, error) {
 	return m.counter, nil
 }
 
-func (m *testMeter) Gauge(name string, desc string, opts ...metrics.MetricOption) (metrics.Gauge, error) {
+func (m *testMeter) Gauge(name, desc string, opts ...metrics.MetricOption) (metrics.Gauge, error) {
 	return nil, nil
 }
 
-func (m *testMeter) Histogram(name string, desc string, opts ...metrics.MetricOption) (metrics.Histogram, error) {
+func (m *testMeter) Histogram(name, desc string, opts ...metrics.MetricOption) (metrics.Histogram, error) {
 	return nil, nil
 }
 

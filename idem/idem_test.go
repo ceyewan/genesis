@@ -232,7 +232,6 @@ func TestExecuteFailure(t *testing.T) {
 	result, err := idem.Execute(ctx, key, func(ctx context.Context) (any, error) {
 		return map[string]any{"status": "success"}, nil
 	})
-
 	if err != nil {
 		t.Fatalf("retry failed: %v", err)
 	}

@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
-	"github.com/stretchr/testify/require"
 )
 
 // setupTestLocal 创建用于测试的本地缓存实例

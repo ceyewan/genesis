@@ -229,7 +229,6 @@ func demoMiddleware(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id 
 		)
 
 		err := chain(businessHandler)(msg)
-
 		// 手动确认消息（无论成功失败都 Ack，避免重投）
 		if err != nil {
 			logger.Warn("任务最终失败（已重试），确认消息", clog.String("data", data))

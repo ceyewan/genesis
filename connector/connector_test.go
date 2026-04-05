@@ -753,9 +753,11 @@ func TestConnectorConcurrency(t *testing.T) {
 		// Concurrent IsHealthy calls
 		var wg sync.WaitGroup
 		for range 100 {
-			wg.Go(func() {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				conn.IsHealthy()
-			})
+			}()
 		}
 		wg.Wait()
 

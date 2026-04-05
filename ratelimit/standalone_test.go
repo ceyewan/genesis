@@ -265,7 +265,9 @@ func TestStandaloneLimiter_Concurrency(t *testing.T) {
 		var mu sync.Mutex
 
 		for range goroutines {
-			wg.Go(func() {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				for range requestsPerGoroutine {
 					allowed, _ := limiter.Allow(ctx, "concurrent-key", Limit{Rate: 100, Burst: 100})
 					mu.Lock()
@@ -276,7 +278,7 @@ func TestStandaloneLimiter_Concurrency(t *testing.T) {
 					}
 					mu.Unlock()
 				}
-			})
+			}()
 		}
 
 		wg.Wait()
@@ -329,9 +331,11 @@ func TestStandaloneLimiter_Concurrency(t *testing.T) {
 
 		var wg sync.WaitGroup
 		for range goroutines {
-			wg.Go(func() {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				_ = limiter.Wait(ctx, "wait-concurrent", Limit{Rate: 10, Burst: 1})
-			})
+			}()
 		}
 
 		wg.Wait()

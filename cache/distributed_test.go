@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/testkit"
-	"github.com/stretchr/testify/require"
 )
 
 // setupTestDistributed 创建用于测试的分布式缓存实例
