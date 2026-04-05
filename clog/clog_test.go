@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestNew 测试 Logger 创建
@@ -508,19 +510,22 @@ func TestParseLevel(t *testing.T) {
 
 // TestLevelString 测试级别字符串表示
 func TestLevelString(t *testing.T) {
+	t.Parallel()
+
 	tests := map[Level]string{
 		DebugLevel: "debug",
 		InfoLevel:  "info",
 		WarnLevel:  "warn",
 		ErrorLevel: "error",
 		FatalLevel: "fatal",
+		Level(99):  "level(99)",
 	}
 
 	for level, expected := range tests {
+		level, expected := level, expected
 		t.Run(expected, func(t *testing.T) {
-			if got := level.String(); got != expected {
-				t.Errorf("Level.String() = %v, want %v", got, expected)
-			}
+			t.Parallel()
+			require.Equal(t, expected, level.String())
 		})
 	}
 }
