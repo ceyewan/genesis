@@ -54,7 +54,6 @@ func TestUnaryServerInterceptor(t *testing.T) {
 	t.Run("Normal Call", func(t *testing.T) {
 		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-idem-key", "rpc-1"))
 		resp, err := interceptor(ctx, "req", info, handler)
-
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -73,7 +72,6 @@ func TestUnaryServerInterceptor(t *testing.T) {
 	t.Run("Duplicate Call", func(t *testing.T) {
 		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-idem-key", "rpc-1"))
 		resp, err := interceptor(ctx, "req", info, handler)
-
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -92,7 +90,6 @@ func TestUnaryServerInterceptor(t *testing.T) {
 	t.Run("No Metadata", func(t *testing.T) {
 		ctx := context.Background()
 		resp, err := interceptor(ctx, "req", info, handler)
-
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}

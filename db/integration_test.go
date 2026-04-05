@@ -265,7 +265,6 @@ func TestDBConfigValidation(t *testing.T) {
 		_, err := New(&Config{Driver: "sqlite"})
 		assert.ErrorIs(t, err, ErrSQLiteConnectorRequired)
 	})
-
 }
 
 // =============================================================================
@@ -436,4 +435,3 @@ func TestGormLogger(t *testing.T) {
 	err = gormDB.First(&notFound, 99999).Error
 	assert.Error(t, err)
 }
-

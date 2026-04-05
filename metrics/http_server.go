@@ -93,7 +93,7 @@ func NewHTTPServerMetrics(m Meter, cfg *HTTPServerMetricsConfig) (*HTTPServerMet
 }
 
 // Observe 记录 HTTP 请求 RED 指标
-func (m *HTTPServerMetrics) Observe(ctx context.Context, method string, route string, status int, duration time.Duration) {
+func (m *HTTPServerMetrics) Observe(ctx context.Context, method, route string, status int, duration time.Duration) {
 	if m == nil {
 		return
 	}

@@ -499,7 +499,7 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 				time.Sleep(retryInterval)
 			}
 		}
-		}()
+	}()
 
 	return eventCh, nil
 }

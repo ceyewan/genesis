@@ -63,15 +63,15 @@ type KV interface {
 type Distributed interface {
 	KV
 	// HSet 设置 Hash 字段。
-	HSet(ctx context.Context, key string, field string, value any) error
+	HSet(ctx context.Context, key, field string, value any) error
 	// HGet 读取 Hash 字段；未命中时返回 ErrMiss。
-	HGet(ctx context.Context, key string, field string, dest any) error
+	HGet(ctx context.Context, key, field string, dest any) error
 	// HGetAll 获取整个 Hash；当前仅支持 *map[string]T 目标类型。
 	HGetAll(ctx context.Context, key string, destMap any) error
 	// HDel 删除一个或多个 Hash 字段。
 	HDel(ctx context.Context, key string, fields ...string) error
 	// HIncrBy 原子递增整数类型字段。
-	HIncrBy(ctx context.Context, key string, field string, increment int64) (int64, error)
+	HIncrBy(ctx context.Context, key, field string, increment int64) (int64, error)
 	// ZAdd 向有序集合中写入成员。
 	ZAdd(ctx context.Context, key string, score float64, member any) error
 	// ZRem 从有序集合中删除成员。

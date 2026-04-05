@@ -22,9 +22,9 @@ type Histogram interface {
 
 // Meter 指标创建工厂接口
 type Meter interface {
-	Counter(name string, desc string, opts ...MetricOption) (Counter, error)
-	Gauge(name string, desc string, opts ...MetricOption) (Gauge, error)
-	Histogram(name string, desc string, opts ...MetricOption) (Histogram, error)
+	Counter(name, desc string, opts ...MetricOption) (Counter, error)
+	Gauge(name, desc string, opts ...MetricOption) (Gauge, error)
+	Histogram(name, desc string, opts ...MetricOption) (Histogram, error)
 	// Shutdown 释放 Meter 持有的资源。
 	//
 	// 当前实现会关闭内部 HTTP 服务并关闭底层 MeterProvider。
