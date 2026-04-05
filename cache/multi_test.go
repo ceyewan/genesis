@@ -155,42 +155,55 @@ func (m *mockKVForMulti) Close() error {
 func (m *mockKVForMulti) HSet(ctx context.Context, key, field string, value any) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) HGet(ctx context.Context, key, field string, dest any) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) HGetAll(ctx context.Context, key string, destMap any) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) HDel(ctx context.Context, key string, fields ...string) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) HIncrBy(ctx context.Context, key, field string, increment int64) (int64, error) {
 	return 0, ErrNotSupported
 }
+
 func (m *mockKVForMulti) ZAdd(ctx context.Context, key string, score float64, member any) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) ZRem(ctx context.Context, key string, members ...any) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) ZScore(ctx context.Context, key string, member any) (float64, error) {
 	return 0, ErrNotSupported
 }
+
 func (m *mockKVForMulti) ZRange(ctx context.Context, key string, start, stop int64, destSlice any) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) ZRevRange(ctx context.Context, key string, start, stop int64, destSlice any) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) ZRangeByScore(ctx context.Context, key string, min, max float64, destSlice any) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) MGet(ctx context.Context, keys []string, destSlice any) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) MSet(ctx context.Context, items map[string]any, ttl time.Duration) error {
 	return ErrNotSupported
 }
+
 func (m *mockKVForMulti) RawClient() any {
 	return nil
 }

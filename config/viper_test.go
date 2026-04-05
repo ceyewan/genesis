@@ -89,13 +89,13 @@ GENESIS_CLOG_FORMAT=json
 `
 
 	// 创建所有文件
-	if err := os.WriteFile(baseConfig, []byte(baseContent), 0644); err != nil {
+	if err := os.WriteFile(baseConfig, []byte(baseContent), 0o644); err != nil {
 		t.Fatalf("Failed to create base config: %v", err)
 	}
-	if err := os.WriteFile(devConfig, []byte(devContent), 0644); err != nil {
+	if err := os.WriteFile(devConfig, []byte(devContent), 0o644); err != nil {
 		t.Fatalf("Failed to create dev config: %v", err)
 	}
-	if err := os.WriteFile(envFile, []byte(envContent), 0644); err != nil {
+	if err := os.WriteFile(envFile, []byte(envContent), 0o644); err != nil {
 		t.Fatalf("Failed to create .env file: %v", err)
 	}
 
@@ -171,7 +171,7 @@ func TestLoaderValidate(t *testing.T) {
 				tmpDir := t.TempDir()
 				configFile := filepath.Join(tmpDir, "config.yaml")
 				content := `app: {name: test}`
-				if err := os.WriteFile(configFile, []byte(content), 0644); err != nil {
+				if err := os.WriteFile(configFile, []byte(content), 0o644); err != nil {
 					return nil, err
 				}
 				return New(&Config{
@@ -226,7 +226,7 @@ test:
   counter: 1
 `
 
-	if err := os.WriteFile(configFile, []byte(initialContent), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte(initialContent), 0o644); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
@@ -265,7 +265,7 @@ test:
   counter: 2
 `
 
-	if err := os.WriteFile(configFile, []byte(updatedContent), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte(updatedContent), 0o644); err != nil {
 		t.Fatalf("Failed to update config file: %v", err)
 	}
 
@@ -323,7 +323,7 @@ func TestLoaderWatchCancel(t *testing.T) {
 	configFile := filepath.Join(tmpDir, "cancel-test.yaml")
 	content := `test: {value: 1}`
 
-	if err := os.WriteFile(configFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
@@ -369,7 +369,7 @@ func TestLoaderMultipleWatches(t *testing.T) {
 	configFile := filepath.Join(tmpDir, "multi-watch.yaml")
 	content := `test: {value: "initial"}`
 
-	if err := os.WriteFile(configFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
@@ -402,7 +402,7 @@ func TestLoaderMultipleWatches(t *testing.T) {
 
 	// 修改配置
 	updatedContent := `test: {value: "updated"}`
-	if err := os.WriteFile(configFile, []byte(updatedContent), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte(updatedContent), 0o644); err != nil {
 		t.Fatalf("Failed to update config: %v", err)
 	}
 
@@ -492,13 +492,13 @@ func TestLoaderDotEnvDoesNotOverrideProcessEnv(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	configFile := filepath.Join(tmpDir, "config.yaml")
-	if err := os.WriteFile(configFile, []byte("app: {name: file-app}\n"), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte("app: {name: file-app}\n"), 0o644); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
 	envFile := filepath.Join(tmpDir, ".env")
 	envContent := "TEST_APP_NAME=dotenv-app\nTEST_APP_DEBUG=true\n"
-	if err := os.WriteFile(envFile, []byte(envContent), 0644); err != nil {
+	if err := os.WriteFile(envFile, []byte(envContent), 0o644); err != nil {
 		t.Fatalf("Failed to create .env file: %v", err)
 	}
 
@@ -545,7 +545,7 @@ func TestLoaderLoadIsIdempotent(t *testing.T) {
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "config.yaml")
 
-	if err := os.WriteFile(configFile, []byte("app: {name: first}\n"), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte("app: {name: first}\n"), 0o644); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
@@ -564,7 +564,7 @@ func TestLoaderLoadIsIdempotent(t *testing.T) {
 		t.Fatalf("app.name after first load = %v, want first", name)
 	}
 
-	if err := os.WriteFile(configFile, []byte("app: {name: second}\n"), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte("app: {name: second}\n"), 0o644); err != nil {
 		t.Fatalf("Failed to update config file: %v", err)
 	}
 
@@ -580,7 +580,7 @@ func TestLoaderReloadValidationFailureLogsWarning(t *testing.T) {
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "config.yaml")
 
-	if err := os.WriteFile(configFile, []byte("app: {name: valid}\n"), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte("app: {name: valid}\n"), 0o644); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
@@ -606,7 +606,7 @@ func TestLoaderReloadValidationFailureLogsWarning(t *testing.T) {
 		t.Fatalf("Watch() error = %v", err)
 	}
 
-	if err := os.WriteFile(configFile, []byte("{}\n"), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte("{}\n"), 0o644); err != nil {
 		t.Fatalf("Failed to update config file: %v", err)
 	}
 
@@ -630,12 +630,12 @@ func TestLoaderReloadValidationFailureLogsWarning(t *testing.T) {
 func TestLoaderDotEnvReadFailureReturnsError(t *testing.T) {
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "config.yaml")
-	if err := os.WriteFile(configFile, []byte("app: {name: file-app}\n"), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte("app: {name: file-app}\n"), 0o644); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
 	envFile := filepath.Join(tmpDir, ".env")
-	if err := os.WriteFile(envFile, []byte("INVALID LINE\n"), 0644); err != nil {
+	if err := os.WriteFile(envFile, []byte("INVALID LINE\n"), 0o644); err != nil {
 		t.Fatalf("Failed to create .env file: %v", err)
 	}
 

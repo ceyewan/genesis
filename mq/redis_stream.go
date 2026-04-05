@@ -139,7 +139,6 @@ func (t *redisStreamTransport) consumeWithGroup(ctx context.Context, topic strin
 			Count:    int64(opts.BatchSize),
 			Block:    2 * time.Second,
 		}).Result()
-
 		if err != nil {
 			if err == redis.Nil || err == context.Canceled {
 				continue
@@ -181,7 +180,6 @@ func (t *redisStreamTransport) claimPendingMessages(
 		Start:    cursor,
 		Count:    int64(count),
 	}).Result()
-
 	if err != nil {
 		if err != redis.Nil {
 			t.logger.Warn("XAutoClaim failed", clog.String("topic", topic), clog.Error(err))
@@ -223,7 +221,6 @@ func (t *redisStreamTransport) consumeBroadcast(ctx context.Context, topic strin
 			Count:   int64(opts.BatchSize),
 			Block:   2 * time.Second,
 		}).Result()
-
 		if err != nil {
 			if err == redis.Nil || err == context.Canceled {
 				continue

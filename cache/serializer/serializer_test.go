@@ -72,7 +72,7 @@ func TestJSONSerializer(t *testing.T) {
 		s := &JSONSerializer{}
 
 		type Address struct {
-			City  string `json:"city"`
+			City   string `json:"city"`
 			Street string `json:"street"`
 		}
 
@@ -179,7 +179,7 @@ func TestMessagePackSerializer(t *testing.T) {
 		s := &MessagePackSerializer{}
 
 		type Address struct {
-			City  string `json:"city"`
+			City   string `json:"city"`
 			Street string `json:"street"`
 		}
 
