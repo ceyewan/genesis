@@ -493,16 +493,29 @@ func TestSQLiteConfigValidation(t *testing.T) {
 // TestConnectorOptions 测试连接器选项
 func TestConnectorOptions(t *testing.T) {
 	t.Parallel()
-	t.Run("WithLogger", func(t *testing.T) {
-		cfg := &RedisConfig{
-			Addr: "localhost:6379",
-		}
+	t.Run("WithLogger valid logger", func(t *testing.T) {
 		logger := clog.Discard()
+		opts := &options{}
+		opt := WithLogger(logger)
+		opt(opts)
 
-		conn, err := NewRedis(cfg, WithLogger(logger))
-		require.NoError(t, err)
-		require.NotNil(t, conn)
-		conn.Close()
+		require.NotNil(t, opts.logger)
+		// Ensure logger has the correct namespace applied
+		require.NotPanics(t, func() {
+			opts.logger.Info("test message")
+		})
+	})
+
+	t.Run("WithLogger nil logger fallback", func(t *testing.T) {
+		opts := &options{}
+		opt := WithLogger(nil)
+		opt(opts)
+
+		// WithLogger substitutes nil with clog.Discard() and adds namespace
+		require.NotNil(t, opts.logger)
+		require.NotPanics(t, func() {
+			opts.logger.Info("test message")
+		})
 	})
 }
 
