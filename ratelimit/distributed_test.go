@@ -232,7 +232,9 @@ func TestDistributedLimiter_Concurrency(t *testing.T) {
 		var mu sync.Mutex
 
 		for range goroutines {
-			wg.Go(func() {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				for range requestsPerGoroutine {
 					allowed, _ := limiter.Allow(ctx, "concurrent-key", Limit{Rate: 100, Burst: 100})
 					mu.Lock()
@@ -243,7 +245,7 @@ func TestDistributedLimiter_Concurrency(t *testing.T) {
 					}
 					mu.Unlock()
 				}
-			})
+			}()
 		}
 
 		wg.Wait()
@@ -434,24 +436,28 @@ func TestDistributedLimiter_MultipleInstances(t *testing.T) {
 		var totalCount atomic.Int64
 
 		// limiter1 发送 50 个请求
-		wg.Go(func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			for range 50 {
 				allowed, _ := limiter1.Allow(ctx, key, limit)
 				if allowed {
 					totalCount.Add(1)
 				}
 			}
-		})
+		}()
 
 		// limiter2 发送 50 个请求
-		wg.Go(func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			for range 50 {
 				allowed, _ := limiter2.Allow(ctx, key, limit)
 				if allowed {
 					totalCount.Add(1)
 				}
 			}
-		})
+		}()
 
 		wg.Wait()
 
