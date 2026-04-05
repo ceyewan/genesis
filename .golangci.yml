@@ -1,6 +1,7 @@
 run:
   timeout: 5m
   modules-download-mode: readonly
+  go: "1.26"
 
 linters:
   disable-all: true
