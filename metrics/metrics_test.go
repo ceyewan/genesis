@@ -325,10 +325,10 @@ func TestNewProdDefaultConfig(t *testing.T) {
 	// 验证配置可以正常创建 Meter
 	// 修改端口为0以避免端口冲突
 	testCfg := &Config{
-		ServiceName: prodCfg.ServiceName,
-		Version:     prodCfg.Version,
-		Port:        0,
-		Path:        prodCfg.Path,
+		ServiceName:   prodCfg.ServiceName,
+		Version:       prodCfg.Version,
+		Port:          0,
+		Path:          prodCfg.Path,
 		EnableRuntime: prodCfg.EnableRuntime,
 	}
 	meter, err := New(testCfg)

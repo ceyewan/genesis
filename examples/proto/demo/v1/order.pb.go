@@ -348,13 +348,15 @@ func file_examples_proto_demo_v1_order_proto_rawDescGZIP() []byte {
 	return file_examples_proto_demo_v1_order_proto_rawDescData
 }
 
-var file_examples_proto_demo_v1_order_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
-var file_examples_proto_demo_v1_order_proto_goTypes = []any{
-	(*CreateOrderRequest)(nil),   // 0: demo.v1.CreateOrderRequest
-	(*CreateOrderResponse)(nil),  // 1: demo.v1.CreateOrderResponse
-	(*StreamOrdersRequest)(nil),  // 2: demo.v1.StreamOrdersRequest
-	(*StreamOrdersResponse)(nil), // 3: demo.v1.StreamOrdersResponse
-}
+var (
+	file_examples_proto_demo_v1_order_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+	file_examples_proto_demo_v1_order_proto_goTypes  = []any{
+		(*CreateOrderRequest)(nil),   // 0: demo.v1.CreateOrderRequest
+		(*CreateOrderResponse)(nil),  // 1: demo.v1.CreateOrderResponse
+		(*StreamOrdersRequest)(nil),  // 2: demo.v1.StreamOrdersRequest
+		(*StreamOrdersResponse)(nil), // 3: demo.v1.StreamOrdersResponse
+	}
+)
 var file_examples_proto_demo_v1_order_proto_depIdxs = []int32{
 	0, // 0: demo.v1.OrderService.CreateOrder:input_type -> demo.v1.CreateOrderRequest
 	2, // 1: demo.v1.OrderService.StreamOrders:input_type -> demo.v1.StreamOrdersRequest

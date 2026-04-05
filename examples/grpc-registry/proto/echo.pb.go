@@ -164,11 +164,13 @@ func file_examples_grpc_registry_proto_echo_proto_rawDescGZIP() []byte {
 	return file_examples_grpc_registry_proto_echo_proto_rawDescData
 }
 
-var file_examples_grpc_registry_proto_echo_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_examples_grpc_registry_proto_echo_proto_goTypes = []any{
-	(*EchoRequest)(nil),  // 0: echo.EchoRequest
-	(*EchoResponse)(nil), // 1: echo.EchoResponse
-}
+var (
+	file_examples_grpc_registry_proto_echo_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+	file_examples_grpc_registry_proto_echo_proto_goTypes  = []any{
+		(*EchoRequest)(nil),  // 0: echo.EchoRequest
+		(*EchoResponse)(nil), // 1: echo.EchoResponse
+	}
+)
 var file_examples_grpc_registry_proto_echo_proto_depIdxs = []int32{
 	0, // 0: echo.EchoService.Echo:input_type -> echo.EchoRequest
 	1, // 1: echo.EchoService.Echo:output_type -> echo.EchoResponse

@@ -200,11 +200,13 @@ func file_examples_idem_proto_idempotency_proto_rawDescGZIP() []byte {
 	return file_examples_idem_proto_idempotency_proto_rawDescData
 }
 
-var file_examples_idem_proto_idempotency_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_examples_idem_proto_idempotency_proto_goTypes = []any{
-	(*CreateOrderRequest)(nil),  // 0: idem.CreateOrderRequest
-	(*CreateOrderResponse)(nil), // 1: idem.CreateOrderResponse
-}
+var (
+	file_examples_idem_proto_idempotency_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+	file_examples_idem_proto_idempotency_proto_goTypes  = []any{
+		(*CreateOrderRequest)(nil),  // 0: idem.CreateOrderRequest
+		(*CreateOrderResponse)(nil), // 1: idem.CreateOrderResponse
+	}
+)
 var file_examples_idem_proto_idempotency_proto_depIdxs = []int32{
 	0, // 0: idem.OrderService.CreateOrder:input_type -> idem.CreateOrderRequest
 	1, // 1: idem.OrderService.CreateOrder:output_type -> idem.CreateOrderResponse

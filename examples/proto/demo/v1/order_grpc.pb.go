@@ -90,6 +90,7 @@ type UnimplementedOrderServiceServer struct{}
 func (UnimplementedOrderServiceServer) CreateOrder(context.Context, *CreateOrderRequest) (*CreateOrderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateOrder not implemented")
 }
+
 func (UnimplementedOrderServiceServer) StreamOrders(grpc.BidiStreamingServer[StreamOrdersRequest, StreamOrdersResponse]) error {
 	return status.Error(codes.Unimplemented, "method StreamOrders not implemented")
 }

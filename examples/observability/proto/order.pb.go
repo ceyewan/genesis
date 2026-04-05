@@ -333,14 +333,16 @@ func file_examples_observability_proto_order_proto_rawDescGZIP() []byte {
 	return file_examples_observability_proto_order_proto_rawDescData
 }
 
-var file_examples_observability_proto_order_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
-var file_examples_observability_proto_order_proto_goTypes = []interface{}{
-	(*CreateOrderRequest)(nil),  // 0: proto.CreateOrderRequest
-	(*CreateOrderResponse)(nil), // 1: proto.CreateOrderResponse
-	(*OrderResult)(nil),         // 2: proto.OrderResult
-	(*PushResultRequest)(nil),   // 3: proto.PushResultRequest
-	(*PushResultResponse)(nil),  // 4: proto.PushResultResponse
-}
+var (
+	file_examples_observability_proto_order_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+	file_examples_observability_proto_order_proto_goTypes  = []interface{}{
+		(*CreateOrderRequest)(nil),  // 0: proto.CreateOrderRequest
+		(*CreateOrderResponse)(nil), // 1: proto.CreateOrderResponse
+		(*OrderResult)(nil),         // 2: proto.OrderResult
+		(*PushResultRequest)(nil),   // 3: proto.PushResultRequest
+		(*PushResultResponse)(nil),  // 4: proto.PushResultResponse
+	}
+)
 var file_examples_observability_proto_order_proto_depIdxs = []int32{
 	2, // 0: proto.PushResultRequest.result:type_name -> proto.OrderResult
 	0, // 1: proto.OrderService.CreateOrder:input_type -> proto.CreateOrderRequest

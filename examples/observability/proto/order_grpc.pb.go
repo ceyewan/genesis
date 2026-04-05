@@ -52,8 +52,7 @@ type OrderServiceServer interface {
 }
 
 // UnimplementedOrderServiceServer must be embedded to have forward compatible implementations.
-type UnimplementedOrderServiceServer struct {
-}
+type UnimplementedOrderServiceServer struct{}
 
 func (UnimplementedOrderServiceServer) CreateOrder(context.Context, *CreateOrderRequest) (*CreateOrderResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateOrder not implemented")
@@ -138,12 +137,12 @@ type GatewayCallbackServiceServer interface {
 }
 
 // UnimplementedGatewayCallbackServiceServer must be embedded to have forward compatible implementations.
-type UnimplementedGatewayCallbackServiceServer struct {
-}
+type UnimplementedGatewayCallbackServiceServer struct{}
 
 func (UnimplementedGatewayCallbackServiceServer) PushResult(context.Context, *PushResultRequest) (*PushResultResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PushResult not implemented")
 }
+
 func (UnimplementedGatewayCallbackServiceServer) mustEmbedUnimplementedGatewayCallbackServiceServer() {
 }
 
