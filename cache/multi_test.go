@@ -13,7 +13,8 @@ import (
 
 //go:fix inline
 func boolPtr(b bool) *bool {
-	return new(b)
+	v := b
+	return &v
 }
 
 // mockLocalForMulti 用于测试 Multi 的本地缓存 mock
@@ -381,7 +382,7 @@ func TestMulti_FailOpen(t *testing.T) {
 
 		multi, err := NewMulti(local, remote, &MultiConfig{
 			BackfillTTL:          time.Minute,
-			FailOpenOnLocalError: new(true),
+			FailOpenOnLocalError: boolPtr(true),
 		})
 		require.NoError(t, err)
 
@@ -405,7 +406,7 @@ func TestMulti_FailOpen(t *testing.T) {
 
 		multi, err := NewMulti(local, remote, &MultiConfig{
 			BackfillTTL:          time.Minute,
-			FailOpenOnLocalError: new(false),
+			FailOpenOnLocalError: boolPtr(false),
 		})
 		require.NoError(t, err)
 
@@ -429,7 +430,7 @@ func TestMulti_FailOpen(t *testing.T) {
 
 		multi, err := NewMulti(local, remote, &MultiConfig{
 			BackfillTTL:          time.Minute,
-			FailOpenOnLocalError: new(true),
+			FailOpenOnLocalError: boolPtr(true),
 		})
 		require.NoError(t, err)
 
@@ -453,7 +454,7 @@ func TestMulti_FailOpen(t *testing.T) {
 
 		multi, err := NewMulti(local, remote, &MultiConfig{
 			BackfillTTL:          time.Minute,
-			FailOpenOnLocalError: new(false),
+			FailOpenOnLocalError: boolPtr(false),
 		})
 		require.NoError(t, err)
 
@@ -650,7 +651,7 @@ func TestMulti_EdgeCases(t *testing.T) {
 
 		multi, err := NewMulti(local, remote, &MultiConfig{
 			BackfillTTL:          time.Minute,
-			FailOpenOnLocalError: new(false),
+			FailOpenOnLocalError: boolPtr(false),
 		})
 		require.NoError(t, err)
 

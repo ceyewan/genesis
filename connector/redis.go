@@ -9,7 +9,7 @@ import (
 	"github.com/ceyewan/genesis/xerrors"
 
 	"github.com/redis/go-redis/extra/redisotel/v9"
-	"github.com/redis/go-redis/v9"
+	redis "github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/maintnotifications"
 )
 
