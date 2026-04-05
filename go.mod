@@ -2,6 +2,8 @@ module github.com/ceyewan/genesis
 
 go 1.26
 
+toolchain go1.24.3
+
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gin-gonic/gin v1.11.0
