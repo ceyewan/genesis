@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestNew 测试 Logger 创建
@@ -407,6 +409,22 @@ func TestLoggerWith_DerivedLoggerDoesNotMutateSiblings(t *testing.T) {
 	if logEntry["x"] != "A" {
 		t.Fatalf("Expected x = A, got %v", logEntry["x"])
 	}
+}
+
+// TestNewProdDefaultConfig 测试生成生产环境默认配置
+func TestNewProdDefaultConfig(t *testing.T) {
+	t.Parallel()
+
+	sourceRoot := "genesis"
+	cfg := NewProdDefaultConfig(sourceRoot)
+
+	require.NotNil(t, cfg)
+	require.Equal(t, "info", cfg.Level)
+	require.Equal(t, "json", cfg.Format)
+	require.Equal(t, "stdout", cfg.Output)
+	require.False(t, cfg.EnableColor)
+	require.True(t, cfg.AddSource)
+	require.Equal(t, sourceRoot, cfg.SourceRoot)
 }
 
 // TestConfigValidation 测试配置验证
