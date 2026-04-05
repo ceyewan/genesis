@@ -25,6 +25,7 @@ func TestWithLogger(t *testing.T) {
 		o := &options{}
 		opt(o)
 		require.NotNil(t, o.logger)
+		require.Equal(t, logger, o.logger)
 		// Since clog.Discard() returns a noopLogger and its WithNamespace returns itself,
 		// o.logger will be assigned. In a real logger, it would have the namespace added.
 	})
