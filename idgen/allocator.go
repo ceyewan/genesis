@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
-	"strconv"
 	"sync"
 	"time"
 
@@ -182,7 +181,7 @@ func (a *redisAllocator) Allocate(ctx context.Context) (int64, error) {
 
 	a.instanceID = id
 	a.instanceValue = value
-	a.redisKey = a.cfg.KeyPrefix + ":" + strconv.FormatInt(id, 10)
+	a.redisKey = fmt.Sprintf("%s:%d", a.cfg.KeyPrefix, id)
 
 	a.logger.Info("worker id allocated",
 		clog.Int64("worker_id", id),
@@ -382,7 +381,7 @@ func (a *etcdAllocator) Allocate(ctx context.Context) (int64, error) {
 	// 从 offset 开始环形遍历，尝试抢占 WorkerID
 	for i := 0; i < a.cfg.MaxID; i++ {
 		id := (offset + i) % a.cfg.MaxID
-		key := a.cfg.KeyPrefix + ":" + strconv.Itoa(id)
+		key := fmt.Sprintf("%s:%d", a.cfg.KeyPrefix, id)
 
 		// 使用事务实现 CAS：如果 key 不存在（ModRevision == 0），则创建
 		resp, err := a.client.Txn(ctx).
