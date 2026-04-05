@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 )
 
@@ -284,50 +285,34 @@ func TestMetricOptions(t *testing.T) {
 
 // TestDefaultConfigs 测试默认配置工厂
 func TestDefaultConfigs(t *testing.T) {
+	t.Parallel()
+
 	// 测试开发环境默认配置
 	devCfg := NewDevDefaultConfig("test-service")
-	if devCfg.ServiceName != "test-service" {
-		t.Errorf("ServiceName = %v, want test-service", devCfg.ServiceName)
-	}
-	if devCfg.Version != "dev" {
-		t.Errorf("Version = %v, want dev", devCfg.Version)
-	}
-	if devCfg.Port != 9090 {
-		t.Errorf("Port = %v, want 9090", devCfg.Port)
-	}
-	if devCfg.Path != "/metrics" {
-		t.Errorf("Path = %v, want /metrics", devCfg.Path)
-	}
-	if devCfg.EnableRuntime {
-		t.Errorf("EnableRuntime = %v, want false", devCfg.EnableRuntime)
-	}
+	require.Equal(t, "test-service", devCfg.ServiceName)
+	require.Equal(t, "dev", devCfg.Version)
+	require.Equal(t, 9090, devCfg.Port)
+	require.Equal(t, "/metrics", devCfg.Path)
+	require.False(t, devCfg.EnableRuntime)
+	require.True(t, devCfg.Enabled)
+	require.Equal(t, 15, devCfg.Interval)
 
 	// 测试生产环境默认配置
 	prodCfg := NewProdDefaultConfig("prod-service", "v1.2.3")
-	if prodCfg.ServiceName != "prod-service" {
-		t.Errorf("ServiceName = %v, want prod-service", prodCfg.ServiceName)
-	}
-	if prodCfg.Version != "v1.2.3" {
-		t.Errorf("Version = %v, want v1.2.3", prodCfg.Version)
-	}
-	if prodCfg.Port != 9090 {
-		t.Errorf("Port = %v, want 9090", prodCfg.Port)
-	}
-	if prodCfg.Path != "/metrics" {
-		t.Errorf("Path = %v, want /metrics", prodCfg.Path)
-	}
-	if prodCfg.EnableRuntime {
-		t.Errorf("EnableRuntime = %v, want false", prodCfg.EnableRuntime)
-	}
+	require.Equal(t, "prod-service", prodCfg.ServiceName)
+	require.Equal(t, "v1.2.3", prodCfg.Version)
+	require.Equal(t, 9090, prodCfg.Port)
+	require.Equal(t, "/metrics", prodCfg.Path)
+	require.False(t, prodCfg.EnableRuntime)
+	require.True(t, prodCfg.Enabled)
+	require.Equal(t, 15, prodCfg.Interval)
 
 	// 验证配置可以正常创建 Meter
 	meter, err := New(devCfg)
-	if err != nil {
-		t.Errorf("New() with dev config error = %v", err)
-	}
-	if meter != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		meter.Shutdown(ctx)
-	}
+	require.NoError(t, err)
+	require.NotNil(t, meter)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, meter.Shutdown(ctx))
 }

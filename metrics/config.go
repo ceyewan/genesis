@@ -15,6 +15,8 @@ type Config struct {
 	Port          int    `mapstructure:"port"`
 	Path          string `mapstructure:"path"`
 	EnableRuntime bool   `mapstructure:"enable_runtime"`
+	Enabled       bool   `mapstructure:"enabled"`
+	Interval      int    `mapstructure:"interval"`
 }
 
 func (c *Config) validate() error {
@@ -41,6 +43,8 @@ func NewDevDefaultConfig(serviceName string) *Config {
 		Port:          9090,
 		Path:          "/metrics",
 		EnableRuntime: false,
+		Enabled:       true,
+		Interval:      15,
 	}
 }
 
@@ -52,5 +56,7 @@ func NewProdDefaultConfig(serviceName, version string) *Config {
 		Port:          9090,
 		Path:          "/metrics",
 		EnableRuntime: false,
+		Enabled:       true,
+		Interval:      15,
 	}
 }
