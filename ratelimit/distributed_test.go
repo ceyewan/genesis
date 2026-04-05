@@ -431,13 +431,16 @@ func TestDistributedLimiter_MultipleInstances(t *testing.T) {
 
 		var wg sync.WaitGroup
 		var totalCount int64
+		var mu sync.Mutex
 
 		// limiter1 发送 50 个请求
 		wg.Go(func() {
 			for range 50 {
 				allowed, _ := limiter1.Allow(ctx, key, limit)
 				if allowed {
+					mu.Lock()
 					totalCount++
+					mu.Unlock()
 				}
 			}
 		})
@@ -447,7 +450,9 @@ func TestDistributedLimiter_MultipleInstances(t *testing.T) {
 			for range 50 {
 				allowed, _ := limiter2.Allow(ctx, key, limit)
 				if allowed {
+					mu.Lock()
 					totalCount++
+					mu.Unlock()
 				}
 			}
 		})
