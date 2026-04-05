@@ -114,7 +114,7 @@ func (cb *circuitBreaker) getOrCreateBreaker(key string) *gobreaker.CircuitBreak
 		Interval:    cb.cfg.Interval,
 		Timeout:     cb.cfg.Timeout,
 		ReadyToTrip: cb.readyToTrip,
-		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
+		OnStateChange: func(name string, from, to gobreaker.State) {
 			cb.onStateChange(name, from, to)
 		},
 	}
@@ -141,7 +141,7 @@ func (cb *circuitBreaker) readyToTrip(counts gobreaker.Counts) bool {
 }
 
 // onStateChange 状态变更回调
-func (cb *circuitBreaker) onStateChange(name string, from gobreaker.State, to gobreaker.State) {
+func (cb *circuitBreaker) onStateChange(name string, from, to gobreaker.State) {
 	if cb.logger != nil {
 		cb.logger.Info("circuit breaker state changed",
 			clog.String("service", name),

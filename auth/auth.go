@@ -205,7 +205,6 @@ func (a *jwtAuth) ValidateRefreshToken(ctx context.Context, tokenString string) 
 func (a *jwtAuth) validateTypedToken(ctx context.Context, tokenString string, expected TokenType) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, a.keyFunc(), a.validationParserOptions()...)
-
 	if err != nil {
 		var errType string
 		if xerrors.Is(err, jwt.ErrTokenExpired) {
