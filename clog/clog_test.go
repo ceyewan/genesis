@@ -522,7 +522,6 @@ func TestLevelString(t *testing.T) {
 	}
 
 	for level, expected := range tests {
-		level, expected := level, expected
 		t.Run(expected, func(t *testing.T) {
 			t.Parallel()
 			require.Equal(t, expected, level.String())
