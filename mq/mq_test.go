@@ -184,6 +184,50 @@ func TestOptions(t *testing.T) {
 }
 
 // ============================================================
+// PublishOptions 测试
+// ============================================================
+
+func TestPublishOptions(t *testing.T) {
+	t.Run("WithHeaders", func(t *testing.T) {
+		opts := defaultPublishOptions()
+		headers := Headers{"key1": "value1", "key2": "value2"}
+		opt := WithHeaders(headers)
+		opt(&opts)
+
+		require.NotNil(t, opts.Headers)
+		require.Equal(t, "value1", opts.Headers["key1"])
+		require.Equal(t, "value2", opts.Headers["key2"])
+
+		// Ensure it's a clone
+		headers["key1"] = "new_value"
+		require.Equal(t, "value1", opts.Headers["key1"])
+	})
+
+	t.Run("WithHeader_MapIsNil", func(t *testing.T) {
+		opts := defaultPublishOptions()
+		require.Nil(t, opts.Headers)
+
+		opt := WithHeader("key1", "value1")
+		opt(&opts)
+
+		require.NotNil(t, opts.Headers)
+		require.Equal(t, "value1", opts.Headers["key1"])
+	})
+
+	t.Run("WithHeader_MapExists", func(t *testing.T) {
+		opts := defaultPublishOptions()
+		opts.Headers = Headers{"existing_key": "existing_value"}
+
+		opt := WithHeader("new_key", "new_value")
+		opt(&opts)
+
+		require.NotNil(t, opts.Headers)
+		require.Equal(t, "existing_value", opts.Headers["existing_key"])
+		require.Equal(t, "new_value", opts.Headers["new_key"])
+	})
+}
+
+// ============================================================
 // Publish 测试
 // ============================================================
 
