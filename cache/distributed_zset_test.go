@@ -82,7 +82,7 @@ func TestDistributed_ZSet_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		// 验证已删除
-		score, err = cache.ZScore(ctx, "zset:3", member)
+		_, err = cache.ZScore(ctx, "zset:3", member)
 		require.ErrorIs(t, err, ErrMiss)
 	})
 

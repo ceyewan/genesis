@@ -64,7 +64,6 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 
 	// 执行业务逻辑
 	result, err := fn(execCtx)
-
 	// 处理执行结果
 	if err != nil {
 		if i.logger != nil {

@@ -65,7 +65,7 @@ redis:
   db: 0
 `
 
-	err := os.WriteFile(configFile, []byte(configContent), 0644)
+	err := os.WriteFile(configFile, []byte(configContent), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to create test config file: %v", err)
 	}
@@ -164,7 +164,7 @@ app:
   debug: true
 `
 
-	err := os.WriteFile(configFile, []byte(configContent), 0644)
+	err := os.WriteFile(configFile, []byte(configContent), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to create test config file: %v", err)
 	}
@@ -199,7 +199,7 @@ app:
   debug: false
 `
 
-	err = os.WriteFile(configFile, []byte(newConfigContent), 0644)
+	err = os.WriteFile(configFile, []byte(newConfigContent), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to update config file: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestNewWithConfig(t *testing.T) {
 	configFile := filepath.Join(tmpDir, "app.json")
 
 	configContent := `{"app": {"name": "test"}}`
-	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("Failed to create test config file: %v", err)
 	}
 

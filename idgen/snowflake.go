@@ -197,5 +197,5 @@ func ParseGeneratorID(id int64, mode GeneratorMode) (timestamp, datacenterID, wo
 		workerID = (id >> 12) & 0x1F
 	}
 	sequence = id & 0xFFF
-	return
+	return timestamp, datacenterID, workerID, sequence
 }

@@ -69,7 +69,7 @@ func newGRPCLimiterConfig(limiter Limiter, keyFunc GRPCKeyFunc, limitFunc GRPCLi
 //   - allowed=false, passThrough=true: 限流器出错且策略为 fail-open，或规则无效
 //   - allowed=false, passThrough=false, err=nil: 请求被限流
 //   - allowed=false, passThrough=false, err!=nil: 限流器出错且策略为 fail-closed
-func (c *grpcLimiterConfig) check(ctx context.Context, fullMethod string) (allowed bool, passThrough bool, err error) {
+func (c *grpcLimiterConfig) check(ctx context.Context, fullMethod string) (allowed, passThrough bool, err error) {
 	key := c.keyFunc(ctx, fullMethod)
 	limit := c.limitFunc(ctx, fullMethod)
 
