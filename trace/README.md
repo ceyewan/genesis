@@ -44,9 +44,27 @@ defer shutdown(context.Background())
 
 ## HTTP / gRPC 中间件
 
+`GinMiddleware` 和 `GRPCServerStatsHandler` 的作用不仅是记录 span，还会把活跃 Span 写入 `context.Context`。`clog.WithTraceContext()` 正是从这个 context 里提取 `trace_id` / `span_id` 注入日志——**如果不注册中间件，日志里的 trace_id 字段会静默为空，不报任何错误**。
+
+完整的三步接入顺序：
+
 ```go
+// 1. 启动时初始化（安装全局 TracerProvider）
+shutdown, _ := trace.Init(&trace.Config{ServiceName: "my-service", Endpoint: "localhost:4317"})
+defer shutdown(ctx)
+
+// 2. 创建 logger（依赖全局 TracerProvider 已就位）
+logger, _ := clog.New(&clog.Config{Level: "info", Format: "json"}, clog.WithTraceContext())
+
+// 3. 注册中间件（为每个请求创建 Span，写入 ctx）
 r := gin.New()
-r.Use(trace.GinMiddleware("gateway"))
+r.Use(trace.GinMiddleware("my-service"))
+```
+
+gRPC 场景：
+
+```go
+s := grpc.NewServer(grpc.StatsHandler(trace.GRPCServerStatsHandler()))
 
 conn, _ := grpc.NewClient(
     "localhost:9090",

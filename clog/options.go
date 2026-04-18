@@ -42,10 +42,18 @@ func WithContextField(key any, fieldName string) Option {
 	}
 }
 
-// WithTraceContext 开启 OpenTelemetry TraceID 自动提取
+// WithTraceContext 开启 OpenTelemetry TraceID 自动提取。
 //
-// 启用后，会自动从 Context 中提取 OTel 的 TraceID 和 SpanID。
-// 该能力依赖 OpenTelemetry trace 包。
+// 启用后，每次记录日志时会从 Context 中提取 OTel 的 TraceID 和 SpanID，
+// 并自动注入到结构化日志字段中。
+//
+// 生效需要同时满足两个前置条件，缺一则 trace_id / span_id 字段静默为空，不报错：
+//  1. 应用启动时已调用 [trace.Init]，安装了全局 TracerProvider
+//  2. 请求路径上有活跃 Span：HTTP 路由注册了 trace.GinMiddleware()，
+//     或 gRPC 服务注册了 trace.GRPCServerStatsHandler()
+//
+// 推荐接入顺序：trace.Init → clog.New(WithTraceContext) → 注册中间件。
+// 完整示例见 docs/genesis-observability-blog.md。
 func WithTraceContext() Option {
 	return func(o *options) {
 		o.enableTraceExtraction = true
