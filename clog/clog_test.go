@@ -83,6 +83,46 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestNewNilConfigMatchesEmptyConfig(t *testing.T) {
+	nilLogger, err := New(nil)
+	if err != nil {
+		t.Fatalf("New(nil) error = %v", err)
+	}
+
+	emptyLogger, err := New(&Config{})
+	if err != nil {
+		t.Fatalf("New(&Config{}) error = %v", err)
+	}
+
+	nilImpl, ok := nilLogger.(*loggerImpl)
+	if !ok {
+		t.Fatalf("New(nil) returned %T, want *loggerImpl", nilLogger)
+	}
+	emptyImpl, ok := emptyLogger.(*loggerImpl)
+	if !ok {
+		t.Fatalf("New(&Config{}) returned %T, want *loggerImpl", emptyLogger)
+	}
+
+	if nilImpl.config.Level != emptyImpl.config.Level {
+		t.Fatalf("Level mismatch: %q != %q", nilImpl.config.Level, emptyImpl.config.Level)
+	}
+	if nilImpl.config.Format != emptyImpl.config.Format {
+		t.Fatalf("Format mismatch: %q != %q", nilImpl.config.Format, emptyImpl.config.Format)
+	}
+	if nilImpl.config.Output != emptyImpl.config.Output {
+		t.Fatalf("Output mismatch: %q != %q", nilImpl.config.Output, emptyImpl.config.Output)
+	}
+	if nilImpl.config.EnableColor != emptyImpl.config.EnableColor {
+		t.Fatalf("EnableColor mismatch: %v != %v", nilImpl.config.EnableColor, emptyImpl.config.EnableColor)
+	}
+	if nilImpl.config.AddSource != emptyImpl.config.AddSource {
+		t.Fatalf("AddSource mismatch: %v != %v", nilImpl.config.AddSource, emptyImpl.config.AddSource)
+	}
+	if nilImpl.config.SourceRoot != emptyImpl.config.SourceRoot {
+		t.Fatalf("SourceRoot mismatch: %q != %q", nilImpl.config.SourceRoot, emptyImpl.config.SourceRoot)
+	}
+}
+
 // TestLoggerLevels 测试日志级别功能
 func TestLoggerLevels(t *testing.T) {
 	// 创建内存缓冲区捕获输出
@@ -159,6 +199,34 @@ func TestLoggerSetLevel(t *testing.T) {
 	}
 	if firstEntry["level"] != "INFO" {
 		t.Errorf("First log entry should be INFO level, got %v", firstEntry["level"])
+	}
+}
+
+func TestLoggerSetLevelInvalid(t *testing.T) {
+	var buf bytes.Buffer
+	logger, _ := New(&Config{
+		Level:  "debug",
+		Format: "json",
+		Output: "buffer",
+	}, withBuffer(&buf))
+
+	if err := logger.SetLevel(Level(123)); err == nil {
+		t.Fatal("SetLevel() error = nil, want non-nil for invalid level")
+	}
+
+	logger.Debug("debug message should still be emitted")
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("Expected 1 log line, got %d: %q", len(lines), buf.String())
+	}
+
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("Failed to parse log entry: %v", err)
+	}
+	if entry["level"] != "DEBUG" {
+		t.Fatalf("Expected level DEBUG, got %v", entry["level"])
 	}
 }
 
@@ -923,6 +991,61 @@ func TestLoggerClose(t *testing.T) {
 		}
 		if !strings.Contains(string(data), "message before close") {
 			t.Fatalf("Expected log file to contain message, got %q", string(data))
+		}
+	})
+
+	t.Run("derived logger does not own resource", func(t *testing.T) {
+		logFile := filepath.Join(t.TempDir(), "clog-derived.log")
+		logger, err := New(&Config{
+			Level:  "info",
+			Format: "json",
+			Output: logFile,
+		})
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		child := logger.WithNamespace("child")
+
+		logger.Info("message before child close")
+		if err := child.Close(); err != nil {
+			t.Fatalf("child Close() error = %v", err)
+		}
+		logger.Info("message after child close")
+
+		if err := logger.Close(); err != nil {
+			t.Fatalf("root Close() error = %v", err)
+		}
+
+		data, err := os.ReadFile(logFile)
+		if err != nil {
+			t.Fatalf("ReadFile() error = %v", err)
+		}
+		content := string(data)
+		if !strings.Contains(content, "message before child close") {
+			t.Fatalf("Expected first message in log file, got %q", content)
+		}
+		if !strings.Contains(content, "message after child close") {
+			t.Fatalf("Expected second message in log file, got %q", content)
+		}
+	})
+
+	t.Run("root close is idempotent", func(t *testing.T) {
+		logFile := filepath.Join(t.TempDir(), "clog-idempotent.log")
+		logger, err := New(&Config{
+			Level:  "info",
+			Format: "json",
+			Output: logFile,
+		})
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		if err := logger.Close(); err != nil {
+			t.Fatalf("first Close() error = %v", err)
+		}
+		if err := logger.Close(); err != nil {
+			t.Fatalf("second Close() error = %v", err)
 		}
 	})
 }

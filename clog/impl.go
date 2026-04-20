@@ -4,15 +4,25 @@ import (
 	"context"
 	"log/slog"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
+type loggerSharedState struct {
+	handler   slog.Handler
+	closeOnce sync.Once
+	closeErr  error
+	closed    atomic.Bool
+}
+
 // loggerImpl 是Logger接口的具体实现
 type loggerImpl struct {
-	handler   slog.Handler
-	config    *Config
-	options   *options
-	baseAttrs []slog.Attr
+	shared        *loggerSharedState
+	config        *Config
+	options       *options
+	baseAttrs     []slog.Attr
+	ownsResources bool
 }
 
 // newLogger 创建Logger实例（内部使用）
@@ -23,9 +33,12 @@ func newLogger(config *Config, options *options) (Logger, error) {
 	}
 
 	logger := &loggerImpl{
-		handler: handler,
-		config:  config,
-		options: options,
+		shared: &loggerSharedState{
+			handler: handler,
+		},
+		config:        config,
+		options:       options,
+		ownsResources: true,
 	}
 
 	logger.setupBaseAttrs()
@@ -79,10 +92,11 @@ func (l *loggerImpl) WithNamespace(parts ...string) Logger {
 	newOptions.namespaceParts = append(newOptions.namespaceParts, parts...)
 
 	newLogger := &loggerImpl{
-		handler:   l.handler,
-		config:    l.config,
-		options:   &newOptions,
-		baseAttrs: append([]slog.Attr(nil), l.baseAttrs...),
+		shared:        l.shared,
+		config:        l.config,
+		options:       &newOptions,
+		baseAttrs:     append([]slog.Attr(nil), l.baseAttrs...),
+		ownsResources: false,
 	}
 
 	return newLogger
@@ -100,10 +114,11 @@ func (l *loggerImpl) With(fields ...Field) Logger {
 	baseAttrs = append(baseAttrs, fields...)
 
 	newLogger := &loggerImpl{
-		handler:   l.handler,
-		config:    l.config,
-		options:   l.options,
-		baseAttrs: baseAttrs,
+		shared:        l.shared,
+		config:        l.config,
+		options:       l.options,
+		baseAttrs:     baseAttrs,
+		ownsResources: false,
 	}
 
 	return newLogger
@@ -111,6 +126,20 @@ func (l *loggerImpl) With(fields ...Field) Logger {
 
 // 内部方法
 func (l *loggerImpl) log(ctx context.Context, level Level, msg string, fields ...Field) {
+	if l.shared == nil || l.shared.closed.Load() {
+		return
+	}
+
+	slogLevel, err := slogLevelFromLevel(level)
+	if err != nil {
+		return
+	}
+
+	handler := l.shared.handler
+	if enabled := handler.Enabled(ctx, slogLevel); !enabled {
+		return
+	}
+
 	// 准备属性切片：baseAttrs + fields + contextFields + namespaceFields
 	attrs := make([]slog.Attr, 0, len(l.baseAttrs)+len(fields)+4)
 	attrs = append(attrs, l.baseAttrs...)
@@ -120,36 +149,13 @@ func (l *loggerImpl) log(ctx context.Context, level Level, msg string, fields ..
 	extractContextFields(ctx, l.options, &attrs)
 	addNamespaceFields(l.options, &attrs) // 只在log方法中添加一次
 
-	// 将 Level 映射为 slog.Level，避免直接按数字转换导致不一致
-	var slogLevel slog.Level
-	switch level {
-	case DebugLevel:
-		slogLevel = slog.LevelDebug
-	case InfoLevel:
-		slogLevel = slog.LevelInfo
-	case WarnLevel:
-		slogLevel = slog.LevelWarn
-	case ErrorLevel:
-		slogLevel = slog.LevelError
-	case FatalLevel:
-		// Fatal 在 slog 中没有显式常量，使用 Error 的更高值
-		slogLevel = slog.LevelError + 4
-	default:
-		slogLevel = slog.LevelInfo
-	}
-
 	// 获取正确的程序计数器(PC)值，用于准确的源码位置
 	var pcs [1]uintptr
 	runtime.Callers(3, pcs[:]) // skip: runtime.Callers, logger.log, Debug/Info/Error等
 	record := slog.NewRecord(time.Now(), slogLevel, msg, pcs[0])
 	record.AddAttrs(attrs...)
 
-	// 使用 handler.Enabled 进行级别检查，避免直接调用 Handle 绕过过滤逻辑
-	if enabled := l.handler.Enabled(ctx, slogLevel); !enabled {
-		return
-	}
-
-	err := l.handler.Handle(ctx, record)
+	err = handler.Handle(ctx, record)
 	if err != nil {
 		// 处理日志处理错误（可选）
 		return
@@ -160,7 +166,10 @@ func (l *loggerImpl) log(ctx context.Context, level Level, msg string, fields ..
 //
 // 通过底层 handler 的 SetLevel 实现（基于 slog.LevelVar），可在运行时生效。
 func (l *loggerImpl) SetLevel(level Level) error {
-	if h, ok := l.handler.(interface{ SetLevel(Level) error }); ok {
+	if l.shared == nil || l.shared.closed.Load() {
+		return nil
+	}
+	if h, ok := l.shared.handler.(interface{ SetLevel(Level) error }); ok {
 		return h.SetLevel(level)
 	}
 	return nil // 无法动态调整，忽略错误
@@ -168,17 +177,28 @@ func (l *loggerImpl) SetLevel(level Level) error {
 
 // Flush 强制同步所有缓冲区的日志
 func (l *loggerImpl) Flush() {
-	if h, ok := l.handler.(interface{ Flush() }); ok {
+	if l.shared == nil || l.shared.closed.Load() {
+		return
+	}
+	if h, ok := l.shared.handler.(interface{ Flush() }); ok {
 		h.Flush()
 	}
 }
 
 // Close 释放 Logger 持有的底层资源。
 func (l *loggerImpl) Close() error {
-	if h, ok := l.handler.(interface{ Close() error }); ok {
-		return h.Close()
+	if !l.ownsResources || l.shared == nil {
+		return nil
 	}
-	return nil
+
+	l.shared.closeOnce.Do(func() {
+		l.shared.closed.Store(true)
+		if h, ok := l.shared.handler.(interface{ Close() error }); ok {
+			l.shared.closeErr = h.Close()
+		}
+	})
+
+	return l.shared.closeErr
 }
 
 // setupBaseAttrs 初始化 logger 的基础属性

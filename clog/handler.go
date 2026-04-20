@@ -80,19 +80,34 @@ func resolveWriter(config *Config, options *options) (io.Writer, io.Closer, erro
 
 // slogLevelFromConfig 将配置的 Level 映射为 slog.Level。
 func slogLevelFromConfig(level string) slog.Level {
-	switch strings.ToLower(level) {
-	case "debug":
-		return slog.LevelDebug
-	case "info":
+	parsed, err := ParseLevel(level)
+	if err != nil {
 		return slog.LevelInfo
-	case "warn":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	case "fatal":
-		return slog.LevelError + 4
+	}
+
+	slogLevel, err := slogLevelFromLevel(parsed)
+	if err != nil {
+		return slog.LevelInfo
+	}
+
+	return slogLevel
+}
+
+// slogLevelFromLevel 将 clog.Level 映射为 slog.Level。
+func slogLevelFromLevel(level Level) (slog.Level, error) {
+	switch level {
+	case DebugLevel:
+		return slog.LevelDebug, nil
+	case InfoLevel:
+		return slog.LevelInfo, nil
+	case WarnLevel:
+		return slog.LevelWarn, nil
+	case ErrorLevel:
+		return slog.LevelError, nil
+	case FatalLevel:
+		return slog.LevelError + 4, nil
 	default:
-		return slog.LevelInfo
+		return slog.LevelInfo, fmt.Errorf("invalid log level: %d", level)
 	}
 }
 
@@ -147,20 +162,9 @@ func trimSourcePath(fileName, sourceRoot string) string {
 
 // SetLevel 动态调整日志级别。
 func (h *clogHandler) SetLevel(level Level) error {
-	var slogLevel slog.Level
-	switch level {
-	case DebugLevel:
-		slogLevel = slog.LevelDebug
-	case InfoLevel:
-		slogLevel = slog.LevelInfo
-	case WarnLevel:
-		slogLevel = slog.LevelWarn
-	case ErrorLevel:
-		slogLevel = slog.LevelError
-	case FatalLevel:
-		slogLevel = slog.LevelError + 4
-	default:
-		slogLevel = slog.LevelInfo
+	slogLevel, err := slogLevelFromLevel(level)
+	if err != nil {
+		return err
 	}
 
 	h.levelVar.Set(slogLevel)
