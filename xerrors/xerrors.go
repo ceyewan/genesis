@@ -42,9 +42,13 @@ func Wrapf(err error, format string, args ...any) error {
 //
 // 当前的 code 模型非常轻量，只包含一个字符串错误码，不承担更复杂的错误元数据职责。
 // WithCode(nil, code) 会返回 nil。
+// WithCode(err, "") 会直接返回原错误，不创建新的错误包装。
 func WithCode(err error, code string) error {
 	if err == nil {
 		return nil
+	}
+	if code == "" {
+		return err
 	}
 	return &CodedError{Code: code, Cause: err}
 }
@@ -88,6 +92,9 @@ func Must[T any](v T, err error) T {
 }
 
 // MustOK 如果 ok 为 false，则 panic。
+//
+// 它适合消费已有的 (T, bool) 返回值 helper。对于普通运行时分支，
+// 直接显式处理 ok 往往更清晰。
 func MustOK[T any](v T, ok bool) T {
 	if !ok {
 		panic("assertion failed")
