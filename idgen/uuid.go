@@ -10,8 +10,11 @@ import "github.com/google/uuid"
 //
 // 使用示例:
 //
-//	id := idgen.UUID()
-func UUID() string {
-	v7, _ := uuid.NewV7()
-	return v7.String()
+//	id, err := idgen.UUID()
+func UUID() (string, error) {
+	v7, err := uuid.NewV7()
+	if err != nil {
+		return "", err
+	}
+	return v7.String(), nil
 }

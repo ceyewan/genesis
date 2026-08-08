@@ -31,6 +31,10 @@ type Registry interface {
 	// 基于快照与本地已知状态做 diff，并补发必要事件。
 	Watch(ctx context.Context, serviceName string) (<-chan ServiceEvent, error)
 
+	// LeaseFailures 返回非主动注销导致的 lease/keepalive 终止事件。
+	// 调用方应持续消费；成功 Shutdown 后通道关闭。
+	LeaseFailures() <-chan LeaseFailure
+
 	// --- gRPC 集成 ---
 
 	// GetConnection 获取指定服务的 gRPC 连接。
@@ -40,9 +44,12 @@ type Registry interface {
 	GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
 
 	// --- 资源管理 ---
+	// Shutdown 使用调用方 context 停止后台任务并清理资源。
+	// 如果 ctx 没有 deadline，组件会使用 5 秒安全上限。
+	Shutdown(ctx context.Context) error
 
 	// Close 停止后台任务并清理资源。
 	//
-	// Close 会停止 keepalive / watch，并尽力撤销当前 registry 创建的 lease。撤销失败会返回错误。
+	// Close 等价于 Shutdown(context.Background())，保留 5 秒默认上限。
 	Close() error
 }

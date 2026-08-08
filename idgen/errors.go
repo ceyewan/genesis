@@ -12,6 +12,15 @@ var (
 	// ErrWorkerIDExhausted WorkerID 已耗尽
 	ErrWorkerIDExhausted = xerrors.New("idgen: no available worker id")
 
+	// ErrSequenceExhausted 序列号已到达配置的上限。
+	ErrSequenceExhausted = xerrors.New("idgen: sequence exhausted")
+
+	// ErrKeepAliveStarted 保活任务已经启动。
+	ErrKeepAliveStarted = xerrors.New("idgen: keep alive already started")
+
+	// ErrAllocatorStopped 分配器已经停止。
+	ErrAllocatorStopped = xerrors.New("idgen: allocator stopped")
+
 	// ErrClockBackwards 时钟回拨超过限制
 	ErrClockBackwards = xerrors.New("idgen: clock moved backwards too much")
 

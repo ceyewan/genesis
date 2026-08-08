@@ -54,14 +54,16 @@ func main() {
 	logger, _ := clog.New(clog.NewDevDefaultConfig("registry-example"))
 	defer logger.Close()
 
-	etcdConn, _ := connector.NewEtcd(nil, connector.WithLogger(logger))
+	etcdConn, _ := connector.NewEtcd(&connector.EtcdConfig{
+		Endpoints: []string{"127.0.0.1:2379"},
+	}, connector.WithLogger(logger))
 	defer etcdConn.Close()
 	_ = etcdConn.Connect(ctx)
 
 	reg, _ := registry.New(etcdConn, &registry.Config{
 		Namespace:  "/genesis/services",
 		DefaultTTL: 30 * time.Second,
-	}, registry.WithLogger(logger))
+}, registry.WithLogger(logger))
 	defer reg.Close()
 
 	service := &registry.ServiceInstance{
@@ -138,7 +140,9 @@ go func() {
 }()
 ```
 
-如果 watch 期间遇到 Etcd compaction，registry 不会直接把 revision 跳到最新值后继续监听，而是会读取当前快照并和本地已知实例做 diff，尽量把变化恢复成连续的 `PUT` / `DELETE` 事件。
+`Watch` 首先把线性一致的初始快照作为 `PUT` 事件发送，再从快照 revision 的下一位开始监听，因此调用方无需在 `GetService` 和 `Watch` 之间自行消除竞态。如果 watch 期间遇到 Etcd compaction，registry 会读取当前快照并和本地已知实例做 diff，尽量把变化恢复成连续的 `PUT` / `DELETE` 事件。
+
+已注册实例的 keepalive 若非主动注销而终止，组件会通过 `LeaseFailures()` 暴露 `LeaseFailure`。应用应持续消费该通道，并在收到事件后停止对外宣称实例可用，再决定退出或显式重新注册。
 
 ## gRPC 集成
 
@@ -165,6 +169,7 @@ defer conn.Close()
 - service name 会被解析成 `etcd:///order-service`。
 - 默认使用 gRPC 默认的 `pick_first` 负载均衡策略。
 - 如果 `ctx` 没有 deadline，`GetConnection` 不会主动等待连接进入 `Ready`。
+- 每次 `GetConnection` 返回的新 `*grpc.ClientConn` 归调用方所有，registry 不会替调用方关闭。
 
 ## 配置
 
@@ -173,6 +178,10 @@ defer conn.Close()
 | `Namespace` | Etcd key 前缀，默认 `/genesis/services` |
 | `DefaultTTL` | 默认租约时长，默认 `30s`，必须为 `0` 或 `>= 1s` |
 | `RetryInterval` | watch / resolver 重试间隔，默认 `1s` |
+
+`New(conn, nil)` 明确允许，等价于空配置。构造器会复制非 nil 配置后再应用默认值，不修改调用方对象。
+
+`WithMeter` 可注入内部指标，覆盖成功注册、发出的 watch event 和非预期 lease failure。
 
 ## 资源管理
 
@@ -186,7 +195,9 @@ reg, _ := registry.New(etcdConn, cfg)
 defer reg.Close()
 ```
 
-`Close()` 会：
+需要由调用方控制退出 deadline 时，使用 `Shutdown(ctx)`；传入的 ctx 没有 deadline 时会自动采用 5 秒安全上限。`Close()` 是兼容封装，等价于 `Shutdown(context.Background())`。
+
+`Shutdown` / `Close` 会：
 
 - 停止 keepalive 和 watch 后台任务。
 - 尽力撤销当前 registry 创建的 lease。

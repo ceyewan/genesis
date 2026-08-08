@@ -3,6 +3,7 @@ package mq
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -140,11 +141,13 @@ func (t *redisStreamTransport) consumeWithGroup(ctx context.Context, topic strin
 			Block:    2 * time.Second,
 		}).Result()
 		if err != nil {
-			if err == redis.Nil || err == context.Canceled {
+			if errors.Is(err, redis.Nil) || errors.Is(err, context.Canceled) {
 				continue
 			}
 			t.logger.Error("XReadGroup failed", clog.String("topic", topic), clog.Error(err))
-			time.Sleep(time.Second) // 避免忙轮询
+			if !waitForRetry(ctx, time.Second) {
+				return
+			}
 			continue
 		}
 
@@ -181,7 +184,7 @@ func (t *redisStreamTransport) claimPendingMessages(
 		Count:    int64(count),
 	}).Result()
 	if err != nil {
-		if err != redis.Nil {
+		if !errors.Is(err, redis.Nil) {
 			t.logger.Warn("XAutoClaim failed", clog.String("topic", topic), clog.Error(err))
 		}
 		return "0-0" // 出错时重置游标
@@ -222,11 +225,13 @@ func (t *redisStreamTransport) consumeBroadcast(ctx context.Context, topic strin
 			Block:   2 * time.Second,
 		}).Result()
 		if err != nil {
-			if err == redis.Nil || err == context.Canceled {
+			if errors.Is(err, redis.Nil) || errors.Is(err, context.Canceled) {
 				continue
 			}
 			t.logger.Error("XRead failed", clog.String("topic", topic), clog.Error(err))
-			time.Sleep(time.Second)
+			if !waitForRetry(ctx, time.Second) {
+				return
+			}
 			continue
 		}
 
@@ -236,6 +241,17 @@ func (t *redisStreamTransport) consumeBroadcast(ctx context.Context, topic strin
 				lastID = msg.ID
 			}
 		}
+	}
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -349,6 +365,10 @@ func (m *redisStreamMessage) Nak() error {
 	return ErrNotSupported
 }
 
+func (m *redisStreamMessage) NakWithDelay(delay time.Duration) error {
+	return ErrNotSupported
+}
+
 func (m *redisStreamMessage) ID() string {
 	return m.id
 }
@@ -365,6 +385,19 @@ type redisStreamSubscription struct {
 func (s *redisStreamSubscription) Unsubscribe() error {
 	s.cancel()
 	return nil
+}
+
+func (s *redisStreamSubscription) Drain(ctx context.Context) error {
+	if ctx == nil {
+		return xerrors.New("mq subscription drain context is nil")
+	}
+	s.cancel()
+	select {
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		return xerrors.Wrap(ctx.Err(), "drain redis stream subscription")
+	}
 }
 
 func (s *redisStreamSubscription) Done() <-chan struct{} {

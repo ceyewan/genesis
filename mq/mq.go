@@ -45,6 +45,10 @@ type MQ interface {
 	//   - opts: 订阅选项（QueueGroup、AutoAck 等）
 	Subscribe(ctx context.Context, topic string, handler Handler, opts ...SubscribeOption) (Subscription, error)
 
+	// Drain 停止接收新消息并等待所有已交付 Handler 完成。
+	// 达到 ctx deadline 后会强制停止剩余订阅。
+	Drain(ctx context.Context) error
+
 	// Close 关闭 MQ 客户端
 	// 注意：底层连接由 Connector 管理，此方法仅释放 MQ 内部资源
 	Close() error
@@ -64,8 +68,18 @@ type MQ interface {
 //	}, mq.WithNATSConnector(natsConn), mq.WithLogger(logger))
 func New(cfg *Config, opts ...Option) (MQ, error) {
 	if cfg == nil {
-		return nil, xerrors.New("config is nil")
+		return nil, xerrors.Wrap(ErrInvalidConfig, "config is nil")
 	}
+	cfgCopy := *cfg
+	if cfg.JetStream != nil {
+		jetStreamCopy := *cfg.JetStream
+		cfgCopy.JetStream = &jetStreamCopy
+	}
+	if cfg.RedisStream != nil {
+		redisStreamCopy := *cfg.RedisStream
+		cfgCopy.RedisStream = &redisStreamCopy
+	}
+	cfg = &cfgCopy
 
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {
@@ -81,10 +95,12 @@ func New(cfg *Config, opts ...Option) (MQ, error) {
 	}
 
 	return &mq{
-		transport: transport,
-		logger:    o.logger,
-		meter:     o.meter,
-		driver:    cfg.Driver,
+		transport:     transport,
+		logger:        o.logger,
+		meter:         o.meter,
+		driver:        cfg.Driver,
+		subscriptions: make(map[Subscription]struct{}),
+		lifecycleDone: make(chan struct{}),
 	}, nil
 }
 

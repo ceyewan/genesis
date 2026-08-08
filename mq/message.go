@@ -3,6 +3,7 @@ package mq
 import (
 	"context"
 	"maps"
+	"time"
 )
 
 // Headers 消息元数据（键值对）
@@ -76,6 +77,10 @@ type Message interface {
 	// AutoAck 模式下 ErrNotSupported 会被自动忽略。
 	Nak() error
 
+	// NakWithDelay 拒绝消息并请求延迟重投。
+	// NATS JetStream 支持；Redis Stream 返回 ErrNotSupported。
+	NakWithDelay(delay time.Duration) error
+
 	// ID 获取消息唯一标识（可选）
 	//
 	// 不同后端返回值：
@@ -93,7 +98,7 @@ type Message interface {
 //   - nil: 处理成功，AutoAck 模式下自动调用 Ack
 //   - error: 处理失败，AutoAck 模式下自动调用 Nak（Redis 下 ErrNotSupported 会被忽略）
 //
-// 注意（JetStream）：Nak 触发消息立即重投。对非暂时性错误（如解码失败），
+// 注意（JetStream）：Nak 触发消息立即重投，NakWithDelay 可请求延迟重投。对非暂时性错误（如解码失败），
 // 建议使用 WithManualAck 手动 Ack，或配合 WithRetry 在应用层重试后 Ack，
 // 避免消息无限重投。
 type Handler func(msg Message) error
@@ -107,6 +112,10 @@ type Subscription interface {
 	// 调用后停止接收新消息。
 	// 注意：不保证等待当前 Handler 完成，具体行为依赖后端实现。
 	Unsubscribe() error
+
+	// Drain 停止接收新消息并等待已经交付的 Handler 完成。
+	// ctx 取消时会强制停止订阅并返回 context 错误。
+	Drain(ctx context.Context) error
 
 	// Done 返回一个 channel，订阅结束时关闭
 	//

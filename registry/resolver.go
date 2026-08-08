@@ -88,7 +88,9 @@ func (b *etcdResolverBuilder) Build(target resolver.Target, cc resolver.ClientCo
 	}
 
 	// 启动 resolver
-	go r.start()
+	r.workers.Go(func() {
+		r.start()
+	})
 
 	return r, nil
 }
@@ -109,6 +111,9 @@ type etcdResolver struct {
 	localCache  map[string]resolver.Address // instanceID -> Address
 	cacheMu     sync.RWMutex
 	initialized bool
+	lifecycleMu sync.Mutex
+	closed      bool
+	workers     sync.WaitGroup
 }
 
 // start 启动 resolver
@@ -123,7 +128,7 @@ func (r *etcdResolver) start() {
 	}
 
 	// 初始获取服务列表（全量初始化缓存）
-	r.initializeCache()
+	r.initializeCache(r.ctx)
 
 	// 持续监听变化并增量更新
 	for {
@@ -141,13 +146,14 @@ func (r *etcdResolver) start() {
 }
 
 // initializeCache 初始化本地缓存（全量拉取一次）
-func (r *etcdResolver) initializeCache() {
-	ctx := context.Background()
+func (r *etcdResolver) initializeCache(ctx context.Context) {
 	instances, err := r.registry.GetService(ctx, r.serviceName)
 	if err != nil {
-		r.registry.logger.Error("failed to initialize resolver cache",
-			clog.String("service_name", r.serviceName),
-			clog.Error(err))
+		if !xerrors.Is(err, context.Canceled) && !xerrors.Is(err, context.DeadlineExceeded) {
+			r.registry.logger.Error("failed to initialize resolver cache",
+				clog.String("service_name", r.serviceName),
+				clog.Error(err))
+		}
 		return
 	}
 
@@ -252,12 +258,26 @@ func (r *etcdResolver) pushStateLocked() {
 // ResolveNow 立即重新解析（gRPC 可能会调用此方法）
 // 此方法采用全量刷新，作为兜底机制
 func (r *etcdResolver) ResolveNow(opts resolver.ResolveNowOptions) {
-	r.initializeCache()
+	r.lifecycleMu.Lock()
+	if r.closed {
+		r.lifecycleMu.Unlock()
+		return
+	}
+	r.workers.Add(1)
+	r.lifecycleMu.Unlock()
+	defer r.workers.Done()
+	r.initializeCache(r.ctx)
 }
 
 // Close 关闭 resolver
 func (r *etcdResolver) Close() {
-	r.cancel()
+	r.lifecycleMu.Lock()
+	if !r.closed {
+		r.closed = true
+		r.cancel()
+	}
+	r.lifecycleMu.Unlock()
+	r.workers.Wait()
 }
 
 // parseGRPCEndpoint 解析 gRPC endpoint 地址。

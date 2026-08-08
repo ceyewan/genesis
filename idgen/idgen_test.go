@@ -2,8 +2,10 @@ package idgen
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -49,7 +51,8 @@ func (m *testMeter) Shutdown(ctx context.Context) error {
 
 func TestUUID_Unit(t *testing.T) {
 	t.Run("Generate UUID v7", func(t *testing.T) {
-		uuid := UUID()
+		uuid, err := UUID()
+		require.NoError(t, err)
 		if uuid == "" {
 			t.Error("Expected non-empty UUID")
 		}
@@ -59,15 +62,18 @@ func TestUUID_Unit(t *testing.T) {
 	})
 
 	t.Run("Generate unique UUIDs", func(t *testing.T) {
-		uuid1 := UUID()
-		uuid2 := UUID()
+		uuid1, err := UUID()
+		require.NoError(t, err)
+		uuid2, err := UUID()
+		require.NoError(t, err)
 		if uuid1 == uuid2 {
 			t.Error("Expected different UUIDs")
 		}
 	})
 
 	t.Run("UUID format validation", func(t *testing.T) {
-		uuid := UUID()
+		uuid, err := UUID()
+		require.NoError(t, err)
 		// UUID v7 格式: xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx
 		if len(uuid) != 36 {
 			t.Errorf("Expected UUID length 36, got %d", len(uuid))
@@ -320,6 +326,45 @@ func TestSnowflake_DefaultMode_MultiDC_Unit(t *testing.T) {
 	_, datacenterID, workerID, _ := ParseGeneratorID(id, GeneratorModeMultiDC)
 	require.EqualValues(t, 0, datacenterID)
 	require.EqualValues(t, 1, workerID)
+}
+
+func TestNewGenerator_CopiesConfig_Unit(t *testing.T) {
+	t.Parallel()
+
+	cfg := &GeneratorConfig{WorkerID: 1}
+	gen, err := NewGenerator(cfg)
+	require.NoError(t, err)
+	require.Empty(t, cfg.Mode)
+
+	cfg.WorkerID = 31
+	id, err := gen.Next()
+	require.NoError(t, err)
+	_, _, workerID, _ := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.EqualValues(t, 1, workerID)
+}
+
+func TestSnowflake_ClockRollback_Unit(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(genesisEpochMilli + 10_000)
+	sf := &snowflake{
+		mode:     GeneratorModeMultiDC,
+		workerID: 1,
+		now:      func() time.Time { return now },
+		sleep:    func(time.Duration) {},
+	}
+
+	sf.state.Store(uint64(12_000) << 12)
+	_, err := sf.nextInt64()
+	require.ErrorIs(t, err, ErrClockBackwards)
+
+	sf.state.Store((uint64(10_004) << 12) | 7)
+	id, err := sf.nextInt64()
+	require.NoError(t, err)
+	timestamp, _, _, sequence := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.Equal(t, genesisEpochMilli+10_004, timestamp)
+	require.EqualValues(t, 8, sequence)
+	require.False(t, errors.Is(err, ErrClockBackwards))
 }
 
 func TestSnowflake_Monotonicity_Unit(t *testing.T) {
