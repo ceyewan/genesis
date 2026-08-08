@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strconv"
 	"time"
@@ -331,7 +332,7 @@ func normalizeRedisError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return ErrMiss
 	}
 	return err

@@ -1,6 +1,8 @@
 package db
 
 import (
+	"time"
+
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ceyewan/genesis/clog"
@@ -18,6 +20,14 @@ type options struct {
 	postgresqlConnector connector.PostgreSQLConnector
 	sqliteConnector     connector.SQLiteConnector
 	silentMode          bool // 静默模式，禁用 SQL 日志输出
+	slowThreshold       time.Duration
+}
+
+// WithSlowThreshold 配置慢 SQL 阈值。零值使用默认 200ms，负值会使 New 返回 ErrInvalidConfig。
+func WithSlowThreshold(threshold time.Duration) Option {
+	return func(o *options) {
+		o.slowThreshold = threshold
+	}
 }
 
 // WithLogger 注入日志记录器

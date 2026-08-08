@@ -2,15 +2,141 @@ package connector
 
 import (
 	"context"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
+
+type connectorTestMeter struct{ health atomic.Int64 }
+
+type connectorTestCounter struct{ value *atomic.Int64 }
+
+type connectorTestGauge struct{}
+
+type connectorTestHistogram struct{}
+
+func (m *connectorTestMeter) Counter(name, _ string, _ ...metrics.MetricOption) (metrics.Counter, error) {
+	if name == MetricHealthChecks {
+		return &connectorTestCounter{value: &m.health}, nil
+	}
+	return &connectorTestCounter{value: &atomic.Int64{}}, nil
+}
+
+func (*connectorTestMeter) Gauge(string, string, ...metrics.MetricOption) (metrics.Gauge, error) {
+	return connectorTestGauge{}, nil
+}
+
+func (*connectorTestMeter) Histogram(string, string, ...metrics.MetricOption) (metrics.Histogram, error) {
+	return connectorTestHistogram{}, nil
+}
+
+func (*connectorTestMeter) Shutdown(context.Context) error            { return nil }
+func (c *connectorTestCounter) Inc(context.Context, ...metrics.Label) { c.value.Add(1) }
+
+func (c *connectorTestCounter) Add(_ context.Context, value float64, _ ...metrics.Label) {
+	c.value.Add(int64(value))
+}
+
+func (connectorTestGauge) Set(context.Context, float64, ...metrics.Label) {}
+func (connectorTestGauge) Inc(context.Context, ...metrics.Label)          {}
+func (connectorTestGauge) Dec(context.Context, ...metrics.Label)          {}
+
+func (connectorTestHistogram) Record(context.Context, float64, ...metrics.Label) {
+}
+
+func TestWithMeterRecordsHealthChecks(t *testing.T) {
+	meter := &connectorTestMeter{}
+	conn, err := NewRedis(&RedisConfig{Addr: "localhost:6379"}, WithMeter(meter))
+	require.NoError(t, err)
+	require.Error(t, conn.HealthCheck(context.Background()))
+	require.EqualValues(t, 1, meter.health.Load())
+}
+
+func TestConstructorsRejectNilConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		new  func() (any, error)
+	}{
+		{name: "mysql", new: func() (any, error) { return NewMySQL(nil) }},
+		{name: "redis", new: func() (any, error) { return NewRedis(nil) }},
+		{name: "etcd", new: func() (any, error) { return NewEtcd(nil) }},
+		{name: "nats", new: func() (any, error) { return NewNATS(nil) }},
+		{name: "kafka", new: func() (any, error) { return NewKafka(nil) }},
+		{name: "sqlite", new: func() (any, error) { return NewSQLite(nil) }},
+		{name: "postgresql", new: func() (any, error) { return NewPostgreSQL(nil) }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			conn, err := tt.new()
+			require.Nil(t, conn)
+			require.ErrorIs(t, err, ErrConfig)
+			require.Contains(t, err.Error(), tt.name)
+			require.Contains(t, err.Error(), "nil")
+		})
+	}
+}
+
+func TestConstructorsCopyConfigBeforeApplyingDefaults(t *testing.T) {
+	t.Parallel()
+
+	redisCfg := &RedisConfig{Addr: "localhost:6379"}
+	redisConn, err := NewRedis(redisCfg)
+	require.NoError(t, err)
+	require.Empty(t, redisCfg.Name)
+	require.Zero(t, redisCfg.PoolSize)
+	redisCfg.Addr = "changed:6379"
+	require.Equal(t, "localhost:6379", redisConn.(*redisConnector).cfg.Addr)
+
+	etcdCfg := &EtcdConfig{Endpoints: []string{"localhost:2379"}}
+	etcdConn, err := NewEtcd(etcdCfg)
+	require.NoError(t, err)
+	etcdCfg.Endpoints[0] = "changed:2379"
+	require.Equal(t, "localhost:2379", etcdConn.(*etcdConnector).cfg.Endpoints[0])
+
+	kafkaCfg := &KafkaConfig{Seed: []string{"localhost:9092"}}
+	kafkaConn, err := NewKafka(kafkaCfg)
+	require.NoError(t, err)
+	kafkaCfg.Seed[0] = "changed:9092"
+	require.Equal(t, "localhost:9092", kafkaConn.(*kafkaConnector).cfg.Seed[0])
+}
+
+func TestConfigValidationIdentifiesInvalidField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		err   error
+		field string
+	}{
+		{name: "mysql host", err: (&MySQLConfig{}).validate(), field: "host"},
+		{name: "redis addr", err: (&RedisConfig{}).validate(), field: "addr"},
+		{name: "etcd endpoints", err: (&EtcdConfig{}).validate(), field: "endpoints"},
+		{name: "nats url", err: (&NATSConfig{}).validate(), field: "url"},
+		{name: "kafka seed", err: (&KafkaConfig{}).validate(), field: "seed"},
+		{name: "sqlite path", err: (&SQLiteConfig{}).validate(), field: "path"},
+		{name: "postgresql host", err: (&PostgreSQLConfig{}).validate(), field: "host"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.ErrorIs(t, tt.err, ErrConfig)
+			require.True(t, strings.Contains(tt.err.Error(), tt.field), tt.err.Error())
+		})
+	}
+}
 
 // TestRedisConfigValidation 测试 Redis 配置验证
 func TestRedisConfigValidation(t *testing.T) {

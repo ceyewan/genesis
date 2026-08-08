@@ -17,6 +17,7 @@ import (
 // 生命周期由 t.Cleanup 管理。
 func NewMySQLContainerConfig(t *testing.T) *connector.MySQLConfig {
 	t.Helper()
+	RequireDocker(t)
 
 	ctx := context.Background()
 

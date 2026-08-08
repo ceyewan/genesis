@@ -66,12 +66,15 @@ func TestNew_InvalidDriver(t *testing.T) {
 }
 
 func TestNew_MissingConnector(t *testing.T) {
-	_, err := New(&Config{
+	cfg := &Config{
 		Driver: DriverRedis,
-	})
+	}
+	_, err := New(cfg)
 	if err == nil {
 		t.Fatal("expected error for missing redis connector")
 	}
+	require.Zero(t, cfg.DefaultTTL)
+	require.Empty(t, cfg.Prefix)
 
 	_, err = New(&Config{
 		Driver: DriverEtcd,
@@ -408,6 +411,24 @@ func TestRedisLocker_CloseReleasesLocks(t *testing.T) {
 	require.NoError(t, locker2.Close())
 }
 
+func TestRedisLocker_ConcurrentCloseRejectsNewLocks(t *testing.T) {
+	conn := testkit.NewRedisContainerConnector(t)
+	locker := newRedisLockerWithConn(t, conn)
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			errs <- locker.Close()
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.ErrorIs(t, locker.Lock(context.Background(), "after-close"), ErrClosed)
+}
+
 func TestRedisLocker_WatchdogLostOwnershipClearsLocalState(t *testing.T) {
 	ctx, cancel := testkit.NewContext(t, 30*time.Second)
 	defer cancel()
@@ -600,6 +621,24 @@ func TestEtcdLocker_CloseReleasesCustomTTLSessionLock(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, locker2.Unlock(ctx, key))
 	require.NoError(t, locker2.Close())
+}
+
+func TestEtcdLocker_ConcurrentCloseRejectsNewLocks(t *testing.T) {
+	conn := testkit.NewEtcdContainerConnector(t)
+	locker := newEtcdLockerWithConn(t, conn)
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			errs <- locker.Close()
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.ErrorIs(t, locker.Lock(context.Background(), "after-close"), ErrClosed)
 }
 
 func TestEtcdLocker_WithTTLRejectsSubSecond(t *testing.T) {

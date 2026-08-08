@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/maypok86/otter/v2"
@@ -25,6 +26,7 @@ type localCache struct {
 	defaultTTL time.Duration
 	logger     clog.Logger
 	meter      metrics.Meter
+	closeOnce  sync.Once
 }
 
 func newLocal(cfg *LocalConfig, logger clog.Logger, meter metrics.Meter) (Local, error) {
@@ -99,6 +101,6 @@ func (c *localCache) Expire(ctx context.Context, key string, ttl time.Duration) 
 }
 
 func (c *localCache) Close() error {
-	c.cache.StopAllGoroutines()
+	c.closeOnce.Do(func() { c.cache.StopAllGoroutines() })
 	return nil
 }

@@ -12,20 +12,27 @@ import (
 
 // gormLogger 将 GORM 日志适配到 clog
 type gormLogger struct {
-	logger clog.Logger
-	level  logger.LogLevel
+	logger        clog.Logger
+	level         logger.LogLevel
+	slowThreshold time.Duration
 }
+
+const defaultSlowThreshold = 200 * time.Millisecond
 
 // newGormLogger 创建 GORM logger 适配器
 // silent 参数控制是否禁用日志输出
-func newGormLogger(log clog.Logger, silent bool) logger.Interface {
+func newGormLogger(log clog.Logger, silent bool, slowThreshold time.Duration) logger.Interface {
 	level := logger.Info
 	if silent {
 		level = logger.Silent
 	}
+	if slowThreshold == 0 {
+		slowThreshold = defaultSlowThreshold
+	}
 	return &gormLogger{
-		logger: log,
-		level:  level,
+		logger:        log,
+		level:         level,
+		slowThreshold: slowThreshold,
 	}
 }
 
@@ -71,7 +78,7 @@ func (l *gormLogger) Trace(ctx context.Context, begin time.Time, fc func() (stri
 			clog.Int64("rows", rows),
 			clog.Error(err),
 		)
-	case elapsed > 200*time.Millisecond && l.level >= logger.Warn:
+	case elapsed > l.slowThreshold && l.level >= logger.Warn:
 		l.logger.Warn("slow sql",
 			clog.String("duration", elapsed.String()),
 			clog.String("sql", sql),

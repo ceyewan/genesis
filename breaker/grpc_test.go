@@ -33,6 +33,24 @@ func (s *successInvoker) invoke(ctx context.Context, method string, req, reply a
 	return nil
 }
 
+func TestShouldCountGRPCFailurePreservesContextErrorChains(t *testing.T) {
+	t.Parallel()
+
+	requireNotCounted := func(t *testing.T, err error) {
+		t.Helper()
+		if shouldCountGRPCFailure(err) {
+			t.Fatalf("wrapped caller cancellation must not count as a breaker failure: %v", err)
+		}
+	}
+
+	t.Run("canceled", func(t *testing.T) {
+		requireNotCounted(t, errors.Join(errors.New("request aborted"), context.Canceled))
+	})
+	t.Run("deadline exceeded", func(t *testing.T) {
+		requireNotCounted(t, errors.Join(errors.New("request timed out"), context.DeadlineExceeded))
+	})
+}
+
 // ============================================================
 // Unary Client Interceptor 测试
 // ============================================================

@@ -142,6 +142,9 @@ func New(cfg *Config, opts ...Option) (Breaker, error) {
 	// nil cfg 时使用默认配置
 	if cfg == nil {
 		cfg = &Config{}
+	} else {
+		config := *cfg
+		cfg = &config
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err

@@ -69,6 +69,7 @@ func main() {
 		fmt.Printf("创建幂等性组件失败: %v\n", err)
 		return
 	}
+	defer idem.Close()
 
 	// 4. 启动 gRPC 服务器
 	fmt.Println("=== 启动 gRPC 服务器 ===")

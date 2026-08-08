@@ -8,4 +8,7 @@ var (
 
 	// ErrNotLoaded 配置尚未加载
 	ErrNotLoaded = xerrors.New("configuration not loaded")
+
+	// ErrClosed Loader 已关闭。
+	ErrClosed = xerrors.New("configuration loader closed")
 )

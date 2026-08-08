@@ -118,6 +118,8 @@ func NewDistributed(cfg *DistributedConfig, opts ...Option) (Distributed, error)
 	if cfg == nil {
 		return nil, xerrors.New("cache: distributed config is nil")
 	}
+	config := *cfg
+	cfg = &config
 
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {
@@ -144,6 +146,8 @@ func NewLocal(cfg *LocalConfig, opts ...Option) (Local, error) {
 	if cfg == nil {
 		return nil, xerrors.New("cache: local config is nil")
 	}
+	config := *cfg
+	cfg = &config
 
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {
@@ -168,6 +172,9 @@ func NewMulti(local Local, remote Distributed, cfg *MultiConfig) (Multi, error) 
 
 	if cfg == nil {
 		cfg = &MultiConfig{}
+	} else {
+		config := *cfg
+		cfg = &config
 	}
 	cfg.setDefaults()
 	return newMulti(local, remote, cfg)

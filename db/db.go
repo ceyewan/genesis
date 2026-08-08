@@ -71,6 +71,9 @@ type DB interface {
 func New(cfg *Config, opts ...Option) (DB, error) {
 	if cfg == nil {
 		cfg = &Config{}
+	} else {
+		config := *cfg
+		cfg = &config
 	}
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {
@@ -80,6 +83,9 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 	opt := options{}
 	for _, o := range opts {
 		o(&opt)
+	}
+	if opt.slowThreshold < 0 {
+		return nil, xerrors.Wrap(ErrInvalidConfig, "slow sql threshold must not be negative")
 	}
 
 	if opt.logger == nil {
@@ -109,7 +115,7 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 	}
 
 	// 配置 GORM logger
-	gormDB = gormDB.Session(&gorm.Session{Logger: newGormLogger(opt.logger, opt.silentMode)})
+	gormDB = gormDB.Session(&gorm.Session{Logger: newGormLogger(opt.logger, opt.silentMode, opt.slowThreshold)})
 
 	// 添加 OpenTelemetry trace 插件
 	if opt.tracer != nil {

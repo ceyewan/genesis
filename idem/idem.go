@@ -37,6 +37,10 @@ import (
 // 2. GinMiddleware: Gin 框架中间件，自动处理 HTTP 请求幂等性
 // 3. UnaryServerInterceptor: gRPC 一元拦截器，处理单次 RPC 调用幂等性
 type Idempotency interface {
+	// Close 停止组件拥有的后台任务。可并发重复调用。
+	// Redis 后端不拥有连接，因此 Close 不会关闭注入的 Redis connector。
+	Close() error
+
 	// Execute 执行幂等操作
 	//
 	// 工作流程：
@@ -144,6 +148,8 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 	if cfg == nil {
 		return nil, ErrConfigNil
 	}
+	config := *cfg
+	cfg = &config
 
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {

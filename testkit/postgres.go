@@ -17,6 +17,7 @@ import (
 // 生命周期由 t.Cleanup 管理。
 func NewPostgreSQLContainerConfig(t *testing.T) *connector.PostgreSQLConfig {
 	t.Helper()
+	RequireDocker(t)
 
 	ctx := context.Background()
 

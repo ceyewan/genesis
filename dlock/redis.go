@@ -25,6 +25,7 @@ type redisLocker struct {
 
 	closeOnce sync.Once
 	closeErr  error
+	closed    bool
 }
 
 type redisLockEntry struct {
@@ -55,7 +56,7 @@ func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger) (L
 }
 
 func (l *redisLocker) Lock(ctx context.Context, key string, opts ...LockOption) error {
-	return l.lockWithRetry(ctx, key, false, opts...)
+	return l.lockWithRetry(ctx, key, opts...)
 }
 
 func (l *redisLocker) TryLock(ctx context.Context, key string, opts ...LockOption) (bool, error) {
@@ -102,7 +103,7 @@ func (l *redisLocker) Unlock(ctx context.Context, key string) error {
 	return nil
 }
 
-func (l *redisLocker) lockWithRetry(ctx context.Context, key string, tryOnce bool, opts ...LockOption) error {
+func (l *redisLocker) lockWithRetry(ctx context.Context, key string, opts ...LockOption) error {
 	retryInterval := l.cfg.RetryInterval
 	if retryInterval <= 0 {
 		retryInterval = 100 * time.Millisecond
@@ -114,10 +115,6 @@ func (l *redisLocker) lockWithRetry(ctx context.Context, key string, tryOnce boo
 			return err
 		}
 		if entry != nil {
-			return nil
-		}
-
-		if tryOnce {
 			return nil
 		}
 
@@ -138,6 +135,10 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 
 	// 先检查本地是否已持有锁
 	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return nil, ErrClosed
+	}
 	if _, exists := l.locks[key]; exists {
 		l.mu.Unlock()
 		return nil, xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
@@ -161,20 +162,25 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 	if !success {
 		return nil, nil
 	}
+	delScript := `
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("DEL", KEYS[1])
+		else
+			return 0
+		end
+	`
 
 	// 获取 Redis 锁成功后，再次检查本地状态并添加
 	// 使用双重检查避免竞态条件
 	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		_, _ = l.client.Eval(ctx, delScript, []string{redisKey}, token).Result()
+		return nil, ErrClosed
+	}
 	if _, exists := l.locks[key]; exists {
 		l.mu.Unlock()
 		// 本地已存在（竞态情况），释放刚获取的 Redis 锁
-		delScript := `
-			if redis.call("GET", KEYS[1]) == ARGV[1] then
-				return redis.call("DEL", KEYS[1])
-			else
-				return 0
-			end
-		`
 		_, _ = l.client.Eval(ctx, delScript, []string{redisKey}, token).Result()
 		return nil, xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
@@ -289,6 +295,7 @@ func (l *redisLocker) getRedisKey(key string) string {
 func (l *redisLocker) Close() error {
 	l.closeOnce.Do(func() {
 		l.mu.Lock()
+		l.closed = true
 		entries := make(map[string]*redisLockEntry, len(l.locks))
 		maps.Copy(entries, l.locks)
 		l.locks = make(map[string]*redisLockEntry)

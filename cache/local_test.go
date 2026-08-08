@@ -289,8 +289,17 @@ func TestLocal_Close(t *testing.T) {
 	err := cache.Set(ctx, "key", "value", time.Minute)
 	require.NoError(t, err)
 
-	err = cache.Close()
-	require.NoError(t, err)
+	const callers = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, callers)
+	for range callers {
+		wg.Go(func() { errs <- cache.Close() })
+	}
+	wg.Wait()
+	close(errs)
+	for closeErr := range errs {
+		require.NoError(t, closeErr)
+	}
 
 	// Close 后操作应该不 panic（但行为未定义）
 	err = cache.Set(ctx, "key2", "value2", time.Minute)

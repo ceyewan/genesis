@@ -102,6 +102,7 @@ func basicConfigExample() {
 	if err != nil {
 		log.Fatalf("创建配置加载器失败: %v", err)
 	}
+	defer loader.Close()
 
 	// 加载配置
 	if err := loader.Load(ctx); err != nil {
@@ -173,6 +174,7 @@ func usageExamples() {
 	if err != nil {
 		log.Fatalf("创建配置加载器失败: %v", err)
 	}
+	defer loader.Close()
 
 	if err := loader.Load(ctx); err != nil {
 		log.Fatalf("加载配置失败: %v", err)
@@ -246,6 +248,7 @@ func configWatchExample() {
 	if err != nil {
 		log.Fatalf("创建配置加载器失败: %v", err)
 	}
+	defer loader.Close()
 
 	if err := loader.Load(ctx); err != nil {
 		log.Fatalf("加载配置失败: %v", err)

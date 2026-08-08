@@ -19,6 +19,7 @@ type mysqlConnector struct {
 	cfg     *MySQLConfig
 	db      *gorm.DB
 	logger  clog.Logger
+	metrics *connectorTelemetry
 	healthy atomic.Bool
 	mu      sync.RWMutex
 }
@@ -26,6 +27,11 @@ type mysqlConnector struct {
 // NewMySQL 创建 MySQL 连接器
 // 注意：实际连接在调用 Connect() 时建立
 func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
+	if cfg == nil {
+		return nil, xerrors.Wrap(ErrConfig, "mysql config is nil")
+	}
+	cfgCopy := *cfg
+	cfg = &cfgCopy
 	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid mysql config")
 	}
@@ -37,8 +43,9 @@ func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
 	opt.applyDefaults()
 
 	c := &mysqlConnector{
-		cfg:    cfg,
-		logger: opt.logger.With(clog.String("connector", "mysql"), clog.String("name", cfg.Name)),
+		cfg:     cfg,
+		logger:  opt.logger.With(clog.String("connector", "mysql"), clog.String("name", cfg.Name)),
+		metrics: newConnectorTelemetry(opt.meter, "mysql", cfg.Name),
 	}
 
 	return c, nil
@@ -150,23 +157,23 @@ func (c *mysqlConnector) HealthCheck(ctx context.Context) error {
 
 	if db == nil {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(ErrClientNil, "mysql connector[%s]", c.cfg.Name)
+		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrClientNil, "mysql connector[%s]", c.cfg.Name))
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(ErrHealthCheck, "mysql connector[%s]: %v", c.cfg.Name, err)
+		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrHealthCheck, "mysql connector[%s]: %v", c.cfg.Name, err))
 	}
 
 	if err := sqlDB.PingContext(ctx); err != nil {
 		c.healthy.Store(false)
 		c.logger.Warn("mysql health check failed", clog.Error(err))
-		return xerrors.Wrapf(ErrHealthCheck, "mysql connector[%s]: %v", c.cfg.Name, err)
+		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrHealthCheck, "mysql connector[%s]: %v", c.cfg.Name, err))
 	}
 
 	c.healthy.Store(true)
-	return nil
+	return c.metrics.observeHealth(ctx, nil)
 }
 
 // IsHealthy 返回缓存的健康状态

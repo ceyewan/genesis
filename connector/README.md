@@ -11,6 +11,7 @@
 - 类型安全：泛型接口 `TypedConnector[T]` 提供编译期类型检查，无运行时类型断言
 - 健康检查：`HealthCheck` 主动探测（有 I/O），`IsHealthy` 读取缓存（无 I/O）
 - 集成 `clog`，自动注入 `namespace=connector` 与连接器名称，方便按组件过滤日志
+- 通过 `WithMeter` 暴露 `connector.health_checks.total`；NATS 重连还记录 `connector.reconnects.total`
 
 `connector` 不负责 ORM 查询、缓存策略、消息路由等业务逻辑，这些能力属于 L2 及以上组件。
 

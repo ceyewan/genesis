@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,11 @@ type loader struct {
 
 	watchOnce sync.Once
 	watchErr  error
+	watcher   *fsnotify.Watcher
+	stopCh    chan struct{}
+	wg        sync.WaitGroup
+	closed    bool
+	closeOnce sync.Once
 }
 
 // newLoader 创建一个新的配置加载器（内部使用）
@@ -44,6 +50,7 @@ func newLoader(cfg *Config, opts ...Option) (Loader, error) {
 		logger:    clog.Discard(),
 		watches:   make(map[string][]chan Event),
 		oldValues: make(map[string]any),
+		stopCh:    make(chan struct{}),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -73,6 +80,9 @@ func (l *loader) newConfiguredViper() *viper.Viper {
 func (l *loader) Load(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.closed {
+		return ErrClosed
+	}
 
 	l.v = l.newConfiguredViper()
 
@@ -81,7 +91,8 @@ func (l *loader) Load(ctx context.Context) error {
 	}
 
 	if err := l.v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
 			return xerrors.Wrapf(err, "failed to read config file %s", l.cfg.Name)
 		}
 	}
@@ -147,7 +158,8 @@ func (l *loader) loadEnvironmentConfig(v *viper.Viper) error {
 	v.SetConfigName(envConfigName)
 
 	if err := v.MergeInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
 			return xerrors.Wrapf(err, "failed to merge environment config %s", envConfigName)
 		}
 	}
@@ -188,7 +200,11 @@ func (l *loader) UnmarshalKey(key string, v any) error {
 func (l *loader) Watch(ctx context.Context, key string) (<-chan Event, error) {
 	l.mu.RLock()
 	loaded := l.loaded
+	closed := l.closed
 	l.mu.RUnlock()
+	if closed {
+		return nil, ErrClosed
+	}
 	if !loaded {
 		return nil, xerrors.Wrapf(ErrNotLoaded, "call Load before Watch")
 	}
@@ -198,15 +214,24 @@ func (l *loader) Watch(ctx context.Context, key string) (<-chan Event, error) {
 	}
 
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	if l.closed {
+		l.mu.Unlock()
+		return nil, ErrClosed
+	}
 
 	ch := make(chan Event, 10)
 	l.watches[key] = append(l.watches[key], ch)
 	l.oldValues[key] = l.v.Get(key)
+	l.wg.Add(1)
+	l.mu.Unlock()
 
 	go func() {
-		<-ctx.Done()
-		l.removeWatch(key, ch)
+		defer l.wg.Done()
+		select {
+		case <-ctx.Done():
+			l.removeWatch(key, ch)
+		case <-l.stopCh:
+		}
 	}()
 
 	return ch, nil
@@ -217,10 +242,12 @@ func (l *loader) removeWatch(key string, ch chan Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	found := false
 	if chans, ok := l.watches[key]; ok {
 		for i, c := range chans {
 			if c == ch {
 				l.watches[key] = append(chans[:i], chans[i+1:]...)
+				found = true
 				break
 			}
 		}
@@ -230,7 +257,9 @@ func (l *loader) removeWatch(key string, ch chan Event) {
 		}
 	}
 
-	close(ch)
+	if found {
+		close(ch)
+	}
 }
 
 // Validate 验证配置
@@ -287,6 +316,7 @@ func (l *loader) startFileWatch() error {
 	}
 
 	if len(watchDirs) == 0 {
+		_ = watcher.Close()
 		return nil
 	}
 
@@ -311,7 +341,19 @@ func (l *loader) startFileWatch() error {
 		}
 	}
 
-	go l.watchLoop(watcher, watchFiles)
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		_ = watcher.Close()
+		return ErrClosed
+	}
+	l.watcher = watcher
+	l.wg.Add(1)
+	l.mu.Unlock()
+	go func() {
+		defer l.wg.Done()
+		l.watchLoop(watcher, watchFiles)
+	}()
 	return nil
 }
 
@@ -342,6 +384,8 @@ func (l *loader) watchLoop(watcher *fsnotify.Watcher, targets map[string]struct{
 
 	for {
 		select {
+		case <-l.stopCh:
+			return
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return
@@ -384,6 +428,30 @@ func (l *loader) watchLoop(watcher *fsnotify.Watcher, targets map[string]struct{
 	}
 }
 
+// Close 停止文件监听并关闭所有订阅通道。
+func (l *loader) Close() error {
+	l.closeOnce.Do(func() {
+		l.mu.Lock()
+		l.closed = true
+		close(l.stopCh)
+		watcher := l.watcher
+		l.watcher = nil
+		for key, channels := range l.watches {
+			for _, ch := range channels {
+				close(ch)
+			}
+			delete(l.watches, key)
+			delete(l.oldValues, key)
+		}
+		l.mu.Unlock()
+		if watcher != nil {
+			_ = watcher.Close()
+		}
+		l.wg.Wait()
+	})
+	return nil
+}
+
 func (l *loader) reloadAndNotify(event fsnotify.Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -400,7 +468,8 @@ func (l *loader) reloadAndNotify(event fsnotify.Event) {
 	}
 
 	if err := next.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
 			l.logger.Warn("配置热更新失败：读取基础配置失败",
 				clog.String("event", event.Op.String()),
 				clog.String("path", event.Name),

@@ -24,6 +24,7 @@ type etcdLocker struct {
 
 	closeOnce sync.Once
 	closeErr  error
+	closed    bool
 }
 
 type etcdLockEntry struct {
@@ -65,7 +66,7 @@ func (l *etcdLocker) Lock(ctx context.Context, key string, opts ...LockOption) e
 func (l *etcdLocker) TryLock(ctx context.Context, key string, opts ...LockOption) (bool, error) {
 	err := l.lock(ctx, key, true, opts...)
 	if err != nil {
-		if err == concurrency.ErrLocked {
+		if xerrors.Is(err, concurrency.ErrLocked) {
 			return false, nil
 		}
 		return false, err
@@ -76,6 +77,10 @@ func (l *etcdLocker) TryLock(ctx context.Context, key string, opts ...LockOption
 func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...LockOption) error {
 	// 检查本地是否已持有锁（防止同一 locker 重复获取同一把锁）
 	l.mu.RLock()
+	if l.closed {
+		l.mu.RUnlock()
+		return ErrClosed
+	}
 	if _, exists := l.locks[key]; exists {
 		l.mu.RUnlock()
 		return xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
@@ -119,7 +124,7 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 		if ttl != l.cfg.DefaultTTL && session != nil {
 			_ = session.Close()
 		}
-		if lockErr == concurrency.ErrLocked {
+		if xerrors.Is(lockErr, concurrency.ErrLocked) {
 			return concurrency.ErrLocked
 		}
 		return xerrors.Wrap(lockErr, "failed to lock")
@@ -132,6 +137,14 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 	}
 
 	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		_ = mutex.Unlock(ctx)
+		if entry.isTTL && entry.session != nil {
+			_ = entry.session.Close()
+		}
+		return ErrClosed
+	}
 	if _, exists := l.locks[key]; exists {
 		l.mu.Unlock()
 		_ = mutex.Unlock(ctx)
@@ -186,6 +199,7 @@ func (l *etcdLocker) getEtcdKey(key string) string {
 func (l *etcdLocker) Close() error {
 	l.closeOnce.Do(func() {
 		l.mu.Lock()
+		l.closed = true
 		entries := make(map[string]*etcdLockEntry, len(l.locks))
 		maps.Copy(entries, l.locks)
 		l.locks = make(map[string]*etcdLockEntry)

@@ -15,13 +15,20 @@ type natsConnector struct {
 	cfg     *NATSConfig
 	conn    *nats.Conn
 	logger  clog.Logger
+	metrics *connectorTelemetry
 	healthy atomic.Bool
+	closing atomic.Bool
 	mu      sync.RWMutex
 }
 
 // NewNATS 创建 NATS 连接器
 // 注意：实际连接在调用 Connect() 时建立
 func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
+	if cfg == nil {
+		return nil, xerrors.Wrap(ErrConfig, "nats config is nil")
+	}
+	cfgCopy := *cfg
+	cfg = &cfgCopy
 	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid nats config")
 	}
@@ -33,8 +40,9 @@ func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
 	opt.applyDefaults()
 
 	c := &natsConnector{
-		cfg:    cfg,
-		logger: opt.logger.With(clog.String("connector", "nats"), clog.String("name", cfg.Name)),
+		cfg:     cfg,
+		logger:  opt.logger.With(clog.String("connector", "nats"), clog.String("name", cfg.Name)),
+		metrics: newConnectorTelemetry(opt.meter, "nats", cfg.Name),
 	}
 
 	return c, nil
@@ -49,6 +57,7 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 	if c.conn != nil {
 		return nil
 	}
+	c.closing.Store(false)
 
 	c.logger.Info("attempting to connect to nats", clog.String("url", c.cfg.URL))
 
@@ -60,6 +69,25 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 		nats.MaxReconnects(c.cfg.MaxReconnects),
 		nats.PingInterval(c.cfg.PingInterval),
 		nats.Timeout(c.cfg.ConnectTimeout),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			c.healthy.Store(false)
+			if c.closing.Load() {
+				return
+			}
+			c.logger.Warn("nats disconnected", clog.Error(err))
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			c.healthy.Store(true)
+			c.metrics.observeReconnect()
+			c.logger.Info("nats reconnected", clog.String("url", nc.ConnectedUrl()))
+		}),
+		nats.ClosedHandler(func(nc *nats.Conn) {
+			c.healthy.Store(false)
+			if c.closing.Load() {
+				return
+			}
+			c.logger.Warn("nats connection closed", clog.Error(nc.LastError()))
+		}),
 	}
 
 	// 添加认证
@@ -89,6 +117,7 @@ func (c *natsConnector) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.closing.Store(true)
 	c.healthy.Store(false)
 
 	if c.conn == nil {
@@ -119,20 +148,18 @@ func (c *natsConnector) HealthCheck(ctx context.Context) error {
 
 	if conn == nil {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(ErrClientNil, "nats connector[%s]", c.cfg.Name)
+		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrClientNil, "nats connector[%s]", c.cfg.Name))
 	}
 
 	// 检查连接状态
 	status := conn.Status()
-	// RECONNECTING 是 NATS 的正常故障恢复状态，不应视为不健康
-	// 只有 CLOSED 状态才视为连接失败
-	if status == nats.CLOSED {
+	if status != nats.CONNECTED {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(ErrHealthCheck, "nats connector[%s]: connection status: %s", c.cfg.Name, status.String())
+		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrHealthCheck, "nats connector[%s]: connection status: %s", c.cfg.Name, status.String()))
 	}
 
 	c.healthy.Store(true)
-	return nil
+	return c.metrics.observeHealth(ctx, nil)
 }
 
 // IsHealthy 返回缓存的健康状态

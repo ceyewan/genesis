@@ -35,6 +35,8 @@ func New(cfg *Config, opts ...Option) (Locker, error) {
 	if cfg == nil {
 		return nil, ErrConfigNil
 	}
+	config := *cfg
+	cfg = &config
 
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {

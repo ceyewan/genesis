@@ -258,6 +258,16 @@ func New(cfg *Config, opts ...Option) (Limiter, error) {
 	if cfg == nil {
 		return nil, ErrConfigNil
 	}
+	config := *cfg
+	if cfg.Standalone != nil {
+		standalone := *cfg.Standalone
+		config.Standalone = &standalone
+	}
+	if cfg.Distributed != nil {
+		distributed := *cfg.Distributed
+		config.Distributed = &distributed
+	}
+	cfg = &config
 
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {

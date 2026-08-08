@@ -2,6 +2,8 @@ package connector
 
 import (
 	"time"
+
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // MySQLConfig MySQL连接配置
@@ -58,16 +60,16 @@ func (c *MySQLConfig) validate() error {
 		return nil
 	}
 	if c.Host == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "mysql host is required when dsn is empty")
 	}
 	if c.Port <= 0 {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "mysql port must be greater than zero")
 	}
 	if c.Username == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "mysql username is required when dsn is empty")
 	}
 	if c.Database == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "mysql database is required when dsn is empty")
 	}
 	return nil
 }
@@ -119,10 +121,10 @@ func (c *RedisConfig) setDefaults() {
 func (c *RedisConfig) validate() error {
 	c.setDefaults()
 	if c.Addr == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "redis addr is required")
 	}
 	if c.DB < 0 {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "redis db must not be negative")
 	}
 	return nil
 }
@@ -163,7 +165,7 @@ func (c *EtcdConfig) setDefaults() {
 func (c *EtcdConfig) validate() error {
 	c.setDefaults()
 	if len(c.Endpoints) == 0 {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "etcd endpoints are required")
 	}
 	return nil
 }
@@ -209,7 +211,7 @@ func (c *NATSConfig) setDefaults() {
 func (c *NATSConfig) validate() error {
 	c.setDefaults()
 	if c.URL == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "nats url is required")
 	}
 	return nil
 }
@@ -253,7 +255,7 @@ func (c *KafkaConfig) setDefaults() {
 func (c *KafkaConfig) validate() error {
 	c.setDefaults()
 	if len(c.Seed) == 0 {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "kafka seed brokers are required")
 	}
 	return nil
 }
@@ -278,7 +280,7 @@ func (c *SQLiteConfig) setDefaults() {
 func (c *SQLiteConfig) validate() error {
 	c.setDefaults()
 	if c.Path == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "sqlite path is required")
 	}
 	return nil
 }
@@ -341,16 +343,16 @@ func (c *PostgreSQLConfig) validate() error {
 		return nil
 	}
 	if c.Host == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "postgresql host is required when dsn is empty")
 	}
 	if c.Port <= 0 {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "postgresql port must be greater than zero")
 	}
 	if c.Username == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "postgresql username is required when dsn is empty")
 	}
 	if c.Database == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "postgresql database is required when dsn is empty")
 	}
 	return nil
 }

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ceyewan/genesis/clog"
 )
 
@@ -539,6 +541,37 @@ func TestLoaderWatchBeforeLoad(t *testing.T) {
 	if !errors.Is(err, ErrNotLoaded) {
 		t.Fatalf("Watch() error = %v, want ErrNotLoaded", err)
 	}
+}
+
+func TestLoaderCloseIsConcurrentAndClosesWatches(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("app:\n  name: genesis\n"), 0o600))
+
+	loaded, err := New(&Config{Name: "config", Paths: []string{tempDir}, FileType: "yaml", EnvPrefix: "CLOSE_TEST"})
+	require.NoError(t, err)
+	require.NoError(t, loaded.Load(context.Background()))
+	watchCtx := t.Context()
+	ch, err := loaded.Watch(watchCtx, "app.name")
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			errs <- loaded.Close()
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	_, ok := <-ch
+	require.False(t, ok)
+	require.ErrorIs(t, loaded.Load(context.Background()), ErrClosed)
+	_, err = loaded.Watch(context.Background(), "app.name")
+	require.ErrorIs(t, err, ErrClosed)
 }
 
 func TestLoaderLoadIsIdempotent(t *testing.T) {

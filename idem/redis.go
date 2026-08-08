@@ -2,6 +2,7 @@ package idem
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -35,7 +36,7 @@ func (rs *redisStore) Lock(ctx context.Context, key string, ttl time.Duration) (
 
 	// 使用 SET NX 原子操作获取锁
 	result, err := rs.client.GetClient().SetNX(ctx, lockKey, string(token), ttl).Result()
-	if err != nil && err != redis.Nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return "", false, xerrors.Wrap(err, "failed to acquire lock")
 	}
 
@@ -54,7 +55,7 @@ func (rs *redisStore) Unlock(ctx context.Context, key string, token LockToken) e
 	lockKey := rs.prefix + key + lockSuffix
 
 	_, err := redisUnlockScript.Run(ctx, rs.client.GetClient(), []string{lockKey}, string(token)).Result()
-	if err != nil && err != redis.Nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return xerrors.Wrap(err, "failed to release lock")
 	}
 
@@ -98,7 +99,7 @@ func (rs *redisStore) GetResult(ctx context.Context, key string) ([]byte, error)
 	resultKey := rs.prefix + key + resultSuffix
 
 	result, err := rs.client.GetClient().Get(ctx, resultKey).Bytes()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, ErrResultNotFound
 	}
 	if err != nil {
@@ -120,7 +121,7 @@ func (rs *redisStore) Refresh(ctx context.Context, key string, token LockToken, 
 	}
 
 	result, err := redisRefreshScript.Run(ctx, rs.client.GetClient(), []string{lockKey}, string(token), ttlMs).Int64()
-	if err != nil && err != redis.Nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return xerrors.Wrap(err, "failed to refresh lock")
 	}
 	if result == 0 {
@@ -132,7 +133,7 @@ func (rs *redisStore) Refresh(ctx context.Context, key string, token LockToken, 
 
 func (rs *redisStore) DeleteResult(ctx context.Context, key string) error {
 	resultKey := rs.prefix + key + resultSuffix
-	if err := rs.client.GetClient().Del(ctx, resultKey).Err(); err != nil && err != redis.Nil {
+	if err := rs.client.GetClient().Del(ctx, resultKey).Err(); err != nil && !errors.Is(err, redis.Nil) {
 		return xerrors.Wrap(err, "failed to delete result")
 	}
 	return nil

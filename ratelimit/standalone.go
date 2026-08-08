@@ -21,10 +21,12 @@ type limiterWrapper struct {
 
 // standaloneLimiter 单机限流器实现（非导出）
 type standaloneLimiter struct {
-	cfg      *StandaloneConfig
-	logger   clog.Logger
-	limiters sync.Map // map[string]*limiterWrapper
-	stopCh   chan struct{}
+	cfg       *StandaloneConfig
+	logger    clog.Logger
+	limiters  sync.Map // map[string]*limiterWrapper
+	stopCh    chan struct{}
+	closeOnce sync.Once
+	workerWG  sync.WaitGroup
 
 	// 指标
 	allowedCounter metrics.Counter
@@ -58,7 +60,9 @@ func newStandalone(
 	cleanupInterval := cfg.CleanupInterval
 	idleTimeout := cfg.IdleTimeout
 
-	go l.cleanup(cleanupInterval, idleTimeout)
+	l.workerWG.Go(func() {
+		l.cleanup(cleanupInterval, idleTimeout)
+	})
 
 	if logger != nil {
 		logger.Info("standalone rate limiter created",
@@ -206,12 +210,9 @@ func (l *standaloneLimiter) cleanup(interval, idleTimeout time.Duration) {
 
 // Close 关闭限流器
 func (l *standaloneLimiter) Close() error {
-	select {
-	case <-l.stopCh:
-		// 已经关闭过
-		return nil
-	default:
+	l.closeOnce.Do(func() {
 		close(l.stopCh)
-		return nil
-	}
+	})
+	l.workerWG.Wait()
+	return nil
 }

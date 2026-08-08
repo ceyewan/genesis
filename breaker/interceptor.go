@@ -2,6 +2,7 @@ package breaker
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ceyewan/genesis/clog"
 
@@ -65,9 +66,9 @@ func shouldCountGRPCFailure(err error) bool {
 	}
 
 	switch {
-	case err == context.Canceled:
+	case errors.Is(err, context.Canceled):
 		return false
-	case err == context.DeadlineExceeded:
+	case errors.Is(err, context.DeadlineExceeded):
 		return false
 	}
 

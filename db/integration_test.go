@@ -2,9 +2,9 @@ package db
 
 import (
 	"context"
+	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
@@ -45,7 +45,7 @@ func TestDBMySQL(t *testing.T) {
 		user := TestUser{Name: "Alice", Age: 30}
 		err := gormDB.Create(&user).Error
 		require.NoError(t, err)
-		assert.NotZero(t, user.ID)
+		require.NotZero(t, user.ID)
 	})
 
 	t.Run("Read", func(t *testing.T) {
@@ -55,8 +55,8 @@ func TestDBMySQL(t *testing.T) {
 		var fetched TestUser
 		err := gormDB.First(&fetched, user.ID).Error
 		require.NoError(t, err)
-		assert.Equal(t, "Bob", fetched.Name)
-		assert.Equal(t, 25, fetched.Age)
+		require.Equal(t, "Bob", fetched.Name)
+		require.Equal(t, 25, fetched.Age)
 	})
 
 	t.Run("Update", func(t *testing.T) {
@@ -68,7 +68,7 @@ func TestDBMySQL(t *testing.T) {
 
 		var fetched TestUser
 		gormDB.First(&fetched, user.ID)
-		assert.Equal(t, 36, fetched.Age)
+		require.Equal(t, 36, fetched.Age)
 	})
 
 	t.Run("Delete", func(t *testing.T) {
@@ -80,7 +80,7 @@ func TestDBMySQL(t *testing.T) {
 
 		var count int64
 		gormDB.Model(&TestUser{}).Where("id = ?", user.ID).Count(&count)
-		assert.Equal(t, int64(0), count)
+		require.Equal(t, int64(0), count)
 	})
 
 	t.Run("Transaction_Success", func(t *testing.T) {
@@ -91,19 +91,19 @@ func TestDBMySQL(t *testing.T) {
 
 		var count int64
 		gormDB.Model(&TestUser{}).Where("name = ?", "TxUser").Count(&count)
-		assert.Equal(t, int64(1), count)
+		require.Equal(t, int64(1), count)
 	})
 
 	t.Run("Transaction_Rollback", func(t *testing.T) {
 		err := database.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
 			tx.Create(&TestUser{Name: "ShouldRollback", Age: 99})
-			return assert.AnError
+			return errors.New("force rollback")
 		})
-		assert.Error(t, err)
+		require.Error(t, err)
 
 		var count int64
 		gormDB.Model(&TestUser{}).Where("name = ?", "ShouldRollback").Count(&count)
-		assert.Equal(t, int64(0), count)
+		require.Equal(t, int64(0), count)
 	})
 }
 
@@ -134,7 +134,7 @@ func TestDBPostgreSQL(t *testing.T) {
 		user := TestUser{Name: "Alice", Age: 30}
 		err := gormDB.Create(&user).Error
 		require.NoError(t, err)
-		assert.NotZero(t, user.ID)
+		require.NotZero(t, user.ID)
 	})
 
 	t.Run("Read", func(t *testing.T) {
@@ -144,8 +144,8 @@ func TestDBPostgreSQL(t *testing.T) {
 		var fetched TestUser
 		err := gormDB.First(&fetched, user.ID).Error
 		require.NoError(t, err)
-		assert.Equal(t, "Bob", fetched.Name)
-		assert.Equal(t, 25, fetched.Age)
+		require.Equal(t, "Bob", fetched.Name)
+		require.Equal(t, 25, fetched.Age)
 	})
 
 	t.Run("Update", func(t *testing.T) {
@@ -157,7 +157,7 @@ func TestDBPostgreSQL(t *testing.T) {
 
 		var fetched TestUser
 		gormDB.First(&fetched, user.ID)
-		assert.Equal(t, 36, fetched.Age)
+		require.Equal(t, 36, fetched.Age)
 	})
 
 	t.Run("Transaction", func(t *testing.T) {
@@ -168,7 +168,7 @@ func TestDBPostgreSQL(t *testing.T) {
 
 		var count int64
 		gormDB.Model(&TestUser{}).Where("name = ?", "TxUser").Count(&count)
-		assert.Equal(t, int64(1), count)
+		require.Equal(t, int64(1), count)
 	})
 }
 
@@ -199,7 +199,7 @@ func TestDBSQLite(t *testing.T) {
 		user := TestUser{Name: "Alice", Age: 30}
 		err := gormDB.Create(&user).Error
 		require.NoError(t, err)
-		assert.NotZero(t, user.ID)
+		require.NotZero(t, user.ID)
 	})
 
 	t.Run("Read", func(t *testing.T) {
@@ -209,7 +209,7 @@ func TestDBSQLite(t *testing.T) {
 		var fetched TestUser
 		err := gormDB.First(&fetched, user.ID).Error
 		require.NoError(t, err)
-		assert.Equal(t, "Bob", fetched.Name)
+		require.Equal(t, "Bob", fetched.Name)
 	})
 
 	t.Run("Update", func(t *testing.T) {
@@ -221,7 +221,7 @@ func TestDBSQLite(t *testing.T) {
 
 		var fetched TestUser
 		gormDB.First(&fetched, user.ID)
-		assert.Equal(t, 36, fetched.Age)
+		require.Equal(t, 36, fetched.Age)
 	})
 
 	t.Run("Transaction", func(t *testing.T) {
@@ -232,7 +232,7 @@ func TestDBSQLite(t *testing.T) {
 
 		var count int64
 		gormDB.Model(&TestUser{}).Where("name = ?", "TxUser").Count(&count)
-		assert.Equal(t, int64(1), count)
+		require.Equal(t, int64(1), count)
 	})
 }
 
@@ -248,22 +248,22 @@ func TestDBConfigValidation(t *testing.T) {
 		_, err := New(&Config{Driver: "invalid"},
 			WithSQLiteConnector(conn),
 		)
-		assert.Error(t, err)
+		require.Error(t, err)
 	})
 
 	t.Run("缺少 MySQL 连接器", func(t *testing.T) {
 		_, err := New(&Config{Driver: "mysql"})
-		assert.ErrorIs(t, err, ErrMySQLConnectorRequired)
+		require.ErrorIs(t, err, ErrMySQLConnectorRequired)
 	})
 
 	t.Run("缺少 PostgreSQL 连接器", func(t *testing.T) {
 		_, err := New(&Config{Driver: "postgresql"})
-		assert.ErrorIs(t, err, ErrPostgreSQLConnectorRequired)
+		require.ErrorIs(t, err, ErrPostgreSQLConnectorRequired)
 	})
 
 	t.Run("缺少 SQLite 连接器", func(t *testing.T) {
 		_, err := New(&Config{Driver: "sqlite"})
-		assert.ErrorIs(t, err, ErrSQLiteConnectorRequired)
+		require.ErrorIs(t, err, ErrSQLiteConnectorRequired)
 	})
 }
 
@@ -282,11 +282,11 @@ func TestDBClose(t *testing.T) {
 
 	// db 组件采用借用模型，Close 是 no-op
 	err = database.Close()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// 再次 Close 也应该没问题
 	err = database.Close()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 // =============================================================================
@@ -315,13 +315,13 @@ func TestDBPostgreSQL_TransactionRollback(t *testing.T) {
 	t.Run("Transaction_Rollback", func(t *testing.T) {
 		err := database.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
 			tx.Create(&TestUser{Name: "ShouldRollback", Age: 99})
-			return assert.AnError
+			return errors.New("force rollback")
 		})
-		assert.Error(t, err)
+		require.Error(t, err)
 
 		var count int64
 		gormDB.Model(&TestUser{}).Where("name = ?", "ShouldRollback").Count(&count)
-		assert.Equal(t, int64(0), count)
+		require.Equal(t, int64(0), count)
 	})
 }
 
@@ -351,13 +351,13 @@ func TestDBSQLite_TransactionRollback(t *testing.T) {
 	t.Run("Transaction_Rollback", func(t *testing.T) {
 		err := database.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
 			tx.Create(&TestUser{Name: "ShouldRollback", Age: 99})
-			return assert.AnError
+			return errors.New("force rollback")
 		})
-		assert.Error(t, err)
+		require.Error(t, err)
 
 		var count int64
 		gormDB.Model(&TestUser{}).Where("name = ?", "ShouldRollback").Count(&count)
-		assert.Equal(t, int64(0), count)
+		require.Equal(t, int64(0), count)
 	})
 }
 
@@ -393,7 +393,7 @@ func TestDBSilentMode(t *testing.T) {
 	var fetched TestUser
 	err = gormDB.First(&fetched, user.ID).Error
 	require.NoError(t, err)
-	assert.Equal(t, "SilentUser", fetched.Name)
+	require.Equal(t, "SilentUser", fetched.Name)
 }
 
 // =============================================================================
@@ -433,5 +433,5 @@ func TestGormLogger(t *testing.T) {
 	// 测试错误日志（查询不存在的记录）
 	var notFound TestUser
 	err = gormDB.First(&notFound, 99999).Error
-	assert.Error(t, err)
+	require.Error(t, err)
 }

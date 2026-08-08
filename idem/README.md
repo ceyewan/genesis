@@ -22,6 +22,7 @@ idemComp, err := idem.New(&idem.Config{
 if err != nil {
 	return err
 }
+defer idemComp.Close()
 
 result, err := idemComp.Execute(ctx, "order:create:req-123", func(ctx context.Context) (any, error) {
 	return map[string]any{"order_id": "123"}, nil
@@ -29,6 +30,8 @@ result, err := idemComp.Execute(ctx, "order:create:req-123", func(ctx context.Co
 ```
 
 `Execute` 会把首次成功执行与缓存命中都统一成同一套 JSON 编解码后的结果形态，因此返回值适合按通用 JSON 结构读取，而不是依赖第一次执行时的原始 Go 类型。
+
+组件由创建者负责调用 `Close`，且可以并发重复关闭。Memory 后端的 `Close` 会停止过期锁和结果的后台清理；Redis 后端只借用注入的 connector，`Close` 不会关闭 Redis 连接。
 
 ## 核心能力
 
