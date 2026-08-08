@@ -83,6 +83,26 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestConfigurationErrorsRemainClassifiable(t *testing.T) {
+	t.Parallel()
+
+	logger, err := New(&Config{Level: "invalid"})
+	if logger != nil {
+		t.Fatal("New() logger must be nil for an invalid level")
+	}
+	if !errors.Is(err, ErrInvalidLevel) {
+		t.Fatalf("New() error = %v, want ErrInvalidLevel", err)
+	}
+
+	logger, err = New(&Config{Format: "xml"})
+	if logger != nil {
+		t.Fatal("New() logger must be nil for an invalid format")
+	}
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("New() error = %v, want ErrInvalidConfig", err)
+	}
+}
+
 func TestNewNilConfigMatchesEmptyConfig(t *testing.T) {
 	nilLogger, err := New(nil)
 	if err != nil {
@@ -120,6 +140,42 @@ func TestNewNilConfigMatchesEmptyConfig(t *testing.T) {
 	}
 	if nilImpl.config.SourceRoot != emptyImpl.config.SourceRoot {
 		t.Fatalf("SourceRoot mismatch: %q != %q", nilImpl.config.SourceRoot, emptyImpl.config.SourceRoot)
+	}
+}
+
+func TestJSONResourceFieldsAndConfigCopy(t *testing.T) {
+	var buf bytes.Buffer
+	cfg := &Config{
+		Level:       "info",
+		Format:      "json",
+		Output:      "buffer",
+		ServiceName: "logic",
+		Version:     "v1.0.0",
+		InstanceID:  "logic-1",
+		Environment: "test",
+	}
+	logger, err := New(cfg, withBuffer(&buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireConfigDefaultsUnchanged := cfg.Level == "info" && cfg.Format == "json" && cfg.Output == "buffer"
+	if !requireConfigDefaultsUnchanged {
+		t.Fatal("constructor mutated caller config")
+	}
+	cfg.ServiceName = "mutated"
+	logger.Info("ready")
+
+	var entry map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"service.name": "logic", "service.version": "v1.0.0",
+		"service.instance.id": "logic-1", "deployment.environment": "test",
+	} {
+		if got := entry[key]; got != want {
+			t.Fatalf("%s = %v, want %q", key, got, want)
+		}
 	}
 }
 

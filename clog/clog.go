@@ -1,6 +1,6 @@
 package clog
 
-import "fmt"
+import "github.com/ceyewan/genesis/xerrors"
 
 // New 创建一个新的 Logger 实例
 //
@@ -13,10 +13,13 @@ import "fmt"
 func New(config *Config, opts ...Option) (Logger, error) {
 	if config == nil {
 		config = &Config{}
+	} else {
+		configCopy := *config
+		config = &configCopy
 	}
 
 	if err := config.validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
+		return nil, xerrors.Wrap(err, "invalid config")
 	}
 
 	// 应用选项

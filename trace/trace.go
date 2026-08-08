@@ -12,11 +12,13 @@ package trace
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/ceyewan/genesis/xerrors"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -46,15 +48,21 @@ func Extract(ctx context.Context, carrier map[string]string) context.Context {
 // 返回的 shutdown 会关闭底层 provider；若当前全局 TracerProvider 仍指向该
 // 实例，还会将全局 tracing 状态重置为安全默认值。
 func Init(cfg *Config) (func(context.Context) error, error) {
-	if err := validateConfig(cfg); err != nil {
+	if cfg == nil {
+		return nil, xerrors.New("config is required")
+	}
+	config := *cfg
+	config.setDefaults()
+	if err := validateConfig(&config); err != nil {
 		return nil, err
 	}
+	cfg = &config
 
 	ctx := context.Background()
 
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(cfg.Endpoint),
-		otlptracegrpc.WithTimeout(5 * time.Second),
+		otlptracegrpc.WithTimeout(cfg.ExporterTimeout),
 	}
 	if cfg.Insecure {
 		opts = append(opts, otlptracegrpc.WithInsecure())
@@ -64,10 +72,17 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 	if err != nil {
 		return nil, xerrors.Wrap(err, "create otlp exporter")
 	}
+	spanExporter := sdktrace.SpanExporter(exporter)
+	if cfg.ExportErrors != nil {
+		spanExporter = &reportingExporter{SpanExporter: exporter, errors: cfg.ExportErrors}
+	}
 
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			semconv.ServiceNameKey.String(cfg.ServiceName),
+			semconv.ServiceVersionKey.String(cfg.Version),
+			attribute.String("service.instance.id", cfg.InstanceID),
+			attribute.String("deployment.environment", cfg.Environment),
 		),
 	)
 	if err != nil {
@@ -80,9 +95,13 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 	}
 
 	if cfg.Batcher == "simple" {
-		tpOpts = append(tpOpts, sdktrace.WithSyncer(exporter))
+		// 保留 v0 配置值，但仍异步导出，避免 exporter 故障阻塞业务 span.End。
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(spanExporter,
+			sdktrace.WithMaxExportBatchSize(1),
+			sdktrace.WithBatchTimeout(time.Millisecond),
+		))
 	} else {
-		tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(spanExporter))
 	}
 
 	tp := sdktrace.NewTracerProvider(tpOpts...)
@@ -92,17 +111,44 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 		propagation.Baggage{},
 	))
 
+	var shutdownOnce sync.Once
+	shutdownDone := make(chan struct{})
+	var shutdownErr error
 	return func(ctx context.Context) error {
-		err := tp.Shutdown(ctx)
-		if otel.GetTracerProvider() == tp {
-			otel.SetTracerProvider(tracenoop.NewTracerProvider())
-			otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-				propagation.TraceContext{},
-				propagation.Baggage{},
-			))
+		shutdownOnce.Do(func() {
+			defer close(shutdownDone)
+			shutdownErr = tp.Shutdown(ctx)
+			if otel.GetTracerProvider() == tp {
+				otel.SetTracerProvider(tracenoop.NewTracerProvider())
+				otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+					propagation.TraceContext{},
+					propagation.Baggage{},
+				))
+			}
+		})
+		select {
+		case <-shutdownDone:
+			return shutdownErr
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		return err
 	}, nil
+}
+
+type reportingExporter struct {
+	sdktrace.SpanExporter
+	errors chan<- error
+}
+
+func (e *reportingExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	err := e.SpanExporter.ExportSpans(ctx, spans)
+	if err != nil {
+		select {
+		case e.errors <- err:
+		default:
+		}
+	}
+	return err
 }
 
 func validateConfig(cfg *Config) error {

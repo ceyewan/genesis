@@ -129,6 +129,7 @@ type Claims struct {
 - `TokenType` 由组件内部写入，业务方通常不需要手动设置。
 - `Username`、`Roles`、`Extra` 用于承载业务身份信息。
 - `GenerateTokenPair` 会复制输入 claims，不会修改原对象。
+- 机器身份使用标准 `Subject`、`Roles` 与带业务命名空间的 `Extra` 字段表达；组件不建立独立机器身份目录，也不承担 OAuth2 client credentials 流程。
 
 ### TokenPair
 

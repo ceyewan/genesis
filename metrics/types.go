@@ -29,7 +29,7 @@ type Meter interface {
 	//
 	// 当前实现会关闭内部 HTTP 服务并关闭底层 MeterProvider。
 	// 若当前全局 MeterProvider 仍指向该实例，Shutdown 还会将其重置为 no-op provider。
-	// 它不是幂等承诺接口，调用方应按“谁创建，谁关闭”原则调用一次。
+	// Shutdown 可安全地并发、重复调用；调用方仍应遵循“谁创建，谁关闭”。
 	Shutdown(ctx context.Context) error
 }
 
@@ -52,6 +52,6 @@ func WithUnit(unit string) MetricOption {
 // WithBuckets 设置直方图的桶分布
 func WithBuckets(buckets []float64) MetricOption {
 	return func(o *metricOptions) {
-		o.Buckets = buckets
+		o.Buckets = append([]float64(nil), buckets...)
 	}
 }

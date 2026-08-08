@@ -37,6 +37,7 @@ counter.Inc(ctx, metrics.L("method", "GET"), metrics.L("status", "200"))
 `Config` 的关键行为有三点：
 
 - `ServiceName` 必填
+- `Version`、`InstanceID`、`Environment` 对应统一资源字段 `service.version`、`service.instance.id`、`deployment.environment`
 - `Port > 0` 且 `Path` 非空时，组件会启动 Prometheus HTTP 端点
 - 只要 `Port <= 0` 或 `Path` 为空，就不会启动 HTTP 服务，只保留进程内指标能力
 
@@ -78,7 +79,7 @@ srv := grpc.NewServer(
 - `New()` 通常应在应用启动时调用一次
 - `Shutdown()` 负责关闭 HTTP 服务和底层 `MeterProvider`
 - 如果当前全局 `MeterProvider` 仍指向该实例，`Shutdown()` 还会把全局状态重置为 no-op provider
-- `Shutdown()` 当前不是幂等承诺接口，推荐按“谁创建，谁关闭”原则调用一次
+- `Shutdown(ctx)` 可并发重复调用，并遵守调用方 deadline
 
 ## 推荐实践
 

@@ -49,6 +49,8 @@ func New(cfg *Config) (Meter, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	config := *cfg
+	cfg = &config
 
 	logger := defaultLogger()
 
@@ -56,6 +58,8 @@ func New(cfg *Config) (Meter, error) {
 		resource.WithAttributes(
 			semconv.ServiceNameKey.String(cfg.ServiceName),
 			semconv.ServiceVersionKey.String(cfg.Version),
+			attribute.String("service.instance.id", cfg.InstanceID),
+			attribute.String("deployment.environment", cfg.Environment),
 		),
 	)
 	if err != nil {
@@ -74,6 +78,7 @@ func New(cfg *Config) (Meter, error) {
 	otel.SetMeterProvider(mp)
 
 	var httpServer *http.Server
+	var httpDone chan struct{}
 	if cfg.Port > 0 && cfg.Path != "" {
 		addr := fmt.Sprintf(":%d", cfg.Port)
 		mux := http.NewServeMux()
@@ -84,7 +89,9 @@ func New(cfg *Config) (Meter, error) {
 			_ = mp.Shutdown(context.Background())
 			return nil, xerrors.Wrap(err, "listen metrics server")
 		}
+		httpDone = make(chan struct{})
 		go func() {
+			defer close(httpDone)
 			logger.Info("metrics server started",
 				clog.String("addr", ln.Addr().String()),
 				clog.String("path", cfg.Path))
@@ -102,20 +109,26 @@ func New(cfg *Config) (Meter, error) {
 
 	otelMeter := mp.Meter("genesis")
 	return &meterImpl{
-		meter:      otelMeter,
-		provider:   mp,
-		config:     cfg,
-		httpServer: httpServer,
-		logger:     logger,
+		meter:        otelMeter,
+		provider:     mp,
+		config:       cfg,
+		httpServer:   httpServer,
+		httpDone:     httpDone,
+		logger:       logger,
+		shutdownDone: make(chan struct{}),
 	}, nil
 }
 
 type meterImpl struct {
-	meter      metric.Meter
-	provider   *sdkmetric.MeterProvider
-	config     *Config
-	httpServer *http.Server
-	logger     clog.Logger
+	meter        metric.Meter
+	provider     *sdkmetric.MeterProvider
+	config       *Config
+	httpServer   *http.Server
+	httpDone     chan struct{}
+	logger       clog.Logger
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
+	shutdownErr  error
 }
 
 func (m *meterImpl) Counter(name, desc string, opts ...MetricOption) (Counter, error) {
@@ -176,21 +189,38 @@ func (m *meterImpl) Histogram(name, desc string, opts ...MetricOption) (Histogra
 }
 
 func (m *meterImpl) Shutdown(ctx context.Context) error {
-	var serverErr error
-	if m.httpServer != nil {
-		if err := m.httpServer.Shutdown(ctx); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
-			serverErr = xerrors.Wrap(err, "shutdown server")
+	m.shutdownOnce.Do(func() {
+		defer close(m.shutdownDone)
+		var serverErr error
+		if m.httpServer != nil {
+			if err := m.httpServer.Shutdown(ctx); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
+				serverErr = xerrors.Wrap(err, "shutdown server")
+			}
+			select {
+			case <-m.httpDone:
+			case <-ctx.Done():
+				if serverErr == nil {
+					serverErr = xerrors.Wrap(ctx.Err(), "wait for metrics server")
+				}
+			}
 		}
-	}
-	providerErr := m.provider.Shutdown(ctx)
-	if providerErr != nil {
-		providerErr = xerrors.Wrap(providerErr, "shutdown provider")
-	}
+		providerErr := m.provider.Shutdown(ctx)
+		if providerErr != nil {
+			providerErr = xerrors.Wrap(providerErr, "shutdown provider")
+		}
 
-	if otel.GetMeterProvider() == m.provider {
-		otel.SetMeterProvider(metricnoop.NewMeterProvider())
+		if otel.GetMeterProvider() == m.provider {
+			otel.SetMeterProvider(metricnoop.NewMeterProvider())
+		}
+		m.shutdownErr = xerrors.Combine(serverErr, providerErr)
+	})
+
+	select {
+	case <-m.shutdownDone:
+		return m.shutdownErr
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return xerrors.Combine(serverErr, providerErr)
 }
 
 type counterImpl struct {

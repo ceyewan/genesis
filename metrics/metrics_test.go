@@ -3,11 +3,41 @@ package metrics
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel"
 )
+
+func TestNewCopiesConfigAndShutdownIsConcurrentIdempotent(t *testing.T) {
+	cfg := &Config{ServiceName: "svc", Version: "v1", InstanceID: "one", Environment: "test"}
+	meter, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ServiceName = "mutated"
+	if got := meter.(*meterImpl).config.ServiceName; got != "svc" {
+		t.Fatalf("internal service name = %q", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	errCh := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			errCh <- meter.Shutdown(ctx)
+		})
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent Shutdown: %v", err)
+		}
+	}
+}
 
 // TestNew 测试创建 Meter 实例
 func TestNew(t *testing.T) {

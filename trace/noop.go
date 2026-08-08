@@ -2,6 +2,7 @@ package trace
 
 import (
 	"context"
+	"sync"
 
 	"github.com/ceyewan/genesis/xerrors"
 
@@ -45,15 +46,26 @@ func Discard(serviceName string) (func(context.Context) error, error) {
 		propagation.Baggage{},
 	))
 
+	var shutdownOnce sync.Once
+	shutdownDone := make(chan struct{})
+	var shutdownErr error
 	return func(ctx context.Context) error {
-		err := tp.Shutdown(ctx)
-		if otel.GetTracerProvider() == tp {
-			otel.SetTracerProvider(tracenoop.NewTracerProvider())
-			otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-				propagation.TraceContext{},
-				propagation.Baggage{},
-			))
+		shutdownOnce.Do(func() {
+			defer close(shutdownDone)
+			shutdownErr = tp.Shutdown(ctx)
+			if otel.GetTracerProvider() == tp {
+				otel.SetTracerProvider(tracenoop.NewTracerProvider())
+				otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+					propagation.TraceContext{},
+					propagation.Baggage{},
+				))
+			}
+		})
+		select {
+		case <-shutdownDone:
+			return shutdownErr
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		return err
 	}, nil
 }

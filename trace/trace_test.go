@@ -2,11 +2,45 @@ package trace
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
+
+type failingSpanExporter struct{ err error }
+
+func (e failingSpanExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySpan) error {
+	return e.err
+}
+func (e failingSpanExporter) Shutdown(context.Context) error { return nil }
+
+func TestReportingExporterExposesFailureWithoutBlocking(t *testing.T) {
+	want := errors.New("collector unavailable")
+	errorsCh := make(chan error, 1)
+	exporter := &reportingExporter{SpanExporter: failingSpanExporter{err: want}, errors: errorsCh}
+	requireStart := time.Now()
+	err := exporter.ExportSpans(context.Background(), nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("ExportSpans error = %v", err)
+	}
+	if time.Since(requireStart) > time.Second {
+		t.Fatal("error reporting blocked export")
+	}
+	if got := <-errorsCh; !errors.Is(got, want) {
+		t.Fatalf("reported error = %v", got)
+	}
+
+	// A full channel drops a notification rather than blocking exporter workers.
+	errorsCh <- want
+	if err := exporter.ExportSpans(context.Background(), nil); !errors.Is(err, want) {
+		t.Fatal(err)
+	}
+}
 
 func TestInitValidatesConfig(t *testing.T) {
 	tests := []struct {
@@ -69,4 +103,71 @@ func TestDiscardInstallsGlobalTracingState(t *testing.T) {
 	if resetProvider == afterProvider {
 		t.Fatalf("global tracer provider was not reset after shutdown")
 	}
+}
+
+func TestInitCopiesConfigAndShutdownIsConcurrentIdempotent(t *testing.T) {
+	cfg := DefaultConfig("svc")
+	cfg.Endpoint = "127.0.0.1:1"
+	cfg.ExporterTimeout = 10 * time.Millisecond
+	shutdown, err := Init(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ExporterTimeout != 10*time.Millisecond {
+		t.Fatal("Init mutated caller config")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	errCh := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			errCh <- shutdown(ctx)
+		})
+	}
+	wg.Wait()
+	close(errCh)
+	var first error
+	for err := range errCh {
+		if first == nil {
+			first = err
+		}
+		if (first == nil) != (err == nil) || (first != nil && err.Error() != first.Error()) {
+			t.Fatalf("shutdown results differ: %v vs %v", first, err)
+		}
+	}
+}
+
+func TestUnavailableExporterDoesNotBlockSpanAndReportsFailure(t *testing.T) {
+	exportErrors := make(chan error, 1)
+	cfg := DefaultConfig("unavailable-exporter-test")
+	cfg.Endpoint = "127.0.0.1:1"
+	cfg.Batcher = "simple"
+	cfg.ExporterTimeout = 250 * time.Millisecond
+	cfg.ExportErrors = exportErrors
+	shutdown, err := Init(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	_, span := otel.Tracer("test").Start(context.Background(), "operation")
+	span.End()
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("span creation blocked on unavailable exporter for %v", elapsed)
+	}
+
+	select {
+	case exportErr := <-exportErrors:
+		if exportErr == nil {
+			t.Fatal("reported export error is nil")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("unavailable exporter did not report failure")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = shutdown(ctx)
 }

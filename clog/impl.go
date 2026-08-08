@@ -203,6 +203,17 @@ func (l *loggerImpl) Close() error {
 
 // setupBaseAttrs 初始化 logger 的基础属性
 func (l *loggerImpl) setupBaseAttrs() {
-	// 创建空的 baseAttrs
-	l.baseAttrs = []slog.Attr{}
+	l.baseAttrs = make([]slog.Attr, 0, 4)
+	if l.config.ServiceName != "" {
+		l.baseAttrs = append(l.baseAttrs, slog.String("service.name", l.config.ServiceName))
+	}
+	if l.config.Version != "" {
+		l.baseAttrs = append(l.baseAttrs, slog.String("service.version", l.config.Version))
+	}
+	if l.config.InstanceID != "" {
+		l.baseAttrs = append(l.baseAttrs, slog.String("service.instance.id", l.config.InstanceID))
+	}
+	if l.config.Environment != "" {
+		l.baseAttrs = append(l.baseAttrs, slog.String("deployment.environment", l.config.Environment))
+	}
 }

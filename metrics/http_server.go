@@ -31,7 +31,7 @@ func DefaultHTTPServerMetricsConfig(service string) *HTTPServerMetricsConfig {
 		Service:             service,
 		RequestTotalName:    MetricHTTPServerRequestTotal,
 		RequestDurationName: MetricHTTPServerDurationSeconds,
-		DurationBuckets:     defaultHTTPDurationBuckets,
+		DurationBuckets:     append([]float64(nil), defaultHTTPDurationBuckets...),
 	}
 }
 

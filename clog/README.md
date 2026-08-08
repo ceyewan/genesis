@@ -45,6 +45,8 @@ logger.Info("request started",
 | 错误结构 | 统一输出 `error={...}`，便于检索、索引和统计 |
 | 文件输出 | 只有 `New()` 创建的根 logger 持有底层文件句柄，调用方需要关闭根 logger |
 
+`Config.ServiceName`、`Version`、`InstanceID`、`Environment` 会稳定输出为 `service.name`、`service.version`、`service.instance.id`、`deployment.environment`。生产 JSON 日志建议与 trace/metrics 使用同一组值。
+
 ## 默认配置
 
 `New(nil)` 与 `New(&clog.Config{})` 行为一致，都会使用零值默认配置：

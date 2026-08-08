@@ -12,6 +12,8 @@ import (
 type Config struct {
 	ServiceName   string `mapstructure:"service_name"`
 	Version       string `mapstructure:"version"`
+	InstanceID    string `mapstructure:"instance_id"`
+	Environment   string `mapstructure:"environment"`
 	Port          int    `mapstructure:"port"`
 	Path          string `mapstructure:"path"`
 	EnableRuntime bool   `mapstructure:"enable_runtime"`

@@ -3,6 +3,8 @@ package clog
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // Level 日志级别类型
@@ -64,6 +66,6 @@ func ParseLevel(s string) (Level, error) {
 	case "fatal":
 		return FatalLevel, nil
 	default:
-		return InfoLevel, fmt.Errorf("unknown log level: %s", s)
+		return InfoLevel, xerrors.Wrapf(ErrInvalidLevel, "unknown level %q", s)
 	}
 }

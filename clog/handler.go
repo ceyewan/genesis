@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // clogHandler 封装 slog.Handler，提供动态级别和 Flush 能力。
@@ -68,7 +70,7 @@ func resolveWriter(config *Config, options *options) (io.Writer, io.Closer, erro
 		if options.buffer != nil {
 			return options.buffer, nil, nil
 		}
-		return nil, nil, fmt.Errorf("buffer output requires options.buffer to be set")
+		return nil, nil, xerrors.Wrap(ErrInvalidConfig, "buffer output requires options.buffer")
 	default:
 		f, err := os.OpenFile(config.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
 		if err != nil {
@@ -107,7 +109,7 @@ func slogLevelFromLevel(level Level) (slog.Level, error) {
 	case FatalLevel:
 		return slog.LevelError + 4, nil
 	default:
-		return slog.LevelInfo, fmt.Errorf("invalid log level: %d", level)
+		return slog.LevelInfo, xerrors.Wrapf(ErrInvalidLevel, "level value %d", level)
 	}
 }
 

@@ -20,11 +20,9 @@ package auth
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -77,7 +75,9 @@ func New(cfg *Config, opts ...Option) (Authenticator, error) {
 		return nil, ErrInvalidConfig
 	}
 
-	cfg.setDefaults()
+	config := *cfg
+	config.Audience = append([]string(nil), cfg.Audience...)
+	config.setDefaults()
 
 	o := defaultOptions()
 	for _, opt := range opts {
@@ -85,7 +85,7 @@ func New(cfg *Config, opts ...Option) (Authenticator, error) {
 	}
 
 	auth := &jwtAuth{
-		config:  cfg,
+		config:  &config,
 		options: o,
 	}
 
@@ -348,22 +348,6 @@ func (a *jwtAuth) keyFunc() jwt.Keyfunc {
 	}
 }
 
-func (a *jwtAuth) parseClaimsWithoutTimeValidation(tokenString string) (*Claims, error) {
-	claims := &Claims{}
-	opts := append(a.validationParserOptions(), jwt.WithoutClaimsValidation())
-	token, err := jwt.ParseWithClaims(tokenString, claims, a.keyFunc(), opts...)
-	if err != nil {
-		if errors.Is(err, jwt.ErrTokenSignatureInvalid) {
-			return nil, ErrInvalidSignature
-		}
-		return nil, ErrInvalidToken
-	}
-	if !token.Valid {
-		return nil, ErrInvalidToken
-	}
-	return claims, nil
-}
-
 func cloneClaims(claims *Claims) *Claims {
 	copied := *claims
 	if claims.Roles != nil {
@@ -377,15 +361,6 @@ func cloneClaims(claims *Claims) *Claims {
 		copied.Audience = append(jwt.ClaimStrings(nil), claims.Audience...)
 	}
 	return &copied
-}
-
-func hasAnyAudience(tokenAud jwt.ClaimStrings, expected []string) bool {
-	for _, ta := range tokenAud {
-		if slices.Contains(expected, ta) {
-			return true
-		}
-	}
-	return false
 }
 
 func newTokenID(tokenType TokenType) string {

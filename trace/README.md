@@ -35,16 +35,21 @@ defer shutdown(context.Background())
 `trace.Config` 当前是一个**最小 OTLP gRPC 初始化器**，支持：
 
 - `ServiceName`
+- `Version`、`InstanceID`、`Environment`
 - `Endpoint`
 - `Sampler`
 - `Batcher`，可选 `batch` 或 `simple`
 - `Insecure`
+- `ExporterTimeout`
+- 可选的有缓冲 `ExportErrors` channel
 
-其中 `Batcher` 在默认配置里会设置为 `batch`，而空字符串行为也等同于 `batch`，适合常规服务；`simple` 更适合测试或需要更直接刷出的场景。组件当前不负责更复杂的 exporter 能力，例如 TLS、认证头和附加 resource attributes。
+其中 `Batcher` 在默认配置里会设置为 `batch`，空字符串也等同于 `batch`。兼容值 `simple` 使用异步单条小批量，不会让 exporter 故障阻塞 `span.End`。`ExportErrors` 的发送是非阻塞的，通道已满时会丢弃该次通知。
 
 ## HTTP / gRPC 中间件
 
 `GinMiddleware` 和 `GRPCServerStatsHandler` 的作用不仅是记录 span，还会把活跃 Span 写入 `context.Context`。`clog.WithTraceContext()` 正是从这个 context 里提取 `trace_id` / `span_id` 注入日志——**如果不注册中间件，日志里的 trace_id 字段会静默为空，不报任何错误**。
+
+标准库 HTTP 使用 `HTTPHandler(handler, operation)` 包装服务端 handler，客户端把 `HTTPTransport(nil)` 配置到 `http.Client.Transport`。两者使用全局 W3C Trace Context/Baggage 传播器。
 
 完整的三步接入顺序：
 
@@ -113,6 +118,7 @@ defer consumeSpan.End()
 
 - `Init()` 通常应在应用启动时调用一次
 - 返回的 `shutdown` 函数由调用方负责执行；关闭后若全局状态仍指向该实例，会回退到安全默认值
+- `Init` 和 `Discard` 返回的 shutdown 可并发重复调用，并遵守 context deadline
 - `Discard()` 虽然不导出 trace 数据，但仍然会修改全局 tracing 状态
 
 ## 推荐实践
