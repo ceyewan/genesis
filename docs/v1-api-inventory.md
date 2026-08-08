@@ -1,0 +1,552 @@
+# Genesis v1 exported API inventory
+
+This file is generated from the current source tree. It inventories exported constants, variables, types, functions, and methods that form the v1 review surface. Generated protobuf example packages are excluded; `testkit` is included because it is an importable module package.
+
+## `auth`
+
+- const: `const ClaimsKey`
+- const: `const MetricTokensRefreshed`
+- const: `const MetricTokensValidated`
+- const: `const TokenTypeAccess`
+- const: `const TokenTypeRefresh`
+- func: `func GetClaims(c *gin.Context) (*Claims, bool)`
+- func: `func New(cfg *Config, opts ...Option) (Authenticator, error)`
+- func: `func RequireRoles(roles ...string) gin.HandlerFunc`
+- func: `func WithLogger(l clog.Logger) Option`
+- func: `func WithMeter(m metrics.Meter) Option`
+- type: `type Authenticator interface { 	GenerateTokenPair(ctx context.Context, claims *Claims) (*TokenPair, error)  	ValidateAccessToken(ctx context.Context, token string) (*Claims, error)  	ValidateRefreshToken(ctx context.Context, token string) (*Claims, error)  	RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error)  	GinMiddleware() gin.HandlerFunc }`
+- type: `type Claims struct { 	jwt.RegisteredClaims  	TokenType TokenType      \`json:"typ,omitempty"\` 	Username  string         \`json:"uname,omitempty"\` 	Roles     []string       \`json:"roles,omitempty"\` 	Extra     map[string]any \`json:"extra,omitempty"\` }`
+- type: `type Config struct { 	SecretKey     string   \`mapstructure:"secret_key"\` 	SigningMethod string   \`mapstructure:"signing_method"\` 	Issuer        string   \`mapstructure:"issuer"\` 	Audience      []string \`mapstructure:"audience"\`  	AccessTokenTTL  time.Duration \`mapstructure:"access_token_ttl"\` 	RefreshTokenTTL time.Duration \`mapstructure:"refresh_token_ttl"\`  	TokenLookup   string \`mapstructure:"token_lookup"\` 	TokenHeadName string \`mapstructure:"token_head_name"\` }`
+- type: `type Option func(*options)`
+- type: `type TokenPair struct { 	AccessToken           string 	RefreshToken          string 	AccessTokenExpiresAt  time.Time 	RefreshTokenExpiresAt time.Time 	AuthorizationScheme   string }`
+- type: `type TokenType string`
+- var: `var ErrExpiredToken`
+- var: `var ErrInvalidClaims`
+- var: `var ErrInvalidConfig`
+- var: `var ErrInvalidSignature`
+- var: `var ErrInvalidToken`
+- var: `var ErrMissingToken`
+
+## `breaker`
+
+- const: `const StateClosed`
+- const: `const StateHalfOpen`
+- const: `const StateOpen`
+- func: `func New(cfg *Config, opts ...Option) (Breaker, error)`
+- func: `func WithFallback(fallback FallbackFunc) Option`
+- func: `func WithKeyFunc(fn KeyFunc) InterceptorOption`
+- func: `func WithLogger(logger clog.Logger) Option`
+- method: `func (State) String() string`
+- type: `type Breaker interface { 	Execute(ctx context.Context, key string, fn func() (any, error)) (any, error)  	UnaryClientInterceptor(opts ...InterceptorOption) grpc.UnaryClientInterceptor  	State(key string) (State, error) }`
+- type: `type Config struct { 	MaxRequests uint32 \`json:"max_requests" yaml:"max_requests"\`  	Interval time.Duration \`json:"interval" yaml:"interval"\`  	Timeout time.Duration \`json:"timeout" yaml:"timeout"\`  	FailureRatio float64 \`json:"failure_ratio" yaml:"failure_ratio"\`  	MinimumRequests uint32 \`json:"minimum_requests" yaml:"minimum_requests"\` }`
+- type: `type FallbackFunc func(ctx context.Context, key string, err error) error`
+- type: `type InterceptorOption func(*interceptorConfig)`
+- type: `type KeyFunc func(ctx context.Context, fullMethod string, cc *grpc.ClientConn) string`
+- type: `type Option func(*options)`
+- type: `type State int`
+- var: `var ErrInvalidConfig`
+- var: `var ErrKeyEmpty`
+- var: `var ErrOpenState`
+- var: `var ErrTooManyRequests`
+
+## `cache`
+
+- const: `const DriverOtter`
+- const: `const DriverRedis`
+- func: `func NewDistributed(cfg *DistributedConfig, opts ...Option) (Distributed, error)`
+- func: `func NewLocal(cfg *LocalConfig, opts ...Option) (Local, error)`
+- func: `func NewMulti(local Local, remote Distributed, cfg *MultiConfig) (Multi, error)`
+- func: `func WithLogger(l clog.Logger) Option`
+- func: `func WithMeter(m metrics.Meter) Option`
+- func: `func WithRedisConnector(conn connector.RedisConnector) Option`
+- type: `type Distributed interface { 	KV  	HSet(ctx context.Context, key, field string, value any) error  	HGet(ctx context.Context, key, field string, dest any) error  	HGetAll(ctx context.Context, key string, destMap any) error  	HDel(ctx context.Context, key string, fields ...string) error  	HIncrBy(ctx context.Context, key, field string, increment int64) (int64, error)  	ZAdd(ctx context.Context, key string, score float64, member any) error  	ZRem(ctx context.Context, key string, members ...any) error  	ZScore(ctx context.Context, key string, member any) (float64, error)  	ZRange(ctx context.Context, key string, start, stop int64, destSlice any) error  	ZRevRange(ctx context.Context, key string, start, stop int64, destSlice any) error  	ZRangeByScore(ctx context.Context, key string, min, max float64, destSlice any) error  	MGet(ctx context.Context, keys []string, destSlice any) error  	MSet(ctx context.Context, items map[string]any, ttl time.Duration) error  	RawClient() any }`
+- type: `type DistributedConfig struct { 	Driver DistributedDriverType \`json:"driver" yaml:"driver"\`  	KeyPrefix string \`json:"key_prefix" yaml:"key_prefix"\`  	Serializer string \`json:"serializer" yaml:"serializer"\`  	DefaultTTL time.Duration \`json:"default_ttl" yaml:"default_ttl"\` }`
+- type: `type DistributedDriverType string`
+- type: `type KV interface { 	Set(ctx context.Context, key string, value any, ttl time.Duration) error  	Get(ctx context.Context, key string, dest any) error  	Delete(ctx context.Context, key string) error  	Has(ctx context.Context, key string) (bool, error)  	Expire(ctx context.Context, key string, ttl time.Duration) (bool, error)  	Close() error }`
+- type: `type Local interface { 	KV }`
+- type: `type LocalConfig struct { 	Driver LocalDriverType \`json:"driver" yaml:"driver"\`  	MaxEntries int \`json:"max_entries" yaml:"max_entries"\`  	Serializer string \`json:"serializer" yaml:"serializer"\`  	DefaultTTL time.Duration \`json:"default_ttl" yaml:"default_ttl"\` }`
+- type: `type LocalDriverType string`
+- type: `type Multi interface { 	KV }`
+- type: `type MultiConfig struct { 	LocalTTL time.Duration \`json:"local_ttl" yaml:"local_ttl"\`  	BackfillTTL time.Duration \`json:"backfill_ttl" yaml:"backfill_ttl"\`  	FailOpenOnLocalError *bool \`json:"fail_open_on_local_error" yaml:"fail_open_on_local_error"\` }`
+- type: `type Option func(*options)`
+- var: `var ErrLocalCacheRequired`
+- var: `var ErrMiss`
+- var: `var ErrNotSupported`
+- var: `var ErrRedisConnectorRequired`
+- var: `var ErrRemoteCacheRequired`
+
+## `cache/serializer`
+
+- func: `func New(serializerType string) (Serializer, error)`
+- method: `func (*JSONSerializer) Marshal(value any) ([]byte, error)`
+- method: `func (*MessagePackSerializer) Marshal(value any) ([]byte, error)`
+- method: `func (*JSONSerializer) Unmarshal(data []byte, dest any) error`
+- method: `func (*MessagePackSerializer) Unmarshal(data []byte, dest any) error`
+- type: `type JSONSerializer struct{}`
+- type: `type MessagePackSerializer struct{}`
+- type: `type Serializer interface { 	Marshal(value any) ([]byte, error) 	Unmarshal(data []byte, dest any) error }`
+- var: `var ErrUnsupportedSerializer`
+
+## `clog`
+
+- const: `const DebugLevel`
+- const: `const ErrorLevel`
+- const: `const FatalLevel`
+- const: `const InfoLevel`
+- const: `const WarnLevel`
+- func: `func Any(k string, v any) Field`
+- func: `func Bool(k string, v bool) Field`
+- func: `func Discard() Logger`
+- func: `func Duration(k string, v time.Duration) Field`
+- func: `func Error(err error) Field`
+- func: `func ErrorWithCode(err error, code string) Field`
+- func: `func ErrorWithCodeStack(err error, code string) Field`
+- func: `func ErrorWithStack(err error) Field`
+- func: `func Float64(k string, v float64) Field`
+- func: `func Group(k string, fields ...any) Field`
+- func: `func Int(k string, v int) Field`
+- func: `func Int64(k string, v int64) Field`
+- func: `func New(config *Config, opts ...Option) (Logger, error)`
+- func: `func NewDevDefaultConfig(sourceRoot string) *Config`
+- func: `func NewProdDefaultConfig(sourceRoot string) *Config`
+- func: `func ParseLevel(s string) (Level, error)`
+- func: `func String(k, v string) Field`
+- func: `func Time(k string, v time.Time) Field`
+- func: `func Uint64(k string, v uint64) Field`
+- func: `func WithContextField(key any, fieldName string) Option`
+- func: `func WithNamespace(parts ...string) Option`
+- func: `func WithTraceContext() Option`
+- method: `func (Level) String() string`
+- type: `type Config struct { 	Level       string \`json:"level" yaml:"level"\` 	Format      string \`json:"format" yaml:"format"\` 	Output      string \`json:"output" yaml:"output"\` 	EnableColor bool   \`json:"enable_color" yaml:"enable_color"\` 	AddSource   bool   \`json:"add_source" yaml:"add_source"\` 	SourceRoot  string \`json:"source_root" yaml:"source_root"\` 	ServiceName string \`json:"service_name" yaml:"service_name"\` 	Version     string \`json:"version" yaml:"version"\` 	InstanceID  string \`json:"instance_id" yaml:"instance_id"\` 	Environment string \`json:"environment" yaml:"environment"\` }`
+- type: `type ContextField struct { 	Key       any 	FieldName string }`
+- type: `type Field slog.Attr`
+- type: `type Level int`
+- type: `type Logger interface { 	Debug(msg string, fields ...Field) 	Info(msg string, fields ...Field) 	Warn(msg string, fields ...Field) 	Error(msg string, fields ...Field)  	Fatal(msg string, fields ...Field)  	DebugContext(ctx context.Context, msg string, fields ...Field) 	InfoContext(ctx context.Context, msg string, fields ...Field) 	WarnContext(ctx context.Context, msg string, fields ...Field) 	ErrorContext(ctx context.Context, msg string, fields ...Field)  	FatalContext(ctx context.Context, msg string, fields ...Field)  	With(fields ...Field) Logger  	WithNamespace(parts ...string) Logger  	SetLevel(level Level) error  	Flush()  	Close() error }`
+- type: `type Option func(*options)`
+- var: `var ErrInvalidConfig`
+- var: `var ErrInvalidLevel`
+
+## `config`
+
+- const: `const EventSourceFile`
+- func: `func New(cfg *Config, opts ...Option) (Loader, error)`
+- func: `func WithLogger(logger clog.Logger) Option`
+- type: `type Config struct { 	Name      string 	Paths     []string 	FileType  string 	EnvPrefix string }`
+- type: `type Event struct { 	Key       string 	Value     any 	OldValue  any 	Source    EventSource 	Timestamp time.Time }`
+- type: `type EventSource string`
+- type: `type Loader interface { 	Load(ctx context.Context) error  	Get(key string) any  	Unmarshal(v any) error  	UnmarshalKey(key string, v any) error  	Watch(ctx context.Context, key string) (<-chan Event, error)  	Validate() error  	Close() error }`
+- type: `type Option func(*loader)`
+- var: `var ErrClosed`
+- var: `var ErrNotLoaded`
+- var: `var ErrValidationFailed`
+
+## `connector`
+
+- const: `const MetricHealthChecks`
+- const: `const MetricReconnects`
+- func: `func NewEtcd(cfg *EtcdConfig, opts ...Option) (EtcdConnector, error)`
+- func: `func NewKafka(cfg *KafkaConfig, opts ...Option) (KafkaConnector, error)`
+- func: `func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error)`
+- func: `func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error)`
+- func: `func NewPostgreSQL(cfg *PostgreSQLConfig, opts ...Option) (PostgreSQLConnector, error)`
+- func: `func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error)`
+- func: `func NewSQLite(cfg *SQLiteConfig, opts ...Option) (SQLiteConnector, error)`
+- func: `func WithLogger(logger clog.Logger) Option`
+- func: `func WithMeter(meter metrics.Meter) Option`
+- type: `type Connector interface { 	Connect(ctx context.Context) error  	Close() error  	HealthCheck(ctx context.Context) error  	IsHealthy() bool  	Name() string }`
+- type: `type EtcdConfig struct { 	Name string \`mapstructure:"name" json:"name" yaml:"name"\`  	Endpoints []string \`mapstructure:"endpoints" json:"endpoints" yaml:"endpoints"\` 	Username  string   \`mapstructure:"username" json:"username" yaml:"username"\` 	Password  string   \`mapstructure:"password" json:"password" yaml:"password"\`  	DialTimeout      time.Duration \`mapstructure:"dial_timeout" json:"dial_timeout" yaml:"dial_timeout"\` 	KeepAliveTime    time.Duration \`mapstructure:"keep_alive_time" json:"keep_alive_time" yaml:"keep_alive_time"\` 	KeepAliveTimeout time.Duration \`mapstructure:"keep_alive_timeout" json:"keep_alive_timeout" yaml:"keep_alive_timeout"\` }`
+- type: `type EtcdConnector interface { 	TypedConnector[*clientv3.Client] }`
+- type: `type KafkaConfig struct { 	Name string \`mapstructure:"name" json:"name" yaml:"name"\`  	Seed []string \`mapstructure:"seed" json:"seed" yaml:"seed"\`  	User     string \`mapstructure:"user" json:"user" yaml:"user"\` 	Password string \`mapstructure:"password" json:"password" yaml:"password"\` 	ClientID string \`mapstructure:"client_id" json:"client_id" yaml:"client_id"\`  	ConnectTimeout       time.Duration \`mapstructure:"connect_timeout" json:"connect_timeout" yaml:"connect_timeout"\` 	RequestTimeout       time.Duration \`mapstructure:"request_timeout" json:"request_timeout" yaml:"request_timeout"\` 	AllowAutoTopicCreate bool          \`mapstructure:"allow_auto_topic_create" json:"allow_auto_topic_create" yaml:"allow_auto_topic_create"\` }`
+- type: `type KafkaConnector interface { 	TypedConnector[*kgo.Client] }`
+- type: `type MySQLConfig struct { 	Name string \`mapstructure:"name" json:"name" yaml:"name"\`  	DSN      string \`mapstructure:"dsn" json:"dsn" yaml:"dsn"\` 	Host     string \`mapstructure:"host" json:"host" yaml:"host"\` 	Port     int    \`mapstructure:"port" json:"port" yaml:"port"\` 	Username string \`mapstructure:"username" json:"username" yaml:"username"\` 	Password string \`mapstructure:"password" json:"password" yaml:"password"\` 	Database string \`mapstructure:"database" json:"database" yaml:"database"\`  	Charset         string        \`mapstructure:"charset" json:"charset" yaml:"charset"\` 	MaxIdleConns    int           \`mapstructure:"max_idle_conns" json:"max_idle_conns" yaml:"max_idle_conns"\` 	MaxOpenConns    int           \`mapstructure:"max_open_conns" json:"max_open_conns" yaml:"max_open_conns"\` 	ConnMaxLifetime time.Duration \`mapstructure:"conn_max_lifetime" json:"conn_max_lifetime" yaml:"conn_max_lifetime"\` 	ConnectTimeout  time.Duration \`mapstructure:"connect_timeout" json:"connect_timeout" yaml:"connect_timeout"\` }`
+- type: `type MySQLConnector interface { 	TypedConnector[*gorm.DB] }`
+- type: `type NATSConfig struct { 	Name string \`mapstructure:"name" json:"name" yaml:"name"\`  	URL      string \`mapstructure:"url" json:"url" yaml:"url"\` 	Username string \`mapstructure:"username" json:"username" yaml:"username"\` 	Password string \`mapstructure:"password" json:"password" yaml:"password"\` 	Token    string \`mapstructure:"token" json:"token" yaml:"token"\`  	ConnectTimeout time.Duration \`mapstructure:"connect_timeout" json:"connect_timeout" yaml:"connect_timeout"\` 	MaxReconnects  int           \`mapstructure:"max_reconnects" json:"max_reconnects" yaml:"max_reconnects"\` 	ReconnectWait  time.Duration \`mapstructure:"reconnect_wait" json:"reconnect_wait" yaml:"reconnect_wait"\` 	PingInterval   time.Duration \`mapstructure:"ping_interval" json:"ping_interval" yaml:"ping_interval"\` }`
+- type: `type NATSConnector interface { 	TypedConnector[*nats.Conn] }`
+- type: `type Option func(*options)`
+- type: `type PostgreSQLConfig struct { 	Name string \`mapstructure:"name" json:"name" yaml:"name"\`  	DSN      string \`mapstructure:"dsn" json:"dsn" yaml:"dsn"\` 	Host     string \`mapstructure:"host" json:"host" yaml:"host"\` 	Port     int    \`mapstructure:"port" json:"port" yaml:"port"\` 	Username string \`mapstructure:"username" json:"username" yaml:"username"\` 	Password string \`mapstructure:"password" json:"password" yaml:"password"\` 	Database string \`mapstructure:"database" json:"database" yaml:"database"\`  	SSLMode         string        \`mapstructure:"sslmode" json:"sslmode" yaml:"sslmode"\` 	MaxIdleConns    int           \`mapstructure:"max_idle_conns" json:"max_idle_conns" yaml:"max_idle_conns"\` 	MaxOpenConns    int           \`mapstructure:"max_open_conns" json:"max_open_conns" yaml:"max_open_conns"\` 	ConnMaxLifetime time.Duration \`mapstructure:"conn_max_lifetime" json:"conn_max_lifetime" yaml:"conn_max_lifetime"\` 	ConnectTimeout  time.Duration \`mapstructure:"connect_timeout" json:"connect_timeout" yaml:"connect_timeout"\` 	Timezone        string        \`mapstructure:"timezone" json:"timezone" yaml:"timezone"\` }`
+- type: `type PostgreSQLConnector interface { 	TypedConnector[*gorm.DB] }`
+- type: `type RedisConfig struct { 	Name string \`mapstructure:"name" json:"name" yaml:"name"\`  	Addr     string \`mapstructure:"addr" json:"addr" yaml:"addr"\` 	Password string \`mapstructure:"password" json:"password" yaml:"password"\` 	DB       int    \`mapstructure:"db" json:"db" yaml:"db"\`  	PoolSize     int           \`mapstructure:"pool_size" json:"pool_size" yaml:"pool_size"\` 	MinIdleConns int           \`mapstructure:"min_idle_conns" json:"min_idle_conns" yaml:"min_idle_conns"\` 	DialTimeout  time.Duration \`mapstructure:"dial_timeout" json:"dial_timeout" yaml:"dial_timeout"\` 	ReadTimeout  time.Duration \`mapstructure:"read_timeout" json:"read_timeout" yaml:"read_timeout"\` 	WriteTimeout time.Duration \`mapstructure:"write_timeout" json:"write_timeout" yaml:"write_timeout"\`  	EnableTracing bool \`mapstructure:"enable_tracing" json:"enable_tracing" yaml:"enable_tracing"\` }`
+- type: `type RedisConnector interface { 	TypedConnector[*redis.Client] }`
+- type: `type SQLiteConfig struct { 	Name string \`mapstructure:"name" json:"name" yaml:"name"\`  	Path string \`mapstructure:"path" json:"path" yaml:"path"\` }`
+- type: `type SQLiteConnector interface { 	TypedConnector[*gorm.DB] }`
+- type: `type TypedConnector interface { 	Connector  	GetClient() T }`
+- var: `var ErrClientNil`
+- var: `var ErrConfig`
+- var: `var ErrConnection`
+- var: `var ErrHealthCheck`
+
+## `db`
+
+- func: `func New(cfg *Config, opts ...Option) (DB, error)`
+- func: `func WithLogger(l clog.Logger) Option`
+- func: `func WithMySQLConnector(conn connector.MySQLConnector) Option`
+- func: `func WithPostgreSQLConnector(conn connector.PostgreSQLConnector) Option`
+- func: `func WithSQLiteConnector(conn connector.SQLiteConnector) Option`
+- func: `func WithSilentMode() Option`
+- func: `func WithSlowThreshold(threshold time.Duration) Option`
+- func: `func WithTracer(tp trace.TracerProvider) Option`
+- type: `type Config struct { 	Driver string \`json:"driver" yaml:"driver" mapstructure:"driver"\` }`
+- type: `type DB interface { 	DB(ctx context.Context) *gorm.DB 	Transaction(ctx context.Context, fn func(ctx context.Context, tx *gorm.DB) error) error 	Close() error }`
+- type: `type Option func(*options)`
+- var: `var ErrInvalidConfig`
+- var: `var ErrMySQLConnectorRequired`
+- var: `var ErrPostgreSQLConnectorRequired`
+- var: `var ErrSQLiteConnectorRequired`
+
+## `dlock`
+
+- const: `const DriverEtcd`
+- const: `const DriverRedis`
+- func: `func New(cfg *Config, opts ...Option) (Locker, error)`
+- func: `func WithEtcdConnector(conn connector.EtcdConnector) Option`
+- func: `func WithLogger(l clog.Logger) Option`
+- func: `func WithRedisConnector(conn connector.RedisConnector) Option`
+- func: `func WithTTL(d time.Duration) LockOption`
+- type: `type Config struct { 	Driver DriverType \`json:"driver" yaml:"driver"\`  	Prefix string \`json:"prefix" yaml:"prefix"\`  	DefaultTTL time.Duration \`json:"default_ttl" yaml:"default_ttl"\`  	RetryInterval time.Duration \`json:"retry_interval" yaml:"retry_interval"\` }`
+- type: `type DriverType string`
+- type: `type LockOption func(*lockOptions)`
+- type: `type Locker interface { 	Lock(ctx context.Context, key string, opts ...LockOption) error  	TryLock(ctx context.Context, key string, opts ...LockOption) (bool, error)  	Unlock(ctx context.Context, key string) error  	Close() error }`
+- type: `type Option func(*options)`
+- var: `var ErrClosed`
+- var: `var ErrConfigNil`
+- var: `var ErrConnectorNil`
+- var: `var ErrInvalidTTL`
+- var: `var ErrLockAlreadyHeld`
+- var: `var ErrLockNotHeld`
+- var: `var ErrOwnershipLost`
+
+## `idem`
+
+- const: `const DriverMemory`
+- const: `const DriverRedis`
+- func: `func New(cfg *Config, opts ...Option) (Idempotency, error)`
+- func: `func WithGRPCResponseCacheFunc(fn func(msg proto.Message) bool) InterceptorOption`
+- func: `func WithHTTPStatusCacheFunc(fn func(status int) bool) MiddlewareOption`
+- func: `func WithHeaderKey(headerKey string) MiddlewareOption`
+- func: `func WithLogger(logger clog.Logger) Option`
+- func: `func WithMetadataKey(metadataKey string) InterceptorOption`
+- func: `func WithRedisConnector(conn connector.RedisConnector) Option`
+- type: `type Config struct { 	Driver DriverType \`json:"driver" yaml:"driver"\`  	Prefix string \`json:"prefix" yaml:"prefix"\`  	DefaultTTL time.Duration \`json:"default_ttl" yaml:"default_ttl"\`  	LockTTL time.Duration \`json:"lock_ttl" yaml:"lock_ttl"\`  	WaitTimeout time.Duration \`json:"wait_timeout" yaml:"wait_timeout"\`  	WaitInterval time.Duration \`json:"wait_interval" yaml:"wait_interval"\` }`
+- type: `type DeletableStore interface { 	Store 	DeleteResult(ctx context.Context, key string) error }`
+- type: `type DriverType string`
+- type: `type Idempotency interface { 	Close() error  	Execute(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error)  	Consume(ctx context.Context, key string, ttl time.Duration, fn func(ctx context.Context) error) (executed bool, err error)  	GinMiddleware(opts ...MiddlewareOption) any  	UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServerInterceptor }`
+- type: `type InterceptorOption func(*interceptorOptions)`
+- type: `type LockToken string`
+- type: `type MiddlewareOption func(*middlewareOptions)`
+- type: `type Option func(*options)`
+- type: `type RefreshableStore interface { 	Store 	Refresh(ctx context.Context, key string, token LockToken, ttl time.Duration) error }`
+- type: `type Store interface { 	Lock(ctx context.Context, key string, ttl time.Duration) (LockToken, bool, error)  	Unlock(ctx context.Context, key string, token LockToken) error  	SetResult(ctx context.Context, key string, val []byte, ttl time.Duration, token LockToken) error  	GetResult(ctx context.Context, key string) ([]byte, error) }`
+- var: `var ErrConcurrentRequest`
+- var: `var ErrConfigNil`
+- var: `var ErrKeyEmpty`
+- var: `var ErrLockLost`
+- var: `var ErrResultNotFound`
+
+## `idgen`
+
+- const: `const GeneratorModeMultiDC`
+- const: `const GeneratorModeSingleDC`
+- const: `const MetricSequenceGenerated`
+- const: `const MetricSnowflakeGenerated`
+- func: `func NewAllocator(cfg *AllocatorConfig, opts ...Option) (Allocator, error)`
+- func: `func NewGenerator(cfg *GeneratorConfig, opts ...Option) (Generator, error)`
+- func: `func NewSequencer(cfg *SequencerConfig, opts ...Option) (Sequencer, error)`
+- func: `func ParseGeneratorID(id int64, mode GeneratorMode) (timestamp, datacenterID, workerID, sequence int64)`
+- func: `func UUID() (string, error)`
+- func: `func WithEtcdConnector(conn connector.EtcdConnector) Option`
+- func: `func WithLogger(logger clog.Logger) Option`
+- func: `func WithMeter(m metrics.Meter) Option`
+- func: `func WithRedisConnector(conn connector.RedisConnector) Option`
+- type: `type Allocator interface { 	Allocate(ctx context.Context) (int64, error)  	KeepAlive(ctx context.Context) <-chan error  	Stop() }`
+- type: `type AllocatorConfig struct { 	Driver string \`yaml:"driver" json:"driver"\`  	KeyPrefix string \`yaml:"key_prefix" json:"key_prefix"\`  	MaxID int \`yaml:"max_id" json:"max_id"\`  	TTL time.Duration \`yaml:"ttl" json:"ttl"\` }`
+- type: `type Generator interface { 	Next() (int64, error)  	NextString() (string, error) }`
+- type: `type GeneratorConfig struct { 	Mode GeneratorMode \`yaml:"mode" json:"mode"\`  	WorkerID int64 \`yaml:"worker_id" json:"worker_id"\`  	DatacenterID int64 \`yaml:"datacenter_id" json:"datacenter_id"\` }`
+- type: `type GeneratorMode string`
+- type: `type Option func(*options)`
+- type: `type Sequencer interface { 	Next(ctx context.Context, key string) (int64, error)  	NextBatch(ctx context.Context, key string, count int) ([]int64, error)  	Set(ctx context.Context, key string, value int64) error  	SetIfNotExists(ctx context.Context, key string, value int64) (bool, error) }`
+- type: `type SequencerConfig struct { 	Driver string \`yaml:"driver" json:"driver"\`  	KeyPrefix string \`yaml:"key_prefix" json:"key_prefix"\`  	Step int64 \`yaml:"step" json:"step"\`  	MaxValue int64 \`yaml:"max_value" json:"max_value"\`  	TTL time.Duration \`yaml:"ttl" json:"ttl"\` }`
+- var: `var ErrAllocatorStopped`
+- var: `var ErrAlreadyAllocated`
+- var: `var ErrClockBackwards`
+- var: `var ErrConnectorNil`
+- var: `var ErrInvalidInput`
+- var: `var ErrKeepAliveStarted`
+- var: `var ErrLeaseExpired`
+- var: `var ErrSequenceExhausted`
+- var: `var ErrWorkerIDExhausted`
+
+## `metrics`
+
+- const: `const LabelGRPCCode`
+- const: `const LabelMethod`
+- const: `const LabelOperation`
+- const: `const LabelOutcome`
+- const: `const LabelRoute`
+- const: `const LabelService`
+- const: `const LabelStatusClass`
+- const: `const MetricGRPCServerDurationSeconds`
+- const: `const MetricGRPCServerRequestTotal`
+- const: `const MetricHTTPServerDurationSeconds`
+- const: `const MetricHTTPServerRequestTotal`
+- const: `const OperationGRPCServer`
+- const: `const OperationHTTPServer`
+- const: `const OutcomeError`
+- const: `const OutcomeSuccess`
+- const: `const UnknownRoute`
+- func: `func DefaultGRPCServerMetricsConfig(service string) *GRPCServerMetricsConfig`
+- func: `func DefaultHTTPServerMetricsConfig(service string) *HTTPServerMetricsConfig`
+- func: `func Discard() Meter`
+- func: `func GRPCOutcome(code codes.Code) string`
+- func: `func GRPCStatusClass(code codes.Code) string`
+- func: `func GinHTTPMiddleware(httpMetrics *HTTPServerMetrics) gin.HandlerFunc`
+- func: `func HTTPOutcome(status int) string`
+- func: `func HTTPStatusClass(status int) string`
+- func: `func L(key, value string) Label`
+- func: `func New(cfg *Config) (Meter, error)`
+- func: `func NewDevDefaultConfig(serviceName string) *Config`
+- func: `func NewGRPCServerMetrics(m Meter, cfg *GRPCServerMetricsConfig) (*GRPCServerMetrics, error)`
+- func: `func NewHTTPServerMetrics(m Meter, cfg *HTTPServerMetricsConfig) (*HTTPServerMetrics, error)`
+- func: `func NewProdDefaultConfig(serviceName, version string) *Config`
+- func: `func WithBuckets(buckets []float64) MetricOption`
+- func: `func WithUnit(unit string) MetricOption`
+- method: `func (*GRPCServerMetrics) Observe(ctx context.Context, fullMethod string, code codes.Code, duration time.Duration)`
+- method: `func (*HTTPServerMetrics) Observe(ctx context.Context, method, route string, status int, duration time.Duration)`
+- method: `func (*GRPCServerMetrics) StreamServerInterceptor() grpc.StreamServerInterceptor`
+- method: `func (*GRPCServerMetrics) UnaryServerInterceptor() grpc.UnaryServerInterceptor`
+- type: `type Config struct { 	ServiceName   string \`mapstructure:"service_name"\` 	Version       string \`mapstructure:"version"\` 	InstanceID    string \`mapstructure:"instance_id"\` 	Environment   string \`mapstructure:"environment"\` 	Port          int    \`mapstructure:"port"\` 	Path          string \`mapstructure:"path"\` 	EnableRuntime bool   \`mapstructure:"enable_runtime"\` }`
+- type: `type Counter interface { 	Inc(ctx context.Context, labels ...Label) 	Add(ctx context.Context, val float64, labels ...Label) }`
+- type: `type GRPCServerMetrics struct { 	service      string 	requestTotal Counter 	duration     Histogram 	staticLabels []Label }`
+- type: `type GRPCServerMetricsConfig struct { 	Service             string 	RequestTotalName    string 	RequestDurationName string 	DurationBuckets     []float64 	StaticLabels        []Label }`
+- type: `type Gauge interface { 	Set(ctx context.Context, val float64, labels ...Label) 	Inc(ctx context.Context, labels ...Label) 	Dec(ctx context.Context, labels ...Label) }`
+- type: `type HTTPServerMetrics struct { 	service      string 	requestTotal Counter 	duration     Histogram 	staticLabels []Label }`
+- type: `type HTTPServerMetricsConfig struct { 	Service             string 	RequestTotalName    string 	RequestDurationName string 	DurationBuckets     []float64 	StaticLabels        []Label }`
+- type: `type Histogram interface { 	Record(ctx context.Context, val float64, labels ...Label) }`
+- type: `type Label struct { 	Key   string 	Value string }`
+- type: `type Meter interface { 	Counter(name, desc string, opts ...MetricOption) (Counter, error) 	Gauge(name, desc string, opts ...MetricOption) (Gauge, error) 	Histogram(name, desc string, opts ...MetricOption) (Histogram, error)  	Shutdown(ctx context.Context) error }`
+- type: `type MetricOption func(*metricOptions)`
+
+## `mq`
+
+- const: `const DriverNATSJetStream`
+- const: `const DriverRedisStream`
+- const: `const LabelDriver`
+- const: `const LabelStatus`
+- const: `const LabelTopic`
+- const: `const MetricConsumeTotal`
+- const: `const MetricHandleDuration`
+- const: `const MetricPublishDuration`
+- const: `const MetricPublishTotal`
+- const: `const StreamRetentionInterest`
+- const: `const StreamRetentionLimits`
+- const: `const StreamRetentionWorkQueue`
+- const: `const StreamStorageFile`
+- const: `const StreamStorageMemory`
+- func: `func Chain(middlewares ...Middleware) Middleware`
+- func: `func New(cfg *Config, opts ...Option) (MQ, error)`
+- func: `func WithAutoAck() SubscribeOption`
+- func: `func WithBatchSize(size int) SubscribeOption`
+- func: `func WithDeadLetter(pub MQ, dlTopic string, maxRetries int, logger clog.Logger) Middleware`
+- func: `func WithDurable(name string) SubscribeOption`
+- func: `func WithHeader(key, value string) PublishOption`
+- func: `func WithHeaders(h Headers) PublishOption`
+- func: `func WithLogger(l clog.Logger) Option`
+- func: `func WithLogging(logger clog.Logger) Middleware`
+- func: `func WithManualAck() SubscribeOption`
+- func: `func WithMaxInflight(n int) SubscribeOption`
+- func: `func WithMeter(m metrics.Meter) Option`
+- func: `func WithNATSConnector(conn connector.NATSConnector) Option`
+- func: `func WithQueueGroup(name string) SubscribeOption`
+- func: `func WithRecover(logger clog.Logger) Middleware`
+- func: `func WithRedisConnector(conn connector.RedisConnector) Option`
+- func: `func WithRetry(cfg RetryConfig, logger clog.Logger) Middleware`
+- method: `func (Headers) Clone() Headers`
+- method: `func (Headers) Get(key string) string`
+- method: `func (Headers) Set(key, value string)`
+- type: `type Config struct { 	Driver Driver \`json:"driver" yaml:"driver" mapstructure:"driver"\`  	JetStream *JetStreamConfig \`json:"jetstream,omitempty" yaml:"jetstream,omitempty" mapstructure:"jetstream"\`  	RedisStream *RedisStreamConfig \`json:"redis_stream,omitempty" yaml:"redis_stream,omitempty" mapstructure:"redis_stream"\` }`
+- type: `type Driver string`
+- type: `type Handler func(msg Message) error`
+- type: `type Headers map[string]string`
+- type: `type JetStreamConfig struct { 	AutoCreateStream bool \`json:"auto_create_stream" yaml:"auto_create_stream" mapstructure:"auto_create_stream"\`  	StreamPrefix string \`json:"stream_prefix" yaml:"stream_prefix" mapstructure:"stream_prefix"\`  	AckWait time.Duration \`json:"ack_wait" yaml:"ack_wait" mapstructure:"ack_wait"\`  	MaxDeliver int \`json:"max_deliver" yaml:"max_deliver" mapstructure:"max_deliver"\`  	Retention StreamRetention \`json:"retention" yaml:"retention" mapstructure:"retention"\` 	Storage   StreamStorage   \`json:"storage" yaml:"storage" mapstructure:"storage"\` 	MaxAge    time.Duration   \`json:"max_age" yaml:"max_age" mapstructure:"max_age"\` 	MaxBytes  int64           \`json:"max_bytes" yaml:"max_bytes" mapstructure:"max_bytes"\` 	Replicas  int             \`json:"replicas" yaml:"replicas" mapstructure:"replicas"\` }`
+- type: `type MQ interface { 	Publish(ctx context.Context, topic string, data []byte, opts ...PublishOption) error  	Subscribe(ctx context.Context, topic string, handler Handler, opts ...SubscribeOption) (Subscription, error)  	Drain(ctx context.Context) error  	Close() error }`
+- type: `type Message interface { 	Context() context.Context  	Topic() string  	Data() []byte  	Headers() Headers  	Ack() error  	Nak() error  	NakWithDelay(delay time.Duration) error  	ID() string }`
+- type: `type Middleware func(Handler) Handler`
+- type: `type Option func(*options)`
+- type: `type PublishOption func(*publishOptions)`
+- type: `type RedisStreamConfig struct { 	MaxLen int64 \`json:"max_len" yaml:"max_len" mapstructure:"max_len"\`  	Approximate bool \`json:"approximate" yaml:"approximate" mapstructure:"approximate"\`  	PendingIdle time.Duration \`json:"pending_idle" yaml:"pending_idle" mapstructure:"pending_idle"\` }`
+- type: `type RetryConfig struct { 	MaxRetries int  	InitialBackoff time.Duration  	MaxBackoff time.Duration  	Multiplier float64 }`
+- type: `type StreamRetention string`
+- type: `type StreamStorage string`
+- type: `type SubscribeOption func(*subscribeOptions)`
+- type: `type Subscription interface { 	Unsubscribe() error  	Drain(ctx context.Context) error  	Done() <-chan struct{} }`
+- type: `type Transport interface { 	Publish(ctx context.Context, topic string, data []byte, opts publishOptions) error  	Subscribe(subscribeCtx context.Context, topic string, handler Handler, opts subscribeOptions) (Subscription, error)  	Close() error }`
+- var: `var DefaultRetryConfig`
+- var: `var ErrClosed`
+- var: `var ErrInvalidConfig`
+- var: `var ErrNotSupported`
+- var: `var ErrPanicRecovered`
+- var: `var ErrSubscriptionClosed`
+
+## `ratelimit`
+
+- const: `const DriverDistributed`
+- const: `const DriverStandalone`
+- const: `const ErrorPolicyFailClosed`
+- const: `const ErrorPolicyFailOpen`
+- const: `const LabelErrorType`
+- const: `const LabelKey`
+- const: `const LabelMode`
+- const: `const MetricAllowTotal`
+- const: `const MetricAllowed`
+- const: `const MetricDenied`
+- const: `const MetricErrors`
+- func: `func Discard() Limiter`
+- func: `func GinMiddleware(limiter Limiter, opts *GinMiddlewareOptions) gin.HandlerFunc`
+- func: `func New(cfg *Config, opts ...Option) (Limiter, error)`
+- func: `func StreamClientInterceptor( 	limiter Limiter, 	keyFunc GRPCKeyFunc, 	limitFunc GRPCLimitFunc, ) grpc.StreamClientInterceptor`
+- func: `func StreamClientInterceptorWithOptions( 	limiter Limiter, 	keyFunc GRPCKeyFunc, 	limitFunc GRPCLimitFunc, 	opts *GRPCInterceptorOptions, ) grpc.StreamClientInterceptor`
+- func: `func StreamServerInterceptor( 	limiter Limiter, 	keyFunc GRPCKeyFunc, 	limitFunc GRPCLimitFunc, ) grpc.StreamServerInterceptor`
+- func: `func StreamServerInterceptorWithOptions( 	limiter Limiter, 	keyFunc GRPCKeyFunc, 	limitFunc GRPCLimitFunc, 	opts *GRPCInterceptorOptions, ) grpc.StreamServerInterceptor`
+- func: `func UnaryClientInterceptor( 	limiter Limiter, 	keyFunc GRPCKeyFunc, 	limitFunc GRPCLimitFunc, ) grpc.UnaryClientInterceptor`
+- func: `func UnaryClientInterceptorWithOptions( 	limiter Limiter, 	keyFunc GRPCKeyFunc, 	limitFunc GRPCLimitFunc, 	opts *GRPCInterceptorOptions, ) grpc.UnaryClientInterceptor`
+- func: `func UnaryServerInterceptor( 	limiter Limiter, 	keyFunc GRPCKeyFunc, 	limitFunc GRPCLimitFunc, ) grpc.UnaryServerInterceptor`
+- func: `func UnaryServerInterceptorWithOptions( 	limiter Limiter, 	keyFunc GRPCKeyFunc, 	limitFunc GRPCLimitFunc, 	opts *GRPCInterceptorOptions, ) grpc.UnaryServerInterceptor`
+- func: `func WithLogger(logger clog.Logger) Option`
+- func: `func WithMeter(meter metrics.Meter) Option`
+- func: `func WithRedisConnector(redisConn connector.RedisConnector) Option`
+- type: `type Config struct { 	Driver DriverType \`json:"driver" yaml:"driver"\`  	Standalone *StandaloneConfig \`json:"standalone" yaml:"standalone"\`  	Distributed *DistributedConfig \`json:"distributed" yaml:"distributed"\` }`
+- type: `type DistributedConfig struct { 	Prefix string \`json:"prefix" yaml:"prefix"\` }`
+- type: `type DriverType string`
+- type: `type ErrorPolicy string`
+- type: `type GRPCInterceptorOptions struct { 	ErrorPolicy ErrorPolicy 	Logger      clog.Logger }`
+- type: `type GRPCKeyFunc func(ctx context.Context, fullMethod string) string`
+- type: `type GRPCLimitFunc func(ctx context.Context, fullMethod string) Limit`
+- type: `type GinMiddlewareOptions struct { 	WithHeaders bool 	KeyFunc     func(*gin.Context) string 	LimitFunc   func(*gin.Context) Limit 	ErrorPolicy ErrorPolicy 	Logger      clog.Logger }`
+- type: `type Limit struct { 	Rate  float64 	Burst int }`
+- type: `type Limiter interface { 	Allow(ctx context.Context, key string, limit Limit) (bool, error)  	AllowN(ctx context.Context, key string, limit Limit, n int) (bool, error)  	Wait(ctx context.Context, key string, limit Limit) error  	Close() error }`
+- type: `type Option func(*options)`
+- type: `type StandaloneConfig struct { 	CleanupInterval time.Duration \`json:"cleanup_interval" yaml:"cleanup_interval"\`  	IdleTimeout time.Duration \`json:"idle_timeout" yaml:"idle_timeout"\` }`
+- var: `var ErrConfigNil`
+- var: `var ErrConnectorNil`
+- var: `var ErrInvalidLimit`
+- var: `var ErrKeyEmpty`
+- var: `var ErrNotSupported`
+- var: `var ErrRateLimitExceeded`
+
+## `registry`
+
+- const: `const EventTypeDelete`
+- const: `const EventTypePut`
+- const: `const MetricLeaseFailures`
+- const: `const MetricRegistrations`
+- const: `const MetricWatchEvents`
+- func: `func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, error)`
+- func: `func WithLogger(l clog.Logger) Option`
+- func: `func WithMeter(m metrics.Meter) Option`
+- method: `func (LeaseFailure) Error() string`
+- method: `func (LeaseFailure) Unwrap() error`
+- type: `type Config struct { 	Namespace string \`yaml:"namespace" json:"namespace"\`  	DefaultTTL time.Duration \`yaml:"default_ttl" json:"default_ttl"\`  	RetryInterval time.Duration \`yaml:"retry_interval" json:"retry_interval"\` }`
+- type: `type EventType string`
+- type: `type LeaseFailure struct { 	ServiceID   string 	ServiceName string 	Err         error }`
+- type: `type Option func(*options)`
+- type: `type Registry interface { 	Register(ctx context.Context, service *ServiceInstance, ttl time.Duration) error  	Deregister(ctx context.Context, serviceID string) error  	GetService(ctx context.Context, serviceName string) ([]*ServiceInstance, error)  	Watch(ctx context.Context, serviceName string) (<-chan ServiceEvent, error)  	LeaseFailures() <-chan LeaseFailure  	GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error)  	Shutdown(ctx context.Context) error  	Close() error }`
+- type: `type ServiceEvent struct { 	Type    EventType 	Service *ServiceInstance }`
+- type: `type ServiceInstance struct { 	ID        string            \`json:"id"\` 	Name      string            \`json:"name"\` 	Version   string            \`json:"version"\` 	Metadata  map[string]string \`json:"metadata"\` 	Endpoints []string          \`json:"endpoints"\` }`
+- var: `var ErrConnectionFailed`
+- var: `var ErrInvalidServiceInstance`
+- var: `var ErrInvalidTTL`
+- var: `var ErrLeaseExpired`
+- var: `var ErrRegistryAlreadyInitialized`
+- var: `var ErrRegistryClosed`
+- var: `var ErrServiceAlreadyRegistered`
+- var: `var ErrServiceNotFound`
+- var: `var ErrWatchClosed`
+
+## `testkit`
+
+- func: `func NewContext(t *testing.T, timeout time.Duration) (context.Context, context.CancelFunc)`
+- func: `func NewEtcdContainer(t *testing.T) (*etcdcontainer.EtcdContainer, *connector.EtcdConfig)`
+- func: `func NewEtcdContainerClient(t *testing.T) *clientv3.Client`
+- func: `func NewEtcdContainerConfig(t *testing.T) *connector.EtcdConfig`
+- func: `func NewEtcdContainerConnector(t *testing.T) connector.EtcdConnector`
+- func: `func NewID() string`
+- func: `func NewKafkaContainerClient(t *testing.T) *kgo.Client`
+- func: `func NewKafkaContainerConfig(t *testing.T) *connector.KafkaConfig`
+- func: `func NewKafkaContainerConnector(t *testing.T) connector.KafkaConnector`
+- func: `func NewKit(t *testing.T) *Kit`
+- func: `func NewLogger() clog.Logger`
+- func: `func NewMeter() metrics.Meter`
+- func: `func NewMySQLConnector(t *testing.T) connector.MySQLConnector`
+- func: `func NewMySQLContainerConfig(t *testing.T) *connector.MySQLConfig`
+- func: `func NewMySQLDB(t *testing.T) *gorm.DB`
+- func: `func NewNATSContainer(t *testing.T) (*natscontainer.NATSContainer, *connector.NATSConfig)`
+- func: `func NewNATSContainerConfig(t *testing.T) *connector.NATSConfig`
+- func: `func NewNATSContainerConn(t *testing.T) *nats.Conn`
+- func: `func NewNATSContainerConnector(t *testing.T) connector.NATSConnector`
+- func: `func NewPersistentSQLiteConfig(t *testing.T) *connector.SQLiteConfig`
+- func: `func NewPersistentSQLiteConnector(t *testing.T) connector.SQLiteConnector`
+- func: `func NewPostgreSQLConnector(t *testing.T) connector.PostgreSQLConnector`
+- func: `func NewPostgreSQLContainerConfig(t *testing.T) *connector.PostgreSQLConfig`
+- func: `func NewPostgreSQLDB(t *testing.T) *gorm.DB`
+- func: `func NewRedisContainerClient(t *testing.T) *redis.Client`
+- func: `func NewRedisContainerConfig(t *testing.T) *connector.RedisConfig`
+- func: `func NewRedisContainerConnector(t *testing.T) connector.RedisConnector`
+- func: `func NewSQLiteConfig() *connector.SQLiteConfig`
+- func: `func NewSQLiteConnector(t *testing.T) connector.SQLiteConnector`
+- func: `func NewSQLiteDB(t *testing.T) *gorm.DB`
+- func: `func RequireDocker(t *testing.T)`
+- type: `type Kit struct { 	Ctx    context.Context 	Logger clog.Logger 	Meter  metrics.Meter }`
+
+## `trace`
+
+- const: `const AttrMessagingConsumerGroup`
+- const: `const AttrMessagingDestination`
+- const: `const AttrMessagingOperation`
+- const: `const AttrMessagingSystem`
+- const: `const MessagingOperationConsume`
+- const: `const MessagingOperationProcess`
+- const: `const MessagingOperationPublish`
+- const: `const MessagingSystemNATS`
+- const: `const MessagingTraceRelationChildOf`
+- const: `const MessagingTraceRelationLink`
+- func: `func DefaultConfig(serviceName string) *Config`
+- func: `func Discard(serviceName string) (func(context.Context) error, error)`
+- func: `func Extract(ctx context.Context, carrier map[string]string) context.Context`
+- func: `func GRPCClientStatsHandler() stats.Handler`
+- func: `func GRPCServerStatsHandler() stats.Handler`
+- func: `func GinMiddleware(serviceName string) gin.HandlerFunc`
+- func: `func HTTPHandler(handler http.Handler, operation string, opts ...otelhttp.Option) http.Handler`
+- func: `func HTTPTransport(base http.RoundTripper, opts ...otelhttp.Option) *otelhttp.Transport`
+- func: `func Init(cfg *Config) (func(context.Context) error, error)`
+- func: `func Inject(ctx context.Context, carrier map[string]string)`
+- func: `func MarkSpanError(span oteltrace.Span, err error)`
+- func: `func SpanNameMQConsume(destination string) string`
+- func: `func SpanNameMQPublish(destination string) string`
+- func: `func StartConsumerSpanFromHeaders( 	ctx context.Context, 	tracer oteltrace.Tracer, 	spanName string, 	headers map[string]string, 	meta MessagingMeta, 	attrs ...attribute.KeyValue, ) (context.Context, oteltrace.Span)`
+- func: `func StartProducerSpan( 	ctx context.Context, 	tracer oteltrace.Tracer, 	spanName string, 	meta MessagingMeta, 	attrs ...attribute.KeyValue, ) (context.Context, oteltrace.Span, map[string]string)`
+- type: `type Config struct { 	ServiceName     string        \`mapstructure:"service_name"\` 	Version         string        \`mapstructure:"version"\` 	InstanceID      string        \`mapstructure:"instance_id"\` 	Environment     string        \`mapstructure:"environment"\` 	Endpoint        string        \`mapstructure:"endpoint"\` 	Sampler         float64       \`mapstructure:"sampler"\` 	Batcher         string        \`mapstructure:"batcher"\` 	Insecure        bool          \`mapstructure:"insecure"\` 	ExporterTimeout time.Duration \`mapstructure:"exporter_timeout"\`  	ExportErrors chan<- error \`mapstructure:"-" json:"-" yaml:"-"\` }`
+- type: `type MessagingMeta struct { 	System        string 	Destination   string 	Operation     string 	ConsumerGroup string  	TraceRelation MessagingTraceRelation }`
+- type: `type MessagingTraceRelation string`
+
+## `xerrors`
+
+- func: `func Combine(errs ...error) error`
+- func: `func GetCode(err error) string`
+- func: `func Must[T any](v T, err error) T`
+- func: `func MustOK[T any](v T, ok bool) T`
+- func: `func WithCode(err error, code string) error`
+- func: `func Wrap(err error, msg string) error`
+- func: `func Wrapf(err error, format string, args ...any) error`
+- method: `func (*Collector) Collect(err error)`
+- method: `func (*Collector) Err() error`
+- method: `func (*CodedError) Error() string`
+- method: `func (*MultiError) Error() string`
+- method: `func (*CodedError) Unwrap() error`
+- method: `func (*MultiError) Unwrap() []error`
+- type: `type CodedError struct { 	Code  string 	Cause error }`
+- type: `type Collector struct { 	err error }`
+- type: `type MultiError struct { 	Errors []error }`
+- var: `var As`
+- var: `var Is`
+- var: `var Join`
+- var: `var New`
+- var: `var Unwrap`

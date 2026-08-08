@@ -44,13 +44,20 @@ modernize:
 
 modernize-check:
 	@echo "检查 go fix 建议..."
-	@out="$$(go fix -diff ./...)"; \
-	if [ -n "$$out" ]; then \
-		printf '%s\n' "$$out"; \
+	@out_file="$$(mktemp)"; \
+	if ! go fix -diff ./... >"$$out_file"; then \
+		cat "$$out_file"; \
+		rm -f "$$out_file"; \
+		exit 1; \
+	fi; \
+	if [ -s "$$out_file" ]; then \
+		cat "$$out_file"; \
 		echo ""; \
 		echo "检测到可应用的 go fix 变更，请运行: go fix ./..."; \
+		rm -f "$$out_file"; \
 		exit 1; \
-	fi
+	fi; \
+	rm -f "$$out_file"
 
 clean:
 	@echo "清理卷和网络..."
@@ -75,8 +82,8 @@ example-%:
 example-all:
 	@echo "运行所有示例..."
 	for d in examples/*; do \
-		if [ -f "$d/main.go" ]; then \
-			echo "运行 $(basename $d) 示例..."; \
-			(cd "$d" && go run main.go) || exit 1; \
+		if [ -f "$$d/main.go" ]; then \
+			echo "运行 $$(basename $$d) 示例..."; \
+			(cd "$$d" && go run main.go) || exit 1; \
 		fi; \
 	done
