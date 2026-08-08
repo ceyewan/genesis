@@ -1,4 +1,4 @@
-.PHONY: help up down test lint modernize modernize-check clean logs status examples buf-lint
+.PHONY: help up down test lint modernize modernize-check clean logs status examples buf-lint api-inventory api-inventory-check
 
 DEV_COMPOSE_FILE := deploy/dev/docker-compose.yml
 BUF_DIR := examples/proto
@@ -14,6 +14,8 @@ help:
 	@echo "  make buf-lint  - 检查共享示例 proto 定义"
 	@echo "  make modernize - 运行 go fix 现代化代码"
 	@echo "  make modernize-check - 检查是否存在 go fix 建议"
+	@echo "  make api-inventory - 更新 v1 导出 API 清单"
+	@echo "  make api-inventory-check - 检查 v1 导出 API 清单漂移"
 	@echo "  make clean     - 清理卷和网络"
 	@echo "  make logs      - 显示所有服务日志"
 	@echo "  make status    - 查看服务状态"
@@ -58,6 +60,12 @@ modernize-check:
 		exit 1; \
 	fi; \
 	rm -f "$$out_file"
+
+api-inventory:
+	@go run ./internal/cmd/apiinventory -write docs/v1-api-inventory.md
+
+api-inventory-check:
+	@go run ./internal/cmd/apiinventory -check docs/v1-api-inventory.md
 
 clean:
 	@echo "清理卷和网络..."

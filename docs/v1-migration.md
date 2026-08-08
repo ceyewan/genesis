@@ -49,12 +49,28 @@ Use `mq.Drain(ctx)` when active handlers should finish. Use `mq.Close()` for bou
 
 Both shutdown paths are now concurrent and idempotent. Trace's legacy `Batcher: "simple"` value remains accepted but is asynchronous; it no longer makes `span.End` wait for OTLP. Supply a buffered `trace.Config.ExportErrors` channel if the application needs exporter-failure alerts.
 
+### External interface implementations
+
+Several public interfaces gained lifecycle or delivery methods. Ordinary callers of the constructors do not need adapter changes, but mocks, wrappers and third-party implementations must add the following methods:
+
+| Interface | Added in v1 |
+| --- | --- |
+| `config.Loader` | `Close() error` |
+| `idem.Idempotency` | `Close() error` |
+| `mq.MQ` | `Drain(context.Context) error` |
+| `mq.Message` | `NakWithDelay(time.Duration) error` |
+| `mq.Subscription` | `Drain(context.Context) error` |
+| `registry.Registry` | `LeaseFailures() <-chan LeaseFailure`, `Shutdown(context.Context) error` |
+
+The unusable pre-v1 `mq.Transport` symbol has been removed. It exposed package-private option-state types, so external packages could not implement it. MQ middleware remains the supported extension point; a future third-party driver API would require a separate public contract.
+
 ## Configuration review
 
 - Constructors copy configs before defaults. Do not mutate a config to reconfigure a live component; construct a replacement instead.
 - Public TTLs use `time.Duration`. Replace bare numeric values with explicit units.
 - Etcd-backed TTLs must be at least one second.
 - NATS JetStream now exposes `AckWait`, `MaxDeliver`, retention, storage, max age, max bytes and replicas. Review auto-created stream settings before production use.
+- JetStream queue-group and durable consumer identities are now scoped by topic. Reusing one logical name across topics no longer rewrites another subscription's filter, but the physical JetStream durable name differs from pre-v1 candidates.
 - Observability configs support `Version`, `InstanceID` and `Environment`; set the same values for trace, metrics and clog.
 - Connector and registry constructors accept `WithMeter` for internal health, reconnect, registration, watch and lease metrics.
 

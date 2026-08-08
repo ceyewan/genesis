@@ -44,10 +44,13 @@ Exported sentinel errors remain usable through `errors.Is`. Wrapped dependency f
 | `idem.Idempotency`, standalone ratelimit, local cache | own their internal cleanup goroutines and stop them on `Close` |
 | distributed cache/ratelimit, `db.DB`, multi-cache | borrowers; their `Close` is a no-op and never closes injected dependencies |
 
+Concurrent trace and metrics shutdown callers wait with their own contexts; cancellation of one waiter does not prevent another waiter from observing completion. Redis Stream Drain stops broker reads without canceling an active handler context, and only force-cancels remaining handlers when the Drain context expires.
+
 ## Runtime boundaries
 
 - Auth is a local HS256 access/refresh JWT component. Issuer, audience, expiry, signing algorithm and token type are enforced. Machine identities use standard `Subject`, roles and namespaced `Extra` claims; OAuth2/OIDC, revocation and a machine-identity directory are outside this module.
 - MQ owns transport acknowledgement, redelivery, durability, queue-group, backpressure, reconnect and drain behavior. Business retry classification and DLQ payload/topic policy remain application concerns.
+- JetStream queue-group and durable identities are scoped by topic because one Genesis stream can contain several topics; the same logical name on different topics creates independent consumers.
 - Registry Watch emits a linearizable initial snapshot before changes. Unexpected lease loss is reported through `LeaseFailures`.
 - Trace uses W3C Trace Context and Baggage for HTTP, gRPC and MQ helpers. OTLP export is asynchronous even for the legacy `simple` batcher value. Optional `ExportErrors` receives failures without blocking exporter workers.
 - `service.name`, `service.version`, `service.instance.id` and `deployment.environment` are the shared resource/log field names across trace, metrics and clog.
@@ -55,3 +58,5 @@ Exported sentinel errors remain usable through `errors.Is`. Wrapped dependency f
 ## Package stability
 
 All importable non-example packages in this module, including `testkit`, are part of the v1 review surface and are listed in the API inventory. `testkit` is stable test support, not production runtime API. Generated packages under `examples` are examples and are not versioned as reusable application contracts. No current runtime package is marked experimental, split into another module, or removed for v1.
+
+`mq` transport implementations are intentionally package-internal. The pre-v1 exported `mq.Transport` name was removed because its methods depended on unexported option-state types and external packages could not implement it. Applications extend MQ behavior through `Middleware` and the public option constructors; adding third-party broker drivers requires a future explicit public driver contract rather than depending on the internal transport interface.
