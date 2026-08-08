@@ -2,7 +2,6 @@ package trace
 
 import (
 	"context"
-	"sync"
 
 	"github.com/ceyewan/genesis/xerrors"
 
@@ -11,7 +10,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
-	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 // Discard 创建一个不导出数据的 TracerProvider，仅用于本地生成 TraceID。
@@ -46,26 +44,5 @@ func Discard(serviceName string) (func(context.Context) error, error) {
 		propagation.Baggage{},
 	))
 
-	var shutdownOnce sync.Once
-	shutdownDone := make(chan struct{})
-	var shutdownErr error
-	return func(ctx context.Context) error {
-		shutdownOnce.Do(func() {
-			defer close(shutdownDone)
-			shutdownErr = tp.Shutdown(ctx)
-			if otel.GetTracerProvider() == tp {
-				otel.SetTracerProvider(tracenoop.NewTracerProvider())
-				otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-					propagation.TraceContext{},
-					propagation.Baggage{},
-				))
-			}
-		})
-		select {
-		case <-shutdownDone:
-			return shutdownErr
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}, nil
+	return newTracerShutdown(tp), nil
 }

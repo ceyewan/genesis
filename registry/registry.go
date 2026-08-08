@@ -224,6 +224,9 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.isClosed() {
+		return ErrRegistryClosed
+	}
 
 	// 检查是否已注册
 	if _, exists := r.keepAlives[service.ID]; exists {
@@ -398,12 +401,16 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 	r.watchSeq++
 	watchID := r.watchSeq
 	r.watchers[watchID] = cancel
+	// Reserve the worker before releasing mu. Shutdown takes the same mutex
+	// before waiting, so no positive Add can race with a zero-count Wait.
+	r.wg.Add(1)
 	r.mu.Unlock()
 	cleanupWatcher := func() {
 		cancel()
 		r.mu.Lock()
 		delete(r.watchers, watchID)
 		r.mu.Unlock()
+		r.wg.Done()
 	}
 
 	// 先读取线性一致的初始快照，并从快照 revision+1 开始 watch。
@@ -416,7 +423,8 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 	eventCh := make(chan ServiceEvent, max(100, len(snapshot.Kvs)))
 
 	// 启动 watch goroutine
-	r.wg.Go(func() {
+	go func() {
+		defer r.wg.Done()
 		defer close(eventCh)
 		defer func() {
 			r.mu.Lock()
@@ -561,7 +569,7 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 			case <-timer.C:
 			}
 		}
-	})
+	}()
 
 	return eventCh, nil
 }
@@ -641,7 +649,9 @@ func (r *etcdRegistry) Shutdown(ctx context.Context) error {
 	defer cancel()
 
 	r.closeOnce.Do(func() {
+		r.mu.Lock()
 		atomic.StoreUint32(&r.closed, 1)
+		r.mu.Unlock()
 		clearDefaultRegistry(r)
 		go func() {
 			r.closeErr = r.shutdown(shutdownCtx)

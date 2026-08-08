@@ -86,10 +86,10 @@ defer sub.Unsubscribe()
 
 | 选项 | 描述 | 驱动支持 |
 |------|------|----------|
-| `WithQueueGroup(name)` | 消费组，多实例竞争消费 | JetStream: durable consumer 名；Redis: consumer group 名 |
+| `WithQueueGroup(name)` | 消费组，多实例竞争消费 | JetStream: 按 topic 隔离的 durable consumer 逻辑名；Redis: consumer group 名 |
 | `WithAutoAck()` | 开启自动确认 | 两者 |
 | `WithManualAck()` | 手动确认（默认） | 两者 |
-| `WithDurable(name)` | 消费者实例名 | JetStream: durable consumer 名（QueueGroup 为空时）；Redis: consumer name |
+| `WithDurable(name)` | 消费者实例名 | JetStream: 按 topic 隔离的 durable consumer 逻辑名（QueueGroup 为空时）；Redis: consumer name |
 | `WithBatchSize(n)` | 单次拉取大小，默认 10 | Redis 有效；JetStream 当前无效（push 模式） |
 | `WithMaxInflight(n)` | 最大在途消息数 | JetStream 对应 `MaxAckPending`；Redis 无对应 |
 

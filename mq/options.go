@@ -122,7 +122,8 @@ func WithAutoAck() SubscribeOption {
 // WithDurable 设置消费者实例名称
 //
 // 驱动映射（语义不同，请注意区分）：
-//   - NATS JetStream: 映射为 durable consumer 名称，是消费进度游标的身份标识；
+//   - NATS JetStream: 作为 durable consumer 的逻辑名称；实现会按 topic 添加稳定后缀，
+//     避免同一 stream 内多个 topic 共用名称时互相改写 FilterSubject。
 //     未设置 WithQueueGroup 时生效，设置后 WithQueueGroup 优先。
 //   - Redis Stream: 映射为 consumer name，是同一 group 内消费者实例的标识；
 //     需与 WithQueueGroup 配合使用，单独设置无持久化效果。

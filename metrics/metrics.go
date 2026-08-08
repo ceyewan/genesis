@@ -190,29 +190,31 @@ func (m *meterImpl) Histogram(name, desc string, opts ...MetricOption) (Histogra
 
 func (m *meterImpl) Shutdown(ctx context.Context) error {
 	m.shutdownOnce.Do(func() {
-		defer close(m.shutdownDone)
-		var serverErr error
-		if m.httpServer != nil {
-			if err := m.httpServer.Shutdown(ctx); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
-				serverErr = xerrors.Wrap(err, "shutdown server")
-			}
-			select {
-			case <-m.httpDone:
-			case <-ctx.Done():
-				if serverErr == nil {
-					serverErr = xerrors.Wrap(ctx.Err(), "wait for metrics server")
+		go func(shutdownCtx context.Context) {
+			defer close(m.shutdownDone)
+			var serverErr error
+			if m.httpServer != nil {
+				if err := m.httpServer.Shutdown(shutdownCtx); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
+					serverErr = xerrors.Wrap(err, "shutdown server")
+				}
+				select {
+				case <-m.httpDone:
+				case <-shutdownCtx.Done():
+					if serverErr == nil {
+						serverErr = xerrors.Wrap(shutdownCtx.Err(), "wait for metrics server")
+					}
 				}
 			}
-		}
-		providerErr := m.provider.Shutdown(ctx)
-		if providerErr != nil {
-			providerErr = xerrors.Wrap(providerErr, "shutdown provider")
-		}
+			providerErr := m.provider.Shutdown(shutdownCtx)
+			if providerErr != nil {
+				providerErr = xerrors.Wrap(providerErr, "shutdown provider")
+			}
 
-		if otel.GetMeterProvider() == m.provider {
-			otel.SetMeterProvider(metricnoop.NewMeterProvider())
-		}
-		m.shutdownErr = xerrors.Combine(serverErr, providerErr)
+			if otel.GetMeterProvider() == m.provider {
+				otel.SetMeterProvider(metricnoop.NewMeterProvider())
+			}
+			m.shutdownErr = xerrors.Combine(serverErr, providerErr)
+		}(ctx)
 	})
 
 	select {

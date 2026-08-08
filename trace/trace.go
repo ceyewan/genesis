@@ -111,20 +111,26 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 		propagation.Baggage{},
 	))
 
+	return newTracerShutdown(tp), nil
+}
+
+func newTracerShutdown(tp *sdktrace.TracerProvider) func(context.Context) error {
 	var shutdownOnce sync.Once
 	shutdownDone := make(chan struct{})
 	var shutdownErr error
 	return func(ctx context.Context) error {
 		shutdownOnce.Do(func() {
-			defer close(shutdownDone)
-			shutdownErr = tp.Shutdown(ctx)
-			if otel.GetTracerProvider() == tp {
-				otel.SetTracerProvider(tracenoop.NewTracerProvider())
-				otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-					propagation.TraceContext{},
-					propagation.Baggage{},
-				))
-			}
+			go func(shutdownCtx context.Context) {
+				defer close(shutdownDone)
+				shutdownErr = tp.Shutdown(shutdownCtx)
+				if otel.GetTracerProvider() == tp {
+					otel.SetTracerProvider(tracenoop.NewTracerProvider())
+					otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+						propagation.TraceContext{},
+						propagation.Baggage{},
+					))
+				}
+			}(ctx)
 		})
 		select {
 		case <-shutdownDone:
@@ -132,7 +138,7 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-	}, nil
+	}
 }
 
 type reportingExporter struct {

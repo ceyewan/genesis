@@ -599,7 +599,7 @@ func TestLabelConstants(t *testing.T) {
 // Mock 实现（用于测试）
 // ============================================================
 
-// mockTransport 是 Transport 的 mock 实现
+// mockTransport 是 transport 的 mock 实现
 type mockTransport struct {
 	publishCalled     bool
 	subscribeCalled   bool
@@ -767,7 +767,7 @@ func (m *mockMessageNakNotSupported) Nak() error {
 }
 
 // newMQ 创建一个用于测试的 MQ 实例
-func newMQ(transport Transport, logger clog.Logger, meter metrics.Meter) MQ {
+func newMQ(transport transport, logger clog.Logger, meter metrics.Meter) MQ {
 	return &mq{
 		transport:     transport,
 		logger:        logger,

@@ -197,7 +197,13 @@ func (r *etcdResolver) handleEvent(event ServiceEvent) {
 
 	switch event.Type {
 	case EventTypePut:
-		// 服务注册或更新
+		// 服务注册或更新。PUT 表示该实例的完整当前状态，必须先移除旧地址，
+		// 否则 endpoint 变化后旧地址会永久残留在 resolver cache 中。
+		for key := range r.localCache {
+			if strings.HasPrefix(key, event.Service.ID+"_") {
+				delete(r.localCache, key)
+			}
+		}
 		for _, endpoint := range event.Service.Endpoints {
 			addr := parseGRPCEndpoint(endpoint)
 			if addr != "" {

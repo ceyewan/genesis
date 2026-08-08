@@ -2,13 +2,81 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"net"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
+
+func TestShutdownHonorsEachCallersContext(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(started)
+		<-release
+	})}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		_ = server.Serve(listener)
+	}()
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		response, requestErr := http.Get("http://" + listener.Addr().String())
+		if requestErr == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	<-started
+
+	meter := &meterImpl{
+		provider:     sdkmetric.NewMeterProvider(),
+		httpServer:   server,
+		httpDone:     httpDone,
+		shutdownDone: make(chan struct{}),
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- meter.Shutdown(context.Background()) }()
+
+	// Wait until the first caller has started Shutdown and closed the listener.
+	for {
+		conn, dialErr := net.DialTimeout("tcp", listener.Addr().String(), 10*time.Millisecond)
+		if dialErr != nil {
+			break
+		}
+		_ = conn.Close()
+		time.Sleep(time.Millisecond)
+	}
+
+	callerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- meter.Shutdown(callerCtx) }()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("second Shutdown error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second Shutdown ignored its context")
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	<-requestDone
+}
 
 func TestNewCopiesConfigAndShutdownIsConcurrentIdempotent(t *testing.T) {
 	cfg := &Config{ServiceName: "svc", Version: "v1", InstanceID: "one", Environment: "test"}

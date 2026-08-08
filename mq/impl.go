@@ -14,7 +14,7 @@ import (
 
 // mq 是 MQ 接口的实现
 type mq struct {
-	transport Transport
+	transport transport
 	logger    clog.Logger
 	meter     metrics.Meter
 	driver    Driver

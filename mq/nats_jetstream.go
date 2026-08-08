@@ -2,6 +2,7 @@ package mq
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"regexp"
 	"strings"
@@ -109,9 +110,9 @@ func (t *natsJetStreamTransport) Subscribe(ctx context.Context, topic string, ha
 	// 设置 Durable 名称
 	// 同一 Durable 的多个消费者实例会竞争消费（负载均衡）
 	if opts.QueueGroup != "" {
-		consumerCfg.Durable = sanitizeName(opts.QueueGroup)
+		consumerCfg.Durable = durableConsumerName(opts.QueueGroup, topic)
 	} else if opts.DurableName != "" {
-		consumerCfg.Durable = sanitizeName(opts.DurableName)
+		consumerCfg.Durable = durableConsumerName(opts.DurableName, topic)
 	}
 
 	// 设置 AckWait（等待 Ack 的超时时间）
@@ -263,6 +264,15 @@ var invalidChars = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
 func sanitizeName(name string) string {
 	return invalidChars.ReplaceAllString(name, "_")
+}
+
+// durableConsumerName scopes a logical queue/durable identity to its topic.
+// JetStream durable names are stream-scoped, while Genesis streams may contain
+// multiple topics. Without the suffix, subscribing the same logical identity to
+// a second topic updates the first consumer's FilterSubject.
+func durableConsumerName(name, topic string) string {
+	hash := sha256.Sum256([]byte(topic))
+	return fmt.Sprintf("%s-%x", sanitizeName(name), hash[:8])
 }
 
 // ==================== Message 实现 ====================

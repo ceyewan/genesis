@@ -56,7 +56,7 @@ type MQ interface {
 
 // New 创建 MQ 实例
 //
-// 根据 Config.Driver 选择底层 Transport 实现。
+// 根据 Config.Driver 选择包内部的底层 transport 实现。
 // 必需依赖通过 Option 注入：
 //   - NATS JetStream: WithNATSConnector
 //   - Redis Stream: WithRedisConnector
@@ -88,7 +88,7 @@ func New(cfg *Config, opts ...Option) (MQ, error) {
 
 	o := applyOptions(opts...)
 
-	// 创建 Transport
+	// 创建 transport
 	transport, err := newTransport(cfg, o)
 	if err != nil {
 		return nil, err
@@ -104,8 +104,8 @@ func New(cfg *Config, opts ...Option) (MQ, error) {
 	}, nil
 }
 
-// newTransport 根据配置创建对应的 Transport 实现
-func newTransport(cfg *Config, o *options) (Transport, error) {
+// newTransport 根据配置创建对应的 transport 实现
+func newTransport(cfg *Config, o *options) (transport, error) {
 	switch cfg.Driver {
 	case DriverNATSJetStream:
 		if o.natsConnector == nil {

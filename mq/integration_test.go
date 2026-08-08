@@ -1,6 +1,7 @@
 package mq
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -40,6 +41,19 @@ func newJetStreamMQWithConfig(t *testing.T, jsCfg *JetStreamConfig) MQ {
 	t.Cleanup(func() { _ = mq.Close() })
 
 	return mq
+}
+
+func newRedisStreamMQ(t *testing.T) MQ {
+	t.Helper()
+	kit := testkit.NewKit(t)
+	redisConn := testkit.NewRedisContainerConnector(t)
+	q, err := New(&Config{
+		Driver:      DriverRedisStream,
+		RedisStream: &RedisStreamConfig{},
+	}, WithRedisConnector(redisConn), WithLogger(kit.Logger), WithMeter(kit.Meter))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = q.Close() })
+	return q
 }
 
 func uniqueSubject() string {
@@ -139,6 +153,59 @@ func TestJetStreamQueueGroupIntegration(t *testing.T) {
 		close(done)
 	}()
 	waitTimeout(t, done, 5*time.Second)
+}
+
+func TestJetStreamConsumerIdentityIsScopedByTopicIntegration(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 15*time.Second)
+	defer cancel()
+
+	q := newJetStreamMQ(t)
+	tests := []struct {
+		name   string
+		option func(string) SubscribeOption
+	}{
+		{name: "queue group", option: WithQueueGroup},
+		{name: "durable", option: WithDurable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := "t" + testkit.NewID()
+			firstTopic := base + ".first"
+			secondTopic := base + ".second"
+			identity := "consumer-" + testkit.NewID()
+			firstDone := make(chan string, 1)
+			secondDone := make(chan string, 1)
+
+			first, err := q.Subscribe(ctx, firstTopic, func(msg Message) error {
+				firstDone <- msg.Topic()
+				return nil
+			}, tt.option(identity), WithAutoAck())
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = first.Unsubscribe() })
+
+			second, err := q.Subscribe(ctx, secondTopic, func(msg Message) error {
+				secondDone <- msg.Topic()
+				return nil
+			}, tt.option(identity), WithAutoAck())
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = second.Unsubscribe() })
+
+			require.NoError(t, q.Publish(ctx, firstTopic, []byte("first")))
+			require.NoError(t, q.Publish(ctx, secondTopic, []byte("second")))
+			select {
+			case got := <-firstDone:
+				require.Equal(t, firstTopic, got)
+			case <-time.After(5 * time.Second):
+				t.Fatal("timeout waiting for first topic")
+			}
+			select {
+			case got := <-secondDone:
+				require.Equal(t, secondTopic, got)
+			case <-time.After(5 * time.Second):
+				t.Fatal("timeout waiting for second topic")
+			}
+		})
+	}
 }
 
 func TestJetStreamMultiGroupBroadcastIntegration(t *testing.T) {
@@ -292,7 +359,7 @@ func TestJetStreamAutoCreateConfigAndPublishAckIntegration(t *testing.T) {
 	require.Equal(t, int64(1<<20), streamInfo.Config.MaxBytes)
 	require.Equal(t, 1, streamInfo.Config.Replicas)
 
-	consumer, err := stream.Consumer(ctx, durable)
+	consumer, err := stream.Consumer(ctx, durableConsumerName(durable, subject))
 	require.NoError(t, err)
 	consumerInfo, err := consumer.Info(ctx)
 	require.NoError(t, err)
@@ -401,6 +468,60 @@ func TestJetStreamDrainWaitsForHandlerIntegration(t *testing.T) {
 	require.ErrorIs(t, q.Publish(ctx, subject, []byte("closed")), ErrClosed)
 }
 
+func TestRedisStreamDrainPreservesActiveHandlerContext(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 10*time.Second)
+	defer cancel()
+
+	q := newRedisStreamMQ(t)
+	topic := uniqueSubject()
+	handlerContext := make(chan context.Context, 1)
+	release := make(chan struct{})
+	sub, err := q.Subscribe(ctx, topic, func(msg Message) error {
+		handlerContext <- msg.Context()
+		<-release
+		return msg.Ack()
+	}, WithQueueGroup(uniqueGroup()), WithDurable("d-"+testkit.NewID()), WithManualAck())
+	require.NoError(t, err)
+
+	require.NoError(t, q.Publish(ctx, topic, []byte("drain")))
+	messageCtx := <-handlerContext
+	drained := make(chan error, 1)
+	go func() { drained <- sub.Drain(ctx) }()
+	select {
+	case err := <-drained:
+		t.Fatalf("Drain returned before active handler completed: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	require.NoError(t, messageCtx.Err(), "graceful Drain canceled the active handler context")
+	close(release)
+	require.NoError(t, <-drained)
+}
+
+func TestRedisStreamDrainDeadlineCancelsActiveHandler(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 10*time.Second)
+	defer cancel()
+
+	q := newRedisStreamMQ(t)
+	topic := uniqueSubject()
+	handlerStarted := make(chan struct{})
+	handlerDone := make(chan error, 1)
+	sub, err := q.Subscribe(ctx, topic, func(msg Message) error {
+		close(handlerStarted)
+		<-msg.Context().Done()
+		handlerDone <- msg.Context().Err()
+		return msg.Context().Err()
+	}, WithQueueGroup(uniqueGroup()), WithDurable("d-"+testkit.NewID()), WithManualAck())
+	require.NoError(t, err)
+
+	require.NoError(t, q.Publish(ctx, topic, []byte("force")))
+	waitTimeout(t, handlerStarted, 5*time.Second)
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer drainCancel()
+	require.ErrorIs(t, sub.Drain(drainCtx), context.DeadlineExceeded)
+	require.ErrorIs(t, <-handlerDone, context.Canceled)
+	waitTimeout(t, sub.Done(), 5*time.Second)
+}
+
 func TestJetStreamReconnectAndResumeIntegration(t *testing.T) {
 	ctx, cancel := testkit.NewContext(t, 20*time.Second)
 	defer cancel()
@@ -451,15 +572,14 @@ func TestJetStreamReconnectAndResumeIntegration(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return conn.GetClient().Status() != natsgo.CONNECTED
 	}, 5*time.Second, 20*time.Millisecond)
-	require.False(t, conn.IsHealthy())
+	require.Eventually(t, func() bool {
+		return !conn.IsHealthy()
+	}, 5*time.Second, 20*time.Millisecond)
 	unpauseOutput, unpauseErr := exec.CommandContext(ctx, "docker", "unpause", containerID).CombinedOutput()
 	require.NoErrorf(t, unpauseErr, "docker unpause: %s", unpauseOutput)
-	reconnectDeadline := time.Now().Add(10 * time.Second)
-	for conn.GetClient().Status() != natsgo.CONNECTED && time.Now().Before(reconnectDeadline) {
-		time.Sleep(25 * time.Millisecond)
-	}
-	require.Equalf(t, natsgo.CONNECTED, conn.GetClient().Status(), "last error: %v", conn.GetClient().LastError())
-	require.True(t, conn.IsHealthy())
+	require.Eventuallyf(t, func() bool {
+		return conn.GetClient().Status() == natsgo.CONNECTED && conn.IsHealthy()
+	}, 10*time.Second, 20*time.Millisecond, "last error: %v", conn.GetClient().LastError())
 
 	require.NoError(t, q.Publish(ctx, subject, []byte("after")))
 	waitTimeout(t, after, 5*time.Second)

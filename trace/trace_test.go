@@ -19,6 +19,47 @@ func (e failingSpanExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySpa
 }
 func (e failingSpanExporter) Shutdown(context.Context) error { return nil }
 
+type blockingSpanProcessor struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (*blockingSpanProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
+func (*blockingSpanProcessor) OnEnd(sdktrace.ReadOnlySpan)                     {}
+func (*blockingSpanProcessor) ForceFlush(context.Context) error                { return nil }
+func (p *blockingSpanProcessor) Shutdown(context.Context) error {
+	close(p.started)
+	<-p.release
+	return nil
+}
+
+func TestShutdownHonorsEachCallersContext(t *testing.T) {
+	processor := &blockingSpanProcessor{started: make(chan struct{}), release: make(chan struct{})}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+	shutdown := newTracerShutdown(provider)
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- shutdown(context.Background()) }()
+	<-processor.started
+
+	callerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- shutdown(callerCtx) }()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("second shutdown error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second shutdown ignored its context")
+	}
+
+	close(processor.release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReportingExporterExposesFailureWithoutBlocking(t *testing.T) {
 	want := errors.New("collector unavailable")
 	errorsCh := make(chan error, 1)

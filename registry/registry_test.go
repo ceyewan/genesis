@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -839,6 +840,47 @@ func TestResolverPushesEmptyState(t *testing.T) {
 	r.pushStateLocked()
 	require.NotNil(t, cc.lastState)
 	require.Empty(t, cc.lastState.Addresses)
+}
+
+func TestResolverPutReplacesInstanceEndpoints(t *testing.T) {
+	cc := &testResolverClientConn{}
+	r := &etcdResolver{
+		registry:    &etcdRegistry{logger: testkit.NewLogger()},
+		serviceName: "endpoint-update-test",
+		cc:          cc,
+		initialized: true,
+		localCache: map[string]resolver.Address{
+			"instance-1_127.0.0.1:9000": {Addr: "127.0.0.1:9000"},
+		},
+	}
+
+	r.handleEvent(ServiceEvent{Type: EventTypePut, Service: &ServiceInstance{
+		ID:        "instance-1",
+		Name:      "endpoint-update-test",
+		Endpoints: []string{"grpc://127.0.0.1:9001"},
+	}})
+
+	require.NotNil(t, cc.lastState)
+	require.Equal(t, []resolver.Address{{Addr: "127.0.0.1:9001", ServerName: "endpoint-update-test"}}, cc.lastState.Addresses)
+}
+
+func TestRegisterRechecksClosedStateInsideCriticalSection(t *testing.T) {
+	reg := setupRegistry(t, "/test/register-shutdown-race")
+	internal := reg.(*etcdRegistry)
+	internal.mu.Lock()
+	registerDone := make(chan error, 1)
+	go func() {
+		registerDone <- internal.Register(context.Background(), &ServiceInstance{
+			ID:        "race-instance",
+			Name:      "race-service",
+			Endpoints: []string{"grpc://127.0.0.1:9000"},
+		}, 10*time.Second)
+	}()
+	// Let Register pass its optimistic fast-path check and block on mu.
+	time.Sleep(20 * time.Millisecond)
+	atomic.StoreUint32(&internal.closed, 1)
+	internal.mu.Unlock()
+	require.ErrorIs(t, <-registerDone, ErrRegistryClosed)
 }
 
 func TestResolverConcurrentCloseWaitsForWorker(t *testing.T) {
