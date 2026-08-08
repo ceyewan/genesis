@@ -14,7 +14,7 @@
 
 这意味着它更适合作为**应用启动时初始化一次**的基础组件，而不是在运行时反复调用。
 
-`Discard()` 也是全局模式：它不是一个局部 helper，而是安装一个“不导出数据”的全局 provider，仅在本地生成 TraceID 并维持传播链路。
+`InstallLocalProvider()` 也是全局模式：它安装一个“不导出数据”的全局 provider，仅在本地生成 TraceID 并维持传播链路。
 
 ## 快速开始
 
@@ -38,12 +38,12 @@ defer shutdown(context.Background())
 - `Version`、`InstanceID`、`Environment`
 - `Endpoint`
 - `Sampler`
-- `Batcher`，可选 `batch` 或 `simple`
+- `Batcher`，可选 `trace.BatcherBatch` 或 `trace.BatcherImmediate`
 - `Insecure`
 - `ExporterTimeout`
 - 可选的有缓冲 `ExportErrors` channel
 
-其中 `Batcher` 在默认配置里会设置为 `batch`，空字符串也等同于 `batch`。兼容值 `simple` 使用异步单条小批量，不会让 exporter 故障阻塞 `span.End`。`ExportErrors` 的发送是非阻塞的，通道已满时会丢弃该次通知。
+其中 `Batcher` 在默认配置里会设置为 `batch`，空字符串也等同于 `batch`。`immediate` 使用异步单条小批量，不会让 exporter 故障阻塞 `span.End`。`Headers` 可配置 OTLP 认证或路由头；`Insecure=false` 使用系统 TLS 信任。`ExportErrors` 的发送是非阻塞的，通道已满时会丢弃该次通知。
 
 ## HTTP / gRPC 中间件
 
@@ -119,14 +119,14 @@ defer consumeSpan.End()
 - `Init()` 通常应在应用启动时调用一次
 - 返回的 `shutdown` 函数由调用方负责执行；关闭后若全局状态仍指向该实例，会回退到安全默认值
 - `Init` 和 `Discard` 返回的 shutdown 可并发重复调用，并遵守 context deadline
-- `Discard()` 虽然不导出 trace 数据，但仍然会修改全局 tracing 状态
+- `InstallLocalProvider()` 虽然不导出 trace 数据，但仍然会修改全局 tracing 状态
 
 ## 推荐实践
 
 - 应用启动时统一初始化一次 `trace`
 - HTTP、gRPC、MQ 传播都共用同一套全局 tracing 状态
 - 异步消息默认使用 `link`，只在确实需要单条 trace 演示时使用 `child_of`
-- 不要把 `Discard()` 当成“无副作用的局部 tracer helper”
+- 不要把 `InstallLocalProvider()` 当成“无副作用的局部 tracer helper”
 
 ## 相关文档
 

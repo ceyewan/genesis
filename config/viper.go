@@ -84,31 +84,58 @@ func (l *loader) Load(ctx context.Context) error {
 		return ErrClosed
 	}
 
-	l.v = l.newConfiguredViper()
+	next := l.newConfiguredViper()
 
 	if err := l.loadDotEnv(); err != nil {
 		return err
 	}
 
-	if err := l.v.ReadInConfig(); err != nil {
+	if err := next.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
 		if !errors.As(err, &notFound) {
 			return xerrors.Wrapf(err, "failed to read config file %s", l.cfg.Name)
 		}
 	}
 
-	if err := l.loadEnvironmentConfig(l.v); err != nil {
+	if err := l.loadEnvironmentConfig(next); err != nil {
+		return err
+	}
+	l.materializeEnvironment(next)
+
+	if err := l.validateViper(next); err != nil {
 		return err
 	}
 
-	if err := l.validateViper(l.v); err != nil {
-		return err
-	}
-
+	// Commit the new snapshot only after every source has loaded and validated.
+	// A failed reload must leave the last known-good configuration intact.
+	l.v = next
 	l.loaded = true
 	l.captureCurrentValues()
 
 	return nil
+}
+
+// materializeEnvironment makes AutomaticEnv values visible to Unmarshal.
+// Viper resolves AutomaticEnv from Get, but does not add those keys to
+// AllSettings, which is the source used by Unmarshal. Both the literal and
+// dotted forms are recorded because GENESIS_SERVICE_NAME may address a root
+// `service_name` field while GENESIS_APP_NAME commonly addresses `app.name`.
+func (l *loader) materializeEnvironment(v *viper.Viper) {
+	prefix := strings.ToUpper(l.cfg.EnvPrefix) + "_"
+	for _, kv := range os.Environ() {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasPrefix(strings.ToUpper(name), prefix) {
+			continue
+		}
+		key := strings.ToLower(name[len(prefix):])
+		if key == "" {
+			continue
+		}
+		v.Set(key, value)
+		if dotted := strings.ReplaceAll(key, "_", "."); dotted != key {
+			v.Set(dotted, value)
+		}
+	}
 }
 
 // loadDotEnv 尝试从项目目录加载 .env 文件。
@@ -487,6 +514,7 @@ func (l *loader) reloadAndNotify(event fsnotify.Event) {
 		)
 		return
 	}
+	l.materializeEnvironment(next)
 
 	if err := l.validateViper(next); err != nil {
 		l.logger.Warn("配置热更新失败：配置校验失败",

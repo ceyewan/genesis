@@ -66,7 +66,7 @@ if err != nil {
 
 ```go
 seq, err := idgen.NewSequencer(&idgen.SequencerConfig{
-	Driver:    "redis",
+	Driver:    idgen.DriverRedis,
 	KeyPrefix: "order:seq",
 	Step:      1,
 	TTL:       24 * time.Hour,
@@ -87,7 +87,7 @@ if err != nil {
 
 ```go
 allocator, err := idgen.NewAllocator(&idgen.AllocatorConfig{
-	Driver:    "etcd",
+	Driver:    idgen.DriverEtcd,
 	KeyPrefix: "myapp:worker",
 	MaxID:     512,
 	TTL:       30 * time.Second,
@@ -137,4 +137,4 @@ if err != nil {
 - `MaxValue` 是耗尽边界；超过时返回 `ErrSequenceExhausted`，Redis 中的值保持不变，永不回绕。
 - `Allocator.KeyPrefix` 是所有可能同时生成 Snowflake ID 的实例共享的 worker namespace；不同独立 worker 池必须使用不同前缀。
 - `Allocator.KeepAlive()` 只能在成功 `Allocate` 后启动一次。错误通道在停止或 context 取消后关闭；任何收到的错误都表示不能继续安全使用该 WorkerID。
-- `Allocator.Stop()` 可并发重复调用，会先停止并等待保活 goroutine，再按 ownership token/lease 释放 WorkerID。
+- `Allocator.Stop() error` 可并发重复调用，会先停止并等待保活 goroutine，再按 ownership token/lease 释放 WorkerID，并报告释放失败。

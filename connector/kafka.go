@@ -63,6 +63,8 @@ func (c *kafkaConnector) Connect(ctx context.Context) error {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(c.cfg.Seed...),
 		kgo.ClientID(c.cfg.ClientID),
+		kgo.DialTimeout(c.cfg.ConnectTimeout),
+		kgo.RequestTimeoutOverhead(c.cfg.RequestTimeout),
 		kgo.WithLogger(&kgoLogger{logger: c.logger}),
 	}
 	if c.cfg.AllowAutoTopicCreate {
@@ -82,14 +84,14 @@ func (c *kafkaConnector) Connect(ctx context.Context) error {
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		c.logger.Error("failed to create kafka client", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "kafka connector[%s]: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "kafka connector[%s]", c.cfg.Name)
 	}
 
 	// Ping to verify connection
 	if err := client.Ping(ctx); err != nil {
 		client.Close()
 		c.logger.Error("failed to connect to kafka seeds", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "kafka connector[%s]: ping failed: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "kafka connector[%s]: ping failed", c.cfg.Name)
 	}
 
 	c.client = client
@@ -139,7 +141,7 @@ func (c *kafkaConnector) HealthCheck(ctx context.Context) error {
 
 	if err := client.Ping(healthCtx); err != nil {
 		c.healthy.Store(false)
-		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrHealthCheck, "kafka connector[%s]: %v", c.cfg.Name, err))
+		return c.metrics.observeHealth(ctx, wrapConnectorCause(ErrHealthCheck, err, "kafka connector[%s]", c.cfg.Name))
 	}
 
 	c.healthy.Store(true)

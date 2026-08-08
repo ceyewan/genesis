@@ -10,13 +10,13 @@ package metrics
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
@@ -80,14 +80,14 @@ func New(cfg *Config) (Meter, error) {
 	var httpServer *http.Server
 	var httpDone chan struct{}
 	if cfg.Port > 0 && cfg.Path != "" {
-		addr := fmt.Sprintf(":%d", cfg.Port)
+		addr := net.JoinHostPort(cfg.ListenAddress, strconv.Itoa(cfg.Port))
 		mux := http.NewServeMux()
 		mux.Handle(cfg.Path, promhttp.Handler())
 		httpServer = &http.Server{Addr: addr, Handler: mux}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			_ = mp.Shutdown(context.Background())
-			return nil, xerrors.Wrap(err, "listen metrics server")
+			return nil, xerrors.Wrap(xerrors.Join(ErrListen, err), "listen metrics server")
 		}
 		httpDone = make(chan struct{})
 		go func() {
@@ -97,6 +97,12 @@ func New(cfg *Config) (Meter, error) {
 				clog.String("path", cfg.Path))
 			if err := httpServer.Serve(ln); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
 				logger.Error("metrics server error", clog.Error(err))
+				if cfg.ServerErrors != nil {
+					select {
+					case cfg.ServerErrors <- err:
+					default:
+					}
+				}
 			}
 		}()
 	}
@@ -189,9 +195,14 @@ func (m *meterImpl) Histogram(name, desc string, opts ...MetricOption) (Histogra
 }
 
 func (m *meterImpl) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		return xerrors.New("metrics shutdown context is nil")
+	}
 	m.shutdownOnce.Do(func() {
-		go func(shutdownCtx context.Context) {
+		go func() {
 			defer close(m.shutdownDone)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 			var serverErr error
 			if m.httpServer != nil {
 				if err := m.httpServer.Shutdown(shutdownCtx); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
@@ -214,7 +225,7 @@ func (m *meterImpl) Shutdown(ctx context.Context) error {
 				otel.SetMeterProvider(metricnoop.NewMeterProvider())
 			}
 			m.shutdownErr = xerrors.Combine(serverErr, providerErr)
-		}(ctx)
+		}()
 	})
 
 	select {

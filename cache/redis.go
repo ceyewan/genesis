@@ -12,7 +12,6 @@ import (
 	"github.com/ceyewan/genesis/cache/serializer"
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -22,11 +21,10 @@ type redisCache struct {
 	prefix     string
 	defaultTTL time.Duration
 	logger     clog.Logger
-	meter      metrics.Meter
 }
 
 // newRedis 创建 Redis 缓存实例
-func newRedis(conn connector.RedisConnector, cfg *DistributedConfig, logger clog.Logger, meter metrics.Meter) (Distributed, error) {
+func newRedis(conn connector.RedisConnector, cfg *DistributedConfig, injected serializer.Serializer, logger clog.Logger) (Distributed, error) {
 	if conn == nil {
 		return nil, ErrRedisConnectorRequired
 	}
@@ -34,14 +32,17 @@ func newRedis(conn connector.RedisConnector, cfg *DistributedConfig, logger clog
 		return nil, xerrors.New("cache: distributed config is nil")
 	}
 
-	serializerType := cfg.Serializer
-	if serializerType == "" {
-		serializerType = "json"
-	}
-
-	s, err := serializer.New(serializerType)
-	if err != nil {
-		return nil, err
+	s := injected
+	if s == nil {
+		serializerType := cfg.Serializer
+		if serializerType == "" {
+			serializerType = "json"
+		}
+		var err error
+		s, err = serializer.New(serializerType)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &redisCache{
@@ -50,7 +51,6 @@ func newRedis(conn connector.RedisConnector, cfg *DistributedConfig, logger clog
 		prefix:     cfg.KeyPrefix,
 		defaultTTL: cfg.DefaultTTL,
 		logger:     logger,
-		meter:      meter,
 	}, nil
 }
 
@@ -317,7 +317,7 @@ func (c *redisCache) MSet(ctx context.Context, items map[string]any, ttl time.Du
 // --- 高级操作（Advanced） ---
 
 // RawClient 返回底层 Redis 客户端，用于执行 Pipeline、Lua 脚本等高级操作。
-func (c *redisCache) RawClient() any {
+func (c *redisCache) RawClient() *redis.Client {
 	return c.client
 }
 

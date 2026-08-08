@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
 )
@@ -183,4 +185,4 @@ func (m *mockDistributed) MGet(ctx context.Context, keys []string, destSlice any
 func (m *mockDistributed) MSet(ctx context.Context, items map[string]any, ttl time.Duration) error {
 	return ErrNotSupported
 }
-func (m *mockDistributed) RawClient() any { return nil }
+func (m *mockDistributed) RawClient() *redis.Client { return nil }

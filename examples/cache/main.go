@@ -5,8 +5,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-
 	"github.com/ceyewan/genesis/cache"
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
@@ -279,7 +277,7 @@ func batchExample(logger clog.Logger, redisConn connector.RedisConnector) {
 	logger.Info("--- 使用底层客户端执行 Pipeline ---")
 	client := c.RawClient()
 	if client != nil {
-		pipe := client.(*redis.Client).Pipeline()
+		pipe := client.Pipeline()
 		pipe.Set(ctx, "demo:batch:pipe:1", "value1", 0)
 		pipe.Set(ctx, "demo:batch:pipe:2", "value2", 0)
 		pipe.Get(ctx, "demo:batch:pipe:1")

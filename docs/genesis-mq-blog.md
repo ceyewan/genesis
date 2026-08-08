@@ -180,7 +180,7 @@ JetStream 当前使用 `consumer.Consume()`——push 模式，服务端主动�
 handler = mq.Chain(
     mq.WithRecover(logger),                          // 最外层：捕获 panic，防止消费者崩溃
     mq.WithLogging(logger),                          // 记录每条消息的处理结果和耗时
-    mq.WithRetry(mq.DefaultRetryConfig, logger),     // 内层：在应用层指数退避重试
+    mq.WithRetry(mq.DefaultRetryConfig(), logger),   // 内层：在应用层指数退避重试
 )(businessHandler)
 ```
 

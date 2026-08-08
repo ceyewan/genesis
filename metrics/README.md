@@ -20,6 +20,7 @@
 meter, err := metrics.New(&metrics.Config{
     ServiceName: "my-service",
     Version:     "v1.0.0",
+	ListenAddress: "127.0.0.1",
     Port:        9090,
     Path:        "/metrics",
 })
@@ -39,6 +40,7 @@ counter.Inc(ctx, metrics.L("method", "GET"), metrics.L("status", "200"))
 - `ServiceName` 必填
 - `Version`、`InstanceID`、`Environment` 对应统一资源字段 `service.version`、`service.instance.id`、`deployment.environment`
 - `Port > 0` 且 `Path` 非空时，组件会启动 Prometheus HTTP 端点
+- `ListenAddress` 控制监听网卡；开发环境建议 `127.0.0.1`，生产环境按部署网络显式配置
 - 只要 `Port <= 0` 或 `Path` 为空，就不会启动 HTTP 服务，只保留进程内指标能力
 
 当前若 metrics HTTP 端口监听失败，`New()` 会直接返回错误，而不是在后台异步失败。

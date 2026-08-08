@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/metrics"
 )
 
 // Option 组件初始化选项函数
@@ -16,14 +17,26 @@ type Option func(*options)
 //   - key: 熔断键
 //   - err: 原始拒绝错误（ErrOpenState 或 ErrTooManyRequests）
 //
-// 返回:
-//   - error: 自定义处理结果；返回 nil 表示吞掉本次拒绝
-type FallbackFunc func(ctx context.Context, key string, err error) error
+// 返回替代结果和错误，其语义与 Execute 的返回值一致。
+type FallbackFunc func(ctx context.Context, key string, err error) (any, error)
+
+// FailureClassifier 决定 Execute 返回的错误是否计入熔断失败。
+// 返回 true 表示计为失败；默认所有非 nil error 都计为失败。
+type FailureClassifier func(error) bool
 
 // options 组件初始化选项配置（内部使用，小写）
 type options struct {
-	logger   clog.Logger
-	fallback FallbackFunc
+	logger            clog.Logger
+	meter             metrics.Meter
+	fallback          FallbackFunc
+	failureClassifier FailureClassifier
+}
+
+// WithMeter 注入 breaker 的执行、拒绝和状态指标。
+func WithMeter(meter metrics.Meter) Option {
+	return func(o *options) {
+		o.meter = meter
+	}
 }
 
 // WithLogger 设置 Logger，传入 nil 时使用 clog.Discard()
@@ -44,13 +57,21 @@ func WithLogger(logger clog.Logger) Option {
 // 使用示例:
 //
 //	brk, _ := breaker.New(cfg,
-//		breaker.WithFallback(func(ctx context.Context, key string, err error) error {
+//		breaker.WithFallback(func(ctx context.Context, key string, err error) (any, error) {
 //			logger.Info("Circuit breaker rejected request", clog.String("key", key))
-//			return nil
+//			return cachedValue, nil
 //		}),
 //	)
 func WithFallback(fallback FallbackFunc) Option {
 	return func(o *options) {
 		o.fallback = fallback
+	}
+}
+
+// WithFailureClassifier 自定义通用 Execute 的失败口径。
+// gRPC interceptor 仍会先应用内置的 gRPC 状态码分类。
+func WithFailureClassifier(classifier FailureClassifier) Option {
+	return func(o *options) {
+		o.failureClassifier = classifier
 	}
 }

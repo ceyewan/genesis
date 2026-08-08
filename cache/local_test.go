@@ -9,9 +9,23 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ceyewan/genesis/cache/serializer"
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
 )
+
+type prefixSerializer struct{}
+
+func (prefixSerializer) Marshal(value any) ([]byte, error) {
+	return []byte("custom:" + value.(string)), nil
+}
+
+func (prefixSerializer) Unmarshal(data []byte, dest any) error {
+	*(dest.(*string)) = string(data[len("custom:"):])
+	return nil
+}
+
+var _ serializer.Serializer = prefixSerializer{}
 
 // setupTestLocal 创建用于测试的本地缓存实例
 func setupTestLocal(t *testing.T, maxEntries int) Local {
@@ -304,4 +318,32 @@ func TestLocal_Close(t *testing.T) {
 	// Close 后操作应该不 panic（但行为未定义）
 	err = cache.Set(ctx, "key2", "value2", time.Minute)
 	require.NoError(t, err)
+}
+
+func TestLocalExpireUsesDefaultTTL(t *testing.T) {
+	local, err := NewLocal(&LocalConfig{DefaultTTL: 25 * time.Millisecond})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = local.Close() })
+
+	ctx := context.Background()
+	require.NoError(t, local.Set(ctx, "key", "value", time.Hour))
+	ok, err := local.Expire(ctx, "key", 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Eventually(t, func() bool {
+		var value string
+		return xerrors.Is(local.Get(ctx, "key", &value), ErrMiss)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestLocalCustomSerializerInjection(t *testing.T) {
+	local, err := NewLocal(&LocalConfig{}, WithSerializer(prefixSerializer{}))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = local.Close() })
+
+	ctx := context.Background()
+	require.NoError(t, local.Set(ctx, "key", "value", time.Minute))
+	var got string
+	require.NoError(t, local.Get(ctx, "key", &got))
+	require.Equal(t, "value", got)
 }

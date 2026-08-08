@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/redis/go-redis/v9"
 
@@ -72,6 +73,7 @@ type distributedLimiter struct {
 	// 指标
 	allowedCounter metrics.Counter
 	deniedCounter  metrics.Counter
+	closed         atomic.Bool
 }
 
 // newDistributed 创建分布式限流器（内部函数）
@@ -118,6 +120,9 @@ func (l *distributedLimiter) Allow(ctx context.Context, key string, limit Limit)
 
 // AllowN 尝试获取 N 个令牌
 func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit, n int) (bool, error) {
+	if l.closed.Load() {
+		return false, ErrLimiterClosed
+	}
 	if key == "" {
 		return false, ErrKeyEmpty
 	}
@@ -199,11 +204,15 @@ func (l *distributedLimiter) buildKey(key string, limit Limit) string {
 // Wait 阻塞等待直到获取 1 个令牌
 // 注意：分布式模式不支持 Wait 操作
 func (l *distributedLimiter) Wait(ctx context.Context, key string, limit Limit) error {
+	if l.closed.Load() {
+		return ErrLimiterClosed
+	}
 	// 分布式环境下 Wait 难以精确实现且代价高昂
 	return ErrNotSupported
 }
 
 // Close 释放资源（分布式连接由 Connector 管理）
 func (l *distributedLimiter) Close() error {
+	l.closed.Store(true)
 	return nil
 }

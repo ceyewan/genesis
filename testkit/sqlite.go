@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
@@ -14,7 +15,7 @@ import (
 // 默认使用内存数据库，测试结束后自动清理。
 func NewSQLiteConfig() *connector.SQLiteConfig {
 	return &connector.SQLiteConfig{
-		Path: "file::memory:?cache=shared",
+		Path: "file:genesis-test-" + uuid.NewString() + "?mode=memory&cache=shared",
 	}
 }
 

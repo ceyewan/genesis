@@ -60,6 +60,30 @@ func TestShutdownHonorsEachCallersContext(t *testing.T) {
 	}
 }
 
+func TestFirstCanceledShutdownDoesNotAbortCleanup(t *testing.T) {
+	processor := &blockingSpanProcessor{started: make(chan struct{}), release: make(chan struct{})}
+	shutdown := newTracerShutdown(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor)))
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	requireFirst := make(chan error, 1)
+	go func() { requireFirst <- shutdown(canceled) }()
+	if err := <-requireFirst; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first shutdown = %v, want context.Canceled", err)
+	}
+	<-processor.started
+	second := make(chan error, 1)
+	go func() { second <- shutdown(context.Background()) }()
+	select {
+	case err := <-second:
+		t.Fatalf("cleanup ended before release: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(processor.release)
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReportingExporterExposesFailureWithoutBlocking(t *testing.T) {
 	want := errors.New("collector unavailable")
 	errorsCh := make(chan error, 1)
@@ -108,9 +132,9 @@ func TestInitValidatesConfig(t *testing.T) {
 func TestDiscardInstallsGlobalTracingState(t *testing.T) {
 	beforeProvider := otel.GetTracerProvider()
 
-	shutdown, err := Discard("test-service")
+	shutdown, err := InstallLocalProvider("test-service")
 	if err != nil {
-		t.Fatalf("Discard() error = %v", err)
+		t.Fatalf("InstallLocalProvider() error = %v", err)
 	}
 
 	afterProvider := otel.GetTracerProvider()
@@ -184,7 +208,7 @@ func TestUnavailableExporterDoesNotBlockSpanAndReportsFailure(t *testing.T) {
 	exportErrors := make(chan error, 1)
 	cfg := DefaultConfig("unavailable-exporter-test")
 	cfg.Endpoint = "127.0.0.1:1"
-	cfg.Batcher = "simple"
+	cfg.Batcher = BatcherImmediate
 	cfg.ExporterTimeout = 250 * time.Millisecond
 	cfg.ExportErrors = exportErrors
 	shutdown, err := Init(cfg)

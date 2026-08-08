@@ -21,6 +21,16 @@ const (
 	GeneratorModeMultiDC GeneratorMode = "multi_dc"
 )
 
+// DriverType 是 Sequencer 和 Allocator 支持的后端类型。
+type DriverType string
+
+const (
+	// DriverRedis 使用 Redis 后端。
+	DriverRedis DriverType = "redis"
+	// DriverEtcd 使用 Etcd 后端。
+	DriverEtcd DriverType = "etcd"
+)
+
 // GeneratorConfig ID 生成器配置 (Snowflake)
 type GeneratorConfig struct {
 	// Mode 位布局模式，默认 "multi_dc"。
@@ -68,8 +78,8 @@ func (c *GeneratorConfig) validate() error {
 
 // SequencerConfig 序列号生成器配置
 type SequencerConfig struct {
-	// Driver 后端类型: "redis" | "etcd"，默认 "redis"
-	Driver string `yaml:"driver" json:"driver"`
+	// Driver 后端类型，默认 DriverRedis。Sequencer 当前只支持 Redis。
+	Driver DriverType `yaml:"driver" json:"driver"`
 
 	// KeyPrefix 键前缀
 	KeyPrefix string `yaml:"key_prefix" json:"key_prefix"`
@@ -86,7 +96,7 @@ type SequencerConfig struct {
 
 func (c *SequencerConfig) setDefaults() {
 	if c.Driver == "" {
-		c.Driver = "redis"
+		c.Driver = DriverRedis
 	}
 	if c.Step <= 0 {
 		c.Step = 1
@@ -94,7 +104,7 @@ func (c *SequencerConfig) setDefaults() {
 }
 
 func (c *SequencerConfig) validate() error {
-	if c.Driver != "redis" {
+	if c.Driver != DriverRedis {
 		return xerrors.WithCode(ErrInvalidInput, "unsupported_driver")
 	}
 	if c.Step <= 0 {
@@ -113,13 +123,13 @@ func (c *SequencerConfig) validate() error {
 
 // AllocatorConfig WorkerID 分配器配置
 type AllocatorConfig struct {
-	// Driver 后端类型: "redis" | "etcd"
-	Driver string `yaml:"driver" json:"driver"`
+	// Driver 后端类型: DriverRedis | DriverEtcd。
+	Driver DriverType `yaml:"driver" json:"driver"`
 
 	// KeyPrefix 键前缀，默认 "genesis:idgen:worker"
 	KeyPrefix string `yaml:"key_prefix" json:"key_prefix"`
 
-	// MaxID 最大 ID 范围 [0, maxID)，默认 1024
+	// MaxID 最大 ID 范围 [0, maxID)，默认 32，可直接与默认 multi_dc Generator 组合。
 	MaxID int `yaml:"max_id" json:"max_id"`
 
 	// TTL 租约 TTL，默认 30 秒。etcd 驱动要求至少 1 秒。
@@ -128,13 +138,13 @@ type AllocatorConfig struct {
 
 func (c *AllocatorConfig) setDefaults() {
 	if c.Driver == "" {
-		c.Driver = "redis"
+		c.Driver = DriverRedis
 	}
 	if c.KeyPrefix == "" {
 		c.KeyPrefix = "genesis:idgen:worker"
 	}
 	if c.MaxID <= 0 {
-		c.MaxID = 1024
+		c.MaxID = 32
 	}
 	if c.TTL <= 0 {
 		c.TTL = 30 * time.Second
@@ -142,7 +152,7 @@ func (c *AllocatorConfig) setDefaults() {
 }
 
 func (c *AllocatorConfig) validate() error {
-	if c.Driver != "redis" && c.Driver != "etcd" {
+	if c.Driver != DriverRedis && c.Driver != DriverEtcd {
 		return xerrors.WithCode(ErrInvalidInput, "unsupported_driver")
 	}
 	if c.MaxID <= 0 || c.MaxID > 1024 {
@@ -151,10 +161,10 @@ func (c *AllocatorConfig) validate() error {
 	if c.TTL <= 0 {
 		return xerrors.WithCode(ErrInvalidInput, "ttl_must_be_positive")
 	}
-	if c.Driver == "redis" && c.TTL < time.Millisecond {
+	if c.Driver == DriverRedis && c.TTL < time.Millisecond {
 		return xerrors.WithCode(ErrInvalidInput, "redis_ttl_must_be_at_least_one_millisecond")
 	}
-	if c.Driver == "etcd" && c.TTL < time.Second {
+	if c.Driver == DriverEtcd && c.TTL < time.Second {
 		return xerrors.WithCode(ErrInvalidInput, "etcd_ttl_must_be_at_least_one_second")
 	}
 	return nil

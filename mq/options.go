@@ -68,6 +68,10 @@ type subscribeOptions struct {
 	// MaxInflight 最大在途消息数
 	// JetStream: MaxAckPending
 	MaxInflight int
+
+	// StartID controls the initial retained-message position for a newly created
+	// consumer. "0" means beginning and "$" means latest.
+	StartID string
 }
 
 // defaultSubscribeOptions 返回默认订阅选项
@@ -75,6 +79,28 @@ func defaultSubscribeOptions() subscribeOptions {
 	return subscribeOptions{
 		AutoAck:   false, // 默认手动确认
 		BatchSize: 10,
+		StartID:   "0",
+	}
+}
+
+// FromBeginning consumes retained messages when a subscription or durable
+// consumer is created for the first time. This is the default.
+func FromBeginning() SubscribeOption {
+	return func(o *subscribeOptions) { o.StartID = "0" }
+}
+
+// FromLatest starts after messages that already exist at first subscription.
+func FromLatest() SubscribeOption {
+	return func(o *subscribeOptions) { o.StartID = "$" }
+}
+
+// FromID starts at a backend message ID. Redis accepts stream IDs; JetStream
+// accepts Genesis IDs such as "S-orders:42" and uses the numeric sequence.
+func FromID(id string) SubscribeOption {
+	return func(o *subscribeOptions) {
+		if id != "" {
+			o.StartID = id
+		}
 	}
 }
 

@@ -19,6 +19,11 @@
 // 需要注意的是，Redis 与 Etcd 并不是完全等价的协议实现。尤其在 TTL 语义上，
 // Etcd 依赖 lease，精度为秒级，因此 `DefaultTTL` 和 `WithTTL(...)` 都要求
 // 至少 1 秒且必须是整秒；Redis 则直接使用原生 `time.Duration`。
+//
+// Locker does not issue fencing tokens. Callers protecting irreversible writes
+// must use a downstream compare-and-set/version mechanism in addition to
+// monitoring Locker.Lost; mutual exclusion alone cannot fence a paused former
+// owner after its lease expires.
 package dlock
 
 import (

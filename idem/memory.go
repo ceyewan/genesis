@@ -147,14 +147,19 @@ func (ms *memoryStore) SetResult(ctx context.Context, key string, val []byte, tt
 	valCopy := append([]byte(nil), val...)
 
 	ms.mu.Lock()
+	if token != "" {
+		entry, ok := ms.locks[lockKey]
+		if !ok || entry.token != token || !entry.expiresAt.After(now) {
+			ms.mu.Unlock()
+			return ErrLockLost
+		}
+	}
 	ms.results[resultKey] = memoryEntry{
 		value:     valCopy,
 		expiresAt: now.Add(ttl),
 	}
 	if token != "" {
-		if entry, ok := ms.locks[lockKey]; ok && entry.token == token {
-			delete(ms.locks, lockKey)
-		}
+		delete(ms.locks, lockKey)
 	}
 	ms.mu.Unlock()
 

@@ -102,7 +102,7 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 	conn, err := nats.Connect(c.cfg.URL, natsOpts...)
 	if err != nil {
 		c.logger.Error("failed to connect to nats", clog.Error(err), clog.String("url", c.cfg.URL))
-		return xerrors.Wrapf(ErrConnection, "nats connector[%s]: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "nats connector[%s]", c.cfg.Name)
 	}
 
 	c.conn = conn

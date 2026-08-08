@@ -468,6 +468,45 @@ func TestJetStreamDrainWaitsForHandlerIntegration(t *testing.T) {
 	require.ErrorIs(t, q.Publish(ctx, subject, []byte("closed")), ErrClosed)
 }
 
+func TestRedisStreamDefaultStartConsumesRetainedMessages(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 10*time.Second)
+	defer cancel()
+	q := newRedisStreamMQ(t)
+	topic := uniqueSubject()
+	require.NoError(t, q.Publish(ctx, topic, []byte("before-subscribe")))
+	done := make(chan struct{})
+	sub, err := q.Subscribe(ctx, topic, func(msg Message) error {
+		require.Equal(t, "before-subscribe", string(msg.Data()))
+		close(done)
+		return nil
+	}, WithQueueGroup("g-"+testkit.NewID()), WithAutoAck())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	waitTimeout(t, done, 5*time.Second)
+}
+
+func TestRedisStreamFromLatestSkipsRetainedMessages(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 10*time.Second)
+	defer cancel()
+	q := newRedisStreamMQ(t)
+	topic := uniqueSubject()
+	require.NoError(t, q.Publish(ctx, topic, []byte("old")))
+	done := make(chan string, 1)
+	sub, err := q.Subscribe(ctx, topic, func(msg Message) error {
+		done <- string(msg.Data())
+		return nil
+	}, WithQueueGroup("g-"+testkit.NewID()), FromLatest(), WithAutoAck())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+	require.NoError(t, q.Publish(ctx, topic, []byte("new")))
+	select {
+	case got := <-done:
+		require.Equal(t, "new", got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("latest subscription did not receive new message")
+	}
+}
+
 func TestRedisStreamDrainPreservesActiveHandlerContext(t *testing.T) {
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()

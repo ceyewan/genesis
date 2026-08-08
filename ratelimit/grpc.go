@@ -55,9 +55,7 @@ func newGRPCLimiterConfig(limiter Limiter, keyFunc GRPCKeyFunc, limitFunc GRPCLi
 		}
 	}
 	if opts != nil {
-		if opts.ErrorPolicy != "" {
-			cfg.errorPolicy = opts.ErrorPolicy
-		}
+		cfg.errorPolicy = normalizeErrorPolicy(opts.ErrorPolicy)
 		cfg.logger = opts.Logger
 	}
 	return cfg

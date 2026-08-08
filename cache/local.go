@@ -10,7 +10,6 @@ import (
 
 	"github.com/ceyewan/genesis/cache/serializer"
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -25,18 +24,21 @@ type localCache struct {
 	serializer serializer.Serializer
 	defaultTTL time.Duration
 	logger     clog.Logger
-	meter      metrics.Meter
 	closeOnce  sync.Once
 }
 
-func newLocal(cfg *LocalConfig, logger clog.Logger, meter metrics.Meter) (Local, error) {
+func newLocal(cfg *LocalConfig, injected serializer.Serializer, logger clog.Logger) (Local, error) {
 	if cfg == nil {
 		return nil, xerrors.New("cache: local config is nil")
 	}
 
-	s, err := serializer.New(cfg.Serializer)
-	if err != nil {
-		return nil, err
+	s := injected
+	if s == nil {
+		var err error
+		s, err = serializer.New(cfg.Serializer)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// ExpiryWritingFunc 在每次写入时从 entry 中读取 TTL，保证 Set 和 TTL 原子更新。
@@ -56,7 +58,6 @@ func newLocal(cfg *LocalConfig, logger clog.Logger, meter metrics.Meter) (Local,
 		serializer: s,
 		defaultTTL: cfg.DefaultTTL,
 		logger:     logger,
-		meter:      meter,
 	}, nil
 }
 
@@ -95,6 +96,9 @@ func (c *localCache) Expire(ctx context.Context, key string, ttl time.Duration) 
 	existing, ok := c.cache.GetIfPresent(key)
 	if !ok {
 		return false, nil
+	}
+	if ttl <= 0 {
+		ttl = c.defaultTTL
 	}
 	c.cache.Set(key, localEntry{data: existing.data, ttl: ttl})
 	return true, nil

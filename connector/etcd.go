@@ -62,8 +62,10 @@ func (c *etcdConnector) Connect(ctx context.Context) error {
 
 	// 创建 Etcd 客户端配置
 	clientConfig := clientv3.Config{
-		Endpoints:   c.cfg.Endpoints,
-		DialTimeout: c.cfg.DialTimeout,
+		Endpoints:            c.cfg.Endpoints,
+		DialTimeout:          c.cfg.DialTimeout,
+		DialKeepAliveTime:    c.cfg.KeepAliveTime,
+		DialKeepAliveTimeout: c.cfg.KeepAliveTimeout,
 	}
 
 	// 设置认证
@@ -76,7 +78,7 @@ func (c *etcdConnector) Connect(ctx context.Context) error {
 	client, err := clientv3.New(clientConfig)
 	if err != nil {
 		c.logger.Error("failed to create etcd client", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "etcd connector[%s]: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "etcd connector[%s]", c.cfg.Name)
 	}
 
 	// 测试连接
@@ -88,7 +90,7 @@ func (c *etcdConnector) Connect(ctx context.Context) error {
 	if err != nil {
 		client.Close()
 		c.logger.Error("failed to connect to etcd", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "etcd connector[%s]: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "etcd connector[%s]", c.cfg.Name)
 	}
 
 	c.client = client
@@ -138,7 +140,7 @@ func (c *etcdConnector) HealthCheck(ctx context.Context) error {
 	if err != nil {
 		c.healthy.Store(false)
 		c.logger.Warn("etcd health check failed", clog.Error(err))
-		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrHealthCheck, "etcd connector[%s]: %v", c.cfg.Name, err))
+		return c.metrics.observeHealth(ctx, wrapConnectorCause(ErrHealthCheck, err, "etcd connector[%s]", c.cfg.Name))
 	}
 
 	c.healthy.Store(true)

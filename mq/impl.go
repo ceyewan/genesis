@@ -173,6 +173,7 @@ func (m *mq) wrapHandler(topic string, handler Handler, opts subscribeOptions) H
 						clog.String("msg_id", msg.ID()),
 						clog.Error(ackErr),
 					)
+					return ackErr
 				}
 			} else {
 				// Handler 返回错误时调用 Nak 触发重新投递
@@ -183,6 +184,7 @@ func (m *mq) wrapHandler(topic string, handler Handler, opts subscribeOptions) H
 						clog.String("msg_id", msg.ID()),
 						clog.Error(nakErr),
 					)
+					return errors.Join(err, nakErr)
 				}
 			}
 		}

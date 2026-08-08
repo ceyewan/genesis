@@ -63,18 +63,18 @@ func (c *sqliteConnector) Connect(ctx context.Context) error {
 	db, err := gorm.Open(sqlite.Open(c.cfg.Path), &gorm.Config{})
 	if err != nil {
 		c.logger.Error("failed to open sqlite", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "sqlite connector[%s]: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "sqlite connector[%s]", c.cfg.Name)
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
 		c.logger.Error("failed to get sqlite db instance", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "sqlite connector[%s]: failed to get db instance: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "sqlite connector[%s]: failed to get db instance", c.cfg.Name)
 	}
 
 	if err := sqlDB.PingContext(ctx); err != nil {
 		c.logger.Error("failed to ping sqlite", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "sqlite connector[%s]: ping failed: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "sqlite connector[%s]: ping failed", c.cfg.Name)
 	}
 
 	c.db = db
@@ -129,13 +129,13 @@ func (c *sqliteConnector) HealthCheck(ctx context.Context) error {
 	sqlDB, err := db.DB()
 	if err != nil {
 		c.healthy.Store(false)
-		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrHealthCheck, "sqlite connector[%s]: %v", c.cfg.Name, err))
+		return c.metrics.observeHealth(ctx, wrapConnectorCause(ErrHealthCheck, err, "sqlite connector[%s]", c.cfg.Name))
 	}
 
 	if err := sqlDB.PingContext(ctx); err != nil {
 		c.healthy.Store(false)
 		c.logger.Warn("sqlite health check failed", clog.Error(err))
-		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrHealthCheck, "sqlite connector[%s]: %v", c.cfg.Name, err))
+		return c.metrics.observeHealth(ctx, wrapConnectorCause(ErrHealthCheck, err, "sqlite connector[%s]", c.cfg.Name))
 	}
 
 	c.healthy.Store(true)

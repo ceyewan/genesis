@@ -9,7 +9,7 @@
 //   - 默认以 cc.Target() 作为服务级熔断 key，也支持通过 WithKeyFunc 自定义粒度
 //   - gRPC 拦截器会区分系统性错误与业务错误，避免把 InvalidArgument、NotFound
 //     等明显业务错误直接计入熔断统计
-//   - WithFallback 只负责处理“请求被 breaker 拒绝”这一类情况，不负责生成替代结果
+//   - WithFallback 只在 breaker 拒绝执行时生成替代结果
 //
 // breaker 不试图替业务统一建模所有失败语义。对于不同调用场景，最重要的设计点
 // 不是状态机本身，而是 key 粒度和失败口径。
@@ -36,7 +36,7 @@ type Breaker interface {
 	// fn: 要执行的函数
 	// 返回: 函数执行结果和错误。
 	// 若执行被熔断器拒绝，返回组件自己的拒绝错误；若配置了 Fallback，
-	// Fallback 成功时返回 nil, nil。
+	// 返回 Fallback 生成的结果和错误。
 	Execute(ctx context.Context, key string, fn func() (any, error)) (any, error)
 
 	// UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器
@@ -79,6 +79,10 @@ func (s State) String() string {
 
 // Config 熔断器配置
 type Config struct {
+	// MaxKeys 限制单个 Breaker 实例缓存的熔断 key 数，默认 1024。
+	// 超过限制的新 key 返回 ErrKeyLimitExceeded，防止高基数输入导致无界内存增长。
+	MaxKeys int `json:"max_keys" yaml:"max_keys"`
+
 	// MaxRequests 半开状态下允许通过的最大请求数（默认：1）
 	// 用于探测服务是否恢复
 	MaxRequests uint32 `json:"max_requests" yaml:"max_requests"`
@@ -102,6 +106,12 @@ type Config struct {
 
 // validate 验证配置并设置默认值（内部使用）。
 func (c *Config) validate() error {
+	if c.MaxKeys == 0 {
+		c.MaxKeys = 1024
+	}
+	if c.MaxKeys < 0 {
+		return xerrors.Wrap(ErrInvalidConfig, "max_keys must be greater than 0")
+	}
 	if c.MaxRequests == 0 {
 		c.MaxRequests = 1
 	}
@@ -169,5 +179,5 @@ func New(cfg *Config, opts ...Option) (Breaker, error) {
 		clog.Float64("failure_ratio", cfg.FailureRatio),
 		clog.Int("minimum_requests", int(cfg.MinimumRequests)))
 
-	return newBreaker(cfg, logger, opt.fallback)
+	return newBreaker(cfg, logger, opt.meter, opt.fallback, opt.failureClassifier)
 }

@@ -80,7 +80,7 @@ func (c *redisConnector) Connect(ctx context.Context) error {
 	if c.cfg.EnableTracing {
 		if err := redisotel.InstrumentTracing(client); err != nil {
 			client.Close()
-			return xerrors.Wrapf(ErrConnection, "redis connector[%s]: enable tracing failed: %v", c.cfg.Name, err)
+			return wrapConnectorCause(ErrConnection, err, "redis connector[%s]: enable tracing failed", c.cfg.Name)
 		}
 	}
 
@@ -88,7 +88,7 @@ func (c *redisConnector) Connect(ctx context.Context) error {
 	if err := client.Ping(ctx).Err(); err != nil {
 		client.Close()
 		c.logger.Error("failed to connect to redis", clog.Error(err), clog.String("addr", c.cfg.Addr))
-		return xerrors.Wrapf(ErrConnection, "redis connector[%s]: ping failed: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "redis connector[%s]: ping failed", c.cfg.Name)
 	}
 
 	c.client = client
@@ -135,7 +135,7 @@ func (c *redisConnector) HealthCheck(ctx context.Context) error {
 	if err := client.Ping(ctx).Err(); err != nil {
 		c.healthy.Store(false)
 		c.logger.Warn("redis health check failed", clog.Error(err))
-		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrHealthCheck, "redis connector[%s]: %v", c.cfg.Name, err))
+		return c.metrics.observeHealth(ctx, wrapConnectorCause(ErrHealthCheck, err, "redis connector[%s]", c.cfg.Name))
 	}
 
 	c.healthy.Store(true)

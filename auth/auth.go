@@ -11,11 +11,13 @@
 //
 // 典型用法：
 //
-//	authenticator, _ := auth.New(&auth.Config{SecretKey: "..."})
-//	pair, _ := authenticator.GenerateTokenPair(ctx, &auth.Claims{
+//	authenticator, err := auth.New(&auth.Config{SecretKey: "replace-with-at-least-32-random-bytes"})
+//	if err != nil { return err }
+//	pair, err := authenticator.GenerateTokenPair(ctx, &auth.Claims{
 //	    RegisteredClaims: jwt.RegisteredClaims{Subject: "user-123"},
 //	})
-//	claims, _ := authenticator.ValidateAccessToken(ctx, pair.AccessToken)
+//	if err != nil { return err }
+//	claims, err := authenticator.ValidateAccessToken(ctx, pair.AccessToken)
 package auth
 
 import (
@@ -36,11 +38,11 @@ import (
 
 // TokenPair 表示一对 access / refresh 令牌。
 type TokenPair struct {
-	AccessToken           string
-	RefreshToken          string
-	AccessTokenExpiresAt  time.Time
-	RefreshTokenExpiresAt time.Time
-	AuthorizationScheme   string
+	AccessToken           string    `json:"access_token"`
+	RefreshToken          string    `json:"refresh_token"`
+	AccessTokenExpiresAt  time.Time `json:"access_token_expires_at"`
+	RefreshTokenExpiresAt time.Time `json:"refresh_token_expires_at"`
+	AuthorizationScheme   string    `json:"authorization_scheme"`
 }
 
 // Authenticator 认证器接口。
@@ -264,12 +266,8 @@ func (a *jwtAuth) RefreshToken(ctx context.Context, refreshToken string) (*Token
 
 // ExtractToken 从请求中提取 access token（导出用于中间件）。
 //
-// 查找顺序（如果 TokenLookup 未配置）:
-// 1. header:Authorization (Bearer token)
-// 2. query:token
-// 3. cookie:jwt
-//
-// 如果配置了 TokenLookup，则只按指定方式提取。
+// 默认只读取 header:Authorization (Bearer token)。Query/cookie token 容易
+// 泄漏到 URL、日志和历史记录，只有显式配置 TokenLookup 时才会启用。
 func (a *jwtAuth) ExtractToken(r *http.Request) (string, error) {
 	if a.config.TokenLookup != "" {
 		parts := strings.Split(a.config.TokenLookup, ":")
@@ -327,6 +325,7 @@ func (a *jwtAuth) extractFromSource(r *http.Request, source, key string) (string
 	}
 }
 
+// ClaimsKey is the Gin context key populated by GinMiddleware.
 const ClaimsKey = "auth:claims"
 
 func (a *jwtAuth) validationParserOptions() []jwt.ParserOption {
@@ -343,7 +342,7 @@ func (a *jwtAuth) validationParserOptions() []jwt.ParserOption {
 }
 
 func (a *jwtAuth) keyFunc() jwt.Keyfunc {
-	return func(token *jwt.Token) (any, error) {
+	return func(_ *jwt.Token) (any, error) {
 		return []byte(a.config.SecretKey), nil
 	}
 }

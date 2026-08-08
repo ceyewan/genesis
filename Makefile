@@ -1,4 +1,4 @@
-.PHONY: help up down test lint modernize modernize-check clean logs status examples buf-lint api-inventory api-inventory-check
+.PHONY: help up down test test-race lint modernize modernize-check clean logs status examples examples-check buf-lint api-inventory api-inventory-check exported-comments godoc-artifacts
 
 DEV_COMPOSE_FILE := deploy/dev/docker-compose.yml
 BUF_DIR := examples/proto
@@ -31,6 +31,10 @@ down:
 test:
 	@echo "运行测试..."
 	@go test ./...
+
+test-race:
+	@echo "运行 race tests..."
+	@go test -race -count=1 ./...
 
 lint:
 	@echo "运行代码检查..."
@@ -66,6 +70,19 @@ api-inventory:
 
 api-inventory-check:
 	@go run ./internal/cmd/apiinventory -check docs/v1-api-inventory.md
+
+exported-comments:
+	@golangci-lint run --config .golangci-doc.yml ./...
+
+godoc-artifacts:
+	@mkdir -p artifacts/godoc
+	@for pkg in $$(go list ./... | grep -v '/examples/' | grep -v '/internal/'); do \
+		name=$$(echo "$$pkg" | tr '/.' '__'); \
+		go doc -all "$$pkg" > "artifacts/godoc/$$name.txt" || exit 1; \
+	done
+
+examples-check:
+	@go test ./examples/...
 
 clean:
 	@echo "清理卷和网络..."

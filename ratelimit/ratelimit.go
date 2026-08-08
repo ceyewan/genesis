@@ -68,6 +68,19 @@ const (
 	ErrorPolicyFailClosed ErrorPolicy = "fail_closed"
 )
 
+func normalizeErrorPolicy(policy ErrorPolicy) ErrorPolicy {
+	switch policy {
+	case "", ErrorPolicyFailOpen:
+		return ErrorPolicyFailOpen
+	case ErrorPolicyFailClosed:
+		return ErrorPolicyFailClosed
+	default:
+		// Middleware constructors cannot return configuration errors. Unknown values
+		// therefore use the documented safe compatibility default.
+		return ErrorPolicyFailOpen
+	}
+}
+
 // Limiter 限流器核心接口
 type Limiter interface {
 	// Allow 尝试获取 1 个令牌（非阻塞）
@@ -92,7 +105,8 @@ type Limiter interface {
 	// Wait 阻塞等待直到获取 1 个令牌
 	Wait(ctx context.Context, key string, limit Limit) error
 
-	// Close 释放资源（如后台清理协程）
+	// Close 释放资源（如后台清理协程）。除 Discard 外，Close 是终态；
+	// 后续 Allow/AllowN/Wait 返回 ErrLimiterClosed。
 	Close() error
 }
 

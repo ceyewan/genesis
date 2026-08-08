@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -204,7 +205,7 @@ func (m *mockKVForMulti) MSet(ctx context.Context, items map[string]any, ttl tim
 	return ErrNotSupported
 }
 
-func (m *mockKVForMulti) RawClient() any {
+func (m *mockKVForMulti) RawClient() *redis.Client {
 	return nil
 }
 

@@ -20,6 +20,7 @@ type etcdLocker struct {
 	cfg     *Config
 	logger  clog.Logger
 	locks   map[string]*etcdLockEntry
+	lost    map[string]*etcdLockEntry
 	mu      sync.RWMutex
 
 	closeOnce sync.Once
@@ -28,9 +29,15 @@ type etcdLocker struct {
 }
 
 type etcdLockEntry struct {
-	mutex   *concurrency.Mutex
-	session *concurrency.Session
-	isTTL   bool
+	mutex       *concurrency.Mutex
+	session     *concurrency.Session
+	isTTL       bool
+	lostCh      chan error
+	lostOnce    sync.Once
+	monitorStop chan struct{}
+	monitorDone chan struct{}
+	stopOnce    sync.Once
+	releaseMu   sync.Mutex
 }
 
 // newEtcd 创建 Etcd Locker 实例
@@ -43,6 +50,9 @@ func newEtcd(conn connector.EtcdConnector, cfg *Config, logger clog.Logger) (Loc
 	}
 
 	client := conn.GetClient()
+	if client == nil {
+		return nil, xerrors.Wrap(ErrConnectorNil, "etcd connector is not connected")
+	}
 	// 创建默认 session，用于非 TTL 锁（或默认 TTL）
 	// 注意：concurrency.Session 默认 TTL 是 60s，会自动续期
 	session, err := concurrency.NewSession(client, concurrency.WithTTL(int(cfg.DefaultTTL.Seconds())))
@@ -56,6 +66,7 @@ func newEtcd(conn connector.EtcdConnector, cfg *Config, logger clog.Logger) (Loc
 		cfg:     cfg,
 		logger:  logger,
 		locks:   make(map[string]*etcdLockEntry),
+		lost:    make(map[string]*etcdLockEntry),
 	}, nil
 }
 
@@ -131,9 +142,12 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 	}
 
 	entry := &etcdLockEntry{
-		mutex:   mutex,
-		session: session,
-		isTTL:   ttl != l.cfg.DefaultTTL,
+		mutex:       mutex,
+		session:     session,
+		isTTL:       ttl != l.cfg.DefaultTTL,
+		lostCh:      make(chan error, 1),
+		monitorStop: make(chan struct{}),
+		monitorDone: make(chan struct{}),
 	}
 
 	l.mu.Lock()
@@ -154,7 +168,9 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 		return xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
 	l.locks[key] = entry
+	delete(l.lost, key)
 	l.mu.Unlock()
+	go l.monitorOwnership(key, entry)
 
 	if l.logger != nil {
 		l.logger.InfoContext(ctx, "lock acquired", clog.String("key", key))
@@ -163,19 +179,32 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 }
 
 func (l *etcdLocker) Unlock(ctx context.Context, key string) error {
-	l.mu.Lock()
+	l.mu.RLock()
 	entry, exists := l.locks[key]
 	if !exists {
-		l.mu.Unlock()
+		_, lost := l.lost[key]
+		l.mu.RUnlock()
+		if lost {
+			return xerrors.Wrapf(ErrOwnershipLost, "key: %s", key)
+		}
 		return xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
 	}
-	delete(l.locks, key)
-	l.mu.Unlock()
+	l.mu.RUnlock()
+
+	entry.releaseMu.Lock()
+	defer entry.releaseMu.Unlock()
+	l.mu.RLock()
+	current := l.locks[key]
+	l.mu.RUnlock()
+	if current != entry {
+		return xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
+	}
 
 	// 释放 Mutex
 	if err := entry.mutex.Unlock(ctx); err != nil {
 		return xerrors.Wrap(err, "failed to unlock")
 	}
+	l.removeReleased(key, entry)
 
 	// 如果是 TTL session，需要关闭它
 	if entry.isTTL && entry.session != nil {
@@ -186,6 +215,59 @@ func (l *etcdLocker) Unlock(ctx context.Context, key string) error {
 		l.logger.InfoContext(ctx, "lock released", clog.String("key", key))
 	}
 	return nil
+}
+
+func (l *etcdLocker) Lost(key string) <-chan error {
+	l.mu.RLock()
+	entry := l.locks[key]
+	if entry == nil {
+		entry = l.lost[key]
+	}
+	l.mu.RUnlock()
+	if entry != nil {
+		return entry.lostCh
+	}
+	ch := make(chan error, 1)
+	ch <- xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
+	close(ch)
+	return ch
+}
+
+func (l *etcdLocker) monitorOwnership(key string, entry *etcdLockEntry) {
+	defer close(entry.monitorDone)
+	select {
+	case <-entry.session.Done():
+		l.markOwnershipLost(key, entry)
+	case <-entry.monitorStop:
+	}
+}
+
+func (l *etcdLocker) markOwnershipLost(key string, entry *etcdLockEntry) {
+	l.mu.Lock()
+	if l.locks[key] == entry {
+		delete(l.locks, key)
+		l.lost[key] = entry
+		entry.lostOnce.Do(func() {
+			entry.lostCh <- xerrors.Wrapf(ErrOwnershipLost, "key: %s", key)
+			close(entry.lostCh)
+		})
+	}
+	l.mu.Unlock()
+}
+
+func (l *etcdLocker) stopMonitor(entry *etcdLockEntry) {
+	entry.stopOnce.Do(func() { close(entry.monitorStop) })
+	<-entry.monitorDone
+}
+
+func (l *etcdLocker) removeReleased(key string, entry *etcdLockEntry) {
+	l.mu.Lock()
+	if l.locks[key] == entry {
+		delete(l.locks, key)
+	}
+	l.mu.Unlock()
+	l.stopMonitor(entry)
+	entry.lostOnce.Do(func() { close(entry.lostCh) })
 }
 
 func (l *etcdLocker) getEtcdKey(key string) string {
@@ -203,6 +285,7 @@ func (l *etcdLocker) Close() error {
 		entries := make(map[string]*etcdLockEntry, len(l.locks))
 		maps.Copy(entries, l.locks)
 		l.locks = make(map[string]*etcdLockEntry)
+		l.lost = make(map[string]*etcdLockEntry)
 		defaultSession := l.session
 		l.session = nil
 		l.mu.Unlock()
@@ -214,6 +297,8 @@ func (l *etcdLocker) Close() error {
 				errs = append(errs, xerrors.Wrapf(err, "failed to unlock key: %s during close", key))
 			}
 			cancel()
+			l.stopMonitor(entry)
+			entry.lostOnce.Do(func() { close(entry.lostCh) })
 
 			if entry.isTTL && entry.session != nil {
 				if err := entry.session.Close(); err != nil {

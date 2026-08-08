@@ -22,7 +22,8 @@ type Registry interface {
 
 	// --- 服务发现 ---
 
-	// GetService 获取服务实例列表。
+	// GetService 获取服务实例列表。服务不存在时返回非 nil 空切片和 nil error；
+	// ErrServiceNotFound 仅用于注销不存在的注册，不用于普通空查询。
 	GetService(ctx context.Context, serviceName string) ([]*ServiceInstance, error)
 
 	// Watch 监听服务实例变化。
@@ -32,6 +33,7 @@ type Registry interface {
 	Watch(ctx context.Context, serviceName string) (<-chan ServiceEvent, error)
 
 	// LeaseFailures 返回非主动注销导致的 lease/keepalive 终止事件。
+	// 事件发送不会阻塞后台生命周期；Config.LeaseFailureBuffer 满时新事件会被丢弃并记录。
 	// 调用方应持续消费；成功 Shutdown 后通道关闭。
 	LeaseFailures() <-chan LeaseFailure
 

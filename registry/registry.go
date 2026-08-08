@@ -64,6 +64,10 @@ import (
 // 使用示例:
 //
 //	etcdConn, _ := connector.NewEtcd(etcdConfig)
+//	if err := etcdConn.Connect(ctx); err != nil {
+//		return err
+//	}
+//	defer etcdConn.Close()
 //	registry, _ := registry.New(etcdConn, &registry.Config{
 //	    Namespace: "/genesis/services",
 //	}, registry.WithLogger(logger))
@@ -104,6 +108,9 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 	if cfg.RetryInterval == 0 {
 		cfg.RetryInterval = 1 * time.Second
 	}
+	if cfg.LeaseFailureBuffer == 0 {
+		cfg.LeaseFailureBuffer = 64
+	}
 
 	if opt.logger == nil {
 		logger, err := clog.New(&clog.Config{
@@ -132,7 +139,7 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 		watchers:          make(map[uint64]context.CancelFunc),
 		stopChan:          make(chan struct{}),
 		closeDone:         make(chan struct{}),
-		leaseFailures:     make(chan LeaseFailure),
+		leaseFailures:     make(chan LeaseFailure, cfg.LeaseFailureBuffer),
 		registrations:     registrations,
 		watchEvents:       watchEvents,
 		leaseFailureCount: leaseFailures,
@@ -361,7 +368,7 @@ func (r *etcdRegistry) GetService(ctx context.Context, serviceName string) ([]*S
 		return nil, xerrors.Wrap(err, "get service failed")
 	}
 
-	var instances []*ServiceInstance
+	instances := make([]*ServiceInstance, 0, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
 		var instance ServiceInstance
 		if err := json.Unmarshal(kv.Value, &instance); err != nil {
@@ -654,7 +661,9 @@ func (r *etcdRegistry) Shutdown(ctx context.Context) error {
 		r.mu.Unlock()
 		clearDefaultRegistry(r)
 		go func() {
-			r.closeErr = r.shutdown(shutdownCtx)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			r.closeErr = r.shutdown(cleanupCtx)
 			close(r.closeDone)
 		}()
 	})
@@ -773,6 +782,10 @@ func (r *etcdRegistry) monitorKeepAlive(ka *leaseKeepAlive) {
 				select {
 				case r.leaseFailures <- failure:
 				case <-r.stopChan:
+				default:
+					r.logger.Error("lease failure notification dropped because buffer is full",
+						clog.String("service_id", serviceID),
+						clog.Int("buffer", r.cfg.LeaseFailureBuffer))
 				}
 
 				// 注意：此处不尝试重新注册，因为：

@@ -272,7 +272,8 @@ func TestParseGeneratorID_RoundTrip_MultiDC_Unit(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, id)
 
-	timestamp, datacenterID, workerID, sequence := ParseGeneratorID(id, GeneratorModeMultiDC)
+	timestamp, datacenterID, workerID, sequence, err := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.NoError(t, err)
 	require.GreaterOrEqual(t, timestamp, int64(1704067200000))
 	require.EqualValues(t, 9, datacenterID)
 	require.EqualValues(t, 17, workerID)
@@ -292,7 +293,8 @@ func TestParseGeneratorID_RoundTrip_SingleDC_Unit(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, id)
 
-	timestamp, datacenterID, workerID, sequence := ParseGeneratorID(id, GeneratorModeSingleDC)
+	timestamp, datacenterID, workerID, sequence, err := ParseGeneratorID(id, GeneratorModeSingleDC)
+	require.NoError(t, err)
 	require.GreaterOrEqual(t, timestamp, int64(1704067200000))
 	require.EqualValues(t, 0, datacenterID)
 	require.EqualValues(t, 513, workerID)
@@ -323,7 +325,8 @@ func TestSnowflake_DefaultMode_MultiDC_Unit(t *testing.T) {
 
 	id, err := gen.Next()
 	require.NoError(t, err)
-	_, datacenterID, workerID, _ := ParseGeneratorID(id, GeneratorModeMultiDC)
+	_, datacenterID, workerID, _, err := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.NoError(t, err)
 	require.EqualValues(t, 0, datacenterID)
 	require.EqualValues(t, 1, workerID)
 }
@@ -339,7 +342,8 @@ func TestNewGenerator_CopiesConfig_Unit(t *testing.T) {
 	cfg.WorkerID = 31
 	id, err := gen.Next()
 	require.NoError(t, err)
-	_, _, workerID, _ := ParseGeneratorID(id, GeneratorModeMultiDC)
+	_, _, workerID, _, err := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.NoError(t, err)
 	require.EqualValues(t, 1, workerID)
 }
 
@@ -361,10 +365,20 @@ func TestSnowflake_ClockRollback_Unit(t *testing.T) {
 	sf.state.Store((uint64(10_004) << 12) | 7)
 	id, err := sf.nextInt64()
 	require.NoError(t, err)
-	timestamp, _, _, sequence := ParseGeneratorID(id, GeneratorModeMultiDC)
+	timestamp, _, _, sequence, err := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.NoError(t, err)
 	require.Equal(t, genesisEpochMilli+10_004, timestamp)
 	require.EqualValues(t, 8, sequence)
 	require.False(t, errors.Is(err, ErrClockBackwards))
+}
+
+func TestParseGeneratorIDRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, _, err := ParseGeneratorID(1, GeneratorMode("unknown"))
+	require.ErrorIs(t, err, ErrInvalidInput)
+	_, _, _, _, err = ParseGeneratorID(-1, GeneratorModeMultiDC)
+	require.ErrorIs(t, err, ErrInvalidInput)
 }
 
 func TestSnowflake_Monotonicity_Unit(t *testing.T) {

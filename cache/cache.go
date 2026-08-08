@@ -15,13 +15,13 @@
 // 示例：
 //
 //	ctx := context.Background()
-//	dist, _ := cache.NewDistributed(&cache.DistributedConfig{
-//		Driver:    cache.DriverRedis,
-//		KeyPrefix: "myapp:",
-//	})
-//	defer dist.Close()
+//	local, err := cache.NewLocal(&cache.LocalConfig{MaxEntries: 1000})
+//	if err != nil {
+//		return err
+//	}
+//	defer local.Close()
 //
-//	if err := dist.Set(ctx, "user:1001", map[string]any{"name": "alice"}, time.Hour); err != nil {
+//	if err := local.Set(ctx, "user:1001", map[string]any{"name": "alice"}, time.Hour); err != nil {
 //		return err
 //	}
 package cache
@@ -30,8 +30,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -89,7 +90,7 @@ type Distributed interface {
 	// MSet 批量设置多个 key-value。
 	MSet(ctx context.Context, items map[string]any, ttl time.Duration) error
 	// RawClient 返回底层客户端，用于 Pipeline、Lua 脚本等高级场景。
-	RawClient() any
+	RawClient() *redis.Client
 }
 
 // Local 定义本地缓存能力。
@@ -133,7 +134,7 @@ func NewDistributed(cfg *DistributedConfig, opts ...Option) (Distributed, error)
 
 	switch cfg.Driver {
 	case DriverRedis:
-		return newRedis(opt.RedisConn, cfg, opt.Logger, opt.Meter)
+		return newRedis(opt.RedisConn, cfg, opt.Serializer, opt.Logger)
 	default:
 		return nil, xerrors.New("cache: unsupported distributed driver: " + string(cfg.Driver))
 	}
@@ -155,7 +156,7 @@ func NewLocal(cfg *LocalConfig, opts ...Option) (Local, error) {
 	}
 
 	opt := buildOptions(opts...)
-	return newLocal(cfg, opt.Logger, opt.Meter)
+	return newLocal(cfg, opt.Serializer, opt.Logger)
 }
 
 // NewMulti 根据配置创建多级缓存实例。
@@ -189,9 +190,5 @@ func buildOptions(opts ...Option) options {
 	if opt.Logger == nil {
 		opt.Logger = clog.Discard()
 	}
-	if opt.Meter == nil {
-		opt.Meter = metrics.Discard()
-	}
-
 	return opt
 }

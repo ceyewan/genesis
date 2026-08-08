@@ -57,6 +57,32 @@ func TestNew_InvalidConfig(t *testing.T) {
 	}
 }
 
+func TestExecuteEnforcesKeyLimit(t *testing.T) {
+	t.Parallel()
+
+	brk, err := New(&Config{MaxKeys: 1})
+	require.NoError(t, err)
+	_, err = brk.Execute(context.Background(), "first", func() (any, error) { return "ok", nil })
+	require.NoError(t, err)
+	_, err = brk.Execute(context.Background(), "second", func() (any, error) { return "ok", nil })
+	require.ErrorIs(t, err, ErrKeyLimitExceeded)
+}
+
+func TestExecuteUsesFailureClassifier(t *testing.T) {
+	t.Parallel()
+
+	businessErr := errors.New("business")
+	brk, err := New(&Config{MinimumRequests: 1, FailureRatio: 1}, WithFailureClassifier(func(err error) bool {
+		return !errors.Is(err, businessErr)
+	}))
+	require.NoError(t, err)
+	_, err = brk.Execute(context.Background(), "svc", func() (any, error) { return nil, businessErr })
+	require.ErrorIs(t, err, businessErr)
+	state, err := brk.State("svc")
+	require.NoError(t, err)
+	require.Equal(t, StateClosed, state)
+}
+
 func TestUnaryClientInterceptor_GRPCFailureClassification(t *testing.T) {
 	t.Run("business errors should not trip breaker", func(t *testing.T) {
 		brk, err := New(&Config{
@@ -121,9 +147,9 @@ func TestExecute_UsesFallbackForHalfOpenRejection(t *testing.T) {
 		Timeout:         50 * time.Millisecond,
 		FailureRatio:    0.5,
 		MinimumRequests: 2,
-	}, WithFallback(func(ctx context.Context, key string, err error) error {
+	}, WithFallback(func(ctx context.Context, key string, err error) (any, error) {
 		fallbackCalled <- err
-		return fallbackErr
+		return nil, fallbackErr
 	}))
 	require.NoError(t, err)
 

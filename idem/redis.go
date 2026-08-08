@@ -79,16 +79,19 @@ func (rs *redisStore) SetResult(ctx context.Context, key string, val []byte, ttl
 		return nil
 	}
 
-	_, err := redisSetResultScript.Run(
+	result, err := redisSetResultScript.Run(
 		ctx,
 		rs.client.GetClient(),
 		[]string{resultKey, lockKey},
 		val,
 		ttlMs,
 		string(token),
-	).Result()
+	).Int64()
 	if err != nil {
 		return xerrors.Wrap(err, "failed to set result")
+	}
+	if result == 0 {
+		return ErrLockLost
 	}
 
 	return nil
@@ -153,11 +156,15 @@ end
 return 0
 `)
 	redisSetResultScript = redis.NewScript(`
+if ARGV[3] ~= "" then
+	if redis.call("GET", KEYS[2]) ~= ARGV[3] then
+		return 0
+	end
+end
+
 redis.call("PSETEX", KEYS[1], ARGV[2], ARGV[1])
 if ARGV[3] ~= "" then
-	if redis.call("GET", KEYS[2]) == ARGV[3] then
-		redis.call("DEL", KEYS[2])
-	end
+	redis.call("DEL", KEYS[2])
 end
 return 1
 `)

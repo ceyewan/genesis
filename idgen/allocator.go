@@ -28,8 +28,9 @@ type Allocator interface {
 	// 保活失败时会向返回的通道发送错误
 	KeepAlive(ctx context.Context) <-chan error
 
-	// Stop 停止保活并释放资源
-	Stop()
+	// Stop 停止保活、等待后台任务并释放租约。释放失败会返回错误；
+	// 方法可并发重复调用，所有调用者观察同一个最终结果。
+	Stop() error
 }
 
 // ========================================
@@ -43,7 +44,7 @@ type Allocator interface {
 //
 //	// Redis 分配器
 //	allocator, _ := idgen.NewAllocator(&idgen.AllocatorConfig{
-//	    Driver: "redis",
+//	    Driver: idgen.DriverRedis,
 //	    MaxID:  512,
 //	}, idgen.WithRedisConnector(redisConn))
 //
@@ -73,13 +74,13 @@ func NewAllocator(cfg *AllocatorConfig, opts ...Option) (Allocator, error) {
 	}
 
 	switch config.Driver {
-	case "redis":
+	case DriverRedis:
 		if opt.RedisConnector == nil {
 			return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required")
 		}
 		return newRedisAllocator(&config, opt.RedisConnector, opt.Logger)
 
-	case "etcd":
+	case DriverEtcd:
 		if opt.EtcdConnector == nil {
 			return nil, xerrors.WithCode(ErrConnectorNil, "etcd_connector_required")
 		}
@@ -103,6 +104,7 @@ type redisAllocator struct {
 	mu            sync.Mutex
 	stopOnce      sync.Once
 	stopDone      chan struct{}
+	stopErr       error
 	keepAlive     bool
 	wg            sync.WaitGroup
 	lifecycleCtx  context.Context
@@ -314,7 +316,7 @@ func (a *redisAllocator) KeepAlive(ctx context.Context) <-chan error {
 }
 
 // Stop 停止保活并释放资源
-func (a *redisAllocator) Stop() {
+func (a *redisAllocator) Stop() error {
 	a.stopOnce.Do(func() {
 		close(a.stopCh)
 		a.lifecycleStop()
@@ -352,13 +354,22 @@ func (a *redisAllocator) Stop() {
 
 		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, _ = client.Eval(releaseCtx, script, []string{redisKey}, instanceValue).Result()
+		result, err := client.Eval(releaseCtx, script, []string{redisKey}, instanceValue).Int64()
+		if err != nil {
+			a.stopErr = xerrors.Wrap(err, "release worker id")
+			return
+		}
+		if result == 0 {
+			a.stopErr = xerrors.Wrap(ErrLeaseExpired, "worker id ownership lost before Stop")
+			return
+		}
 		a.logger.Info("worker id released",
 			clog.Int64("worker_id", instanceID),
 			clog.String("key", redisKey),
 		)
 	})
 	<-a.stopDone
+	return a.stopErr
 }
 
 // ========================================
@@ -374,6 +385,7 @@ type etcdAllocator struct {
 	mu            sync.Mutex
 	stopOnce      sync.Once
 	stopDone      chan struct{}
+	stopErr       error
 	keepAlive     bool
 	wg            sync.WaitGroup
 	lifecycleCtx  context.Context
@@ -565,7 +577,7 @@ func (a *etcdAllocator) KeepAlive(ctx context.Context) <-chan error {
 }
 
 // Stop 停止保活并释放资源
-func (a *etcdAllocator) Stop() {
+func (a *etcdAllocator) Stop() error {
 	a.stopOnce.Do(func() {
 		close(a.stopCh)
 		a.lifecycleStop()
@@ -586,7 +598,10 @@ func (a *etcdAllocator) Stop() {
 		}
 
 		// 撤销 Lease，关联的 key 会自动删除
-		_ = a.revokeLease(leaseID)
+		if err := a.revokeLease(leaseID); err != nil {
+			a.stopErr = xerrors.Wrap(err, "revoke allocator lease")
+			return
+		}
 		a.logger.Info("worker id released",
 			clog.Int64("worker_id", workerID),
 			clog.String("key", etcdKey),
@@ -594,6 +609,7 @@ func (a *etcdAllocator) Stop() {
 		)
 	})
 	<-a.stopDone
+	return a.stopErr
 }
 
 func (a *etcdAllocator) revokeLease(leaseID clientv3.LeaseID) error {

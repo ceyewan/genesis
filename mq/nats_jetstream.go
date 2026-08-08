@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -105,6 +106,20 @@ func (t *natsJetStreamTransport) Subscribe(ctx context.Context, topic string, ha
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: topic,
 		MaxDeliver:    t.cfg.MaxDeliver,
+	}
+	switch opts.StartID {
+	case "", "0":
+		consumerCfg.DeliverPolicy = jetstream.DeliverAllPolicy
+	case "$":
+		consumerCfg.DeliverPolicy = jetstream.DeliverNewPolicy
+	default:
+		parts := strings.Split(opts.StartID, ":")
+		sequence, parseErr := strconv.ParseUint(parts[len(parts)-1], 10, 64)
+		if parseErr != nil || sequence == 0 {
+			return nil, xerrors.Wrapf(ErrInvalidConfig, "invalid JetStream start ID: %s", opts.StartID)
+		}
+		consumerCfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+		consumerCfg.OptStartSeq = sequence
 	}
 
 	// 设置 Durable 名称
@@ -282,6 +297,8 @@ type jetStreamMessage struct {
 	msg     jetstream.Msg
 	ctx     context.Context
 	headers Headers
+	ackMu   sync.Mutex
+	acked   bool
 }
 
 func (m *jetStreamMessage) Context() context.Context {
@@ -304,7 +321,16 @@ func (m *jetStreamMessage) Headers() Headers {
 }
 
 func (m *jetStreamMessage) Ack() error {
-	return m.msg.Ack()
+	m.ackMu.Lock()
+	defer m.ackMu.Unlock()
+	if m.acked {
+		return nil
+	}
+	if err := m.msg.Ack(); err != nil {
+		return err
+	}
+	m.acked = true
+	return nil
 }
 
 func (m *jetStreamMessage) Nak() error {

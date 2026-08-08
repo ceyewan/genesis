@@ -439,15 +439,39 @@ func TestRedisLocker_WatchdogLostOwnershipClearsLocalState(t *testing.T) {
 
 	key := "test:" + testkit.NewID()
 
-	require.NoError(t, locker.Lock(ctx, key, WithTTL(2*time.Second)))
+	require.NoError(t, locker.Lock(ctx, key, WithTTL(300*time.Millisecond)))
+	lost := locker.Lost(key)
 	require.NoError(t, conn.GetClient().Del(ctx, "dlock:test:"+key).Err())
 
-	time.Sleep(1500 * time.Millisecond)
+	select {
+	case err := <-lost:
+		require.ErrorIs(t, err, ErrOwnershipLost)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ownership loss was not reported")
+	}
 
-	ok, err := locker.TryLock(ctx, key, WithTTL(2*time.Second))
+	ok, err := locker.TryLock(ctx, key, WithTTL(300*time.Millisecond))
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NoError(t, locker.Unlock(ctx, key))
+}
+
+func TestRedisLocker_UnlockCanRetryAfterCanceledContext(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 30*time.Second)
+	defer cancel()
+	conn := testkit.NewRedisContainerConnector(t)
+	locker := newRedisLockerWithConn(t, conn)
+	defer locker.Close()
+	key := "test:" + testkit.NewID()
+	require.NoError(t, locker.Lock(ctx, key, WithTTL(time.Second)))
+	lost := locker.Lost(key)
+
+	canceled, stop := context.WithCancel(context.Background())
+	stop()
+	require.Error(t, locker.Unlock(canceled, key))
+	require.NoError(t, locker.Unlock(ctx, key))
+	_, ok := <-lost
+	require.False(t, ok, "normal unlock must close Lost without an error")
 }
 
 // ============================================================================

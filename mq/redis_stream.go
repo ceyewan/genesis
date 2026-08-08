@@ -75,7 +75,7 @@ func (t *redisStreamTransport) Subscribe(ctx context.Context, topic string, hand
 
 	// Consumer Group 创建在 goroutine 外执行，确保错误能在初始化阶段暴露
 	if opts.QueueGroup != "" {
-		if err := t.client.XGroupCreateMkStream(ctx, topic, opts.QueueGroup, "$").Err(); err != nil && !isGroupExistsError(err) {
+		if err := t.client.XGroupCreateMkStream(ctx, topic, opts.QueueGroup, opts.StartID).Err(); err != nil && !isGroupExistsError(err) {
 			stopConsuming()
 			cancelHandlers()
 			return nil, xerrors.Wrap(err, "create consumer group failed")
@@ -220,7 +220,7 @@ func (t *redisStreamTransport) claimPendingMessages(
 
 // consumeBroadcast 广播模式消费
 func (t *redisStreamTransport) consumeBroadcast(ctx, handlerCtx context.Context, topic string, opts subscribeOptions, handler Handler) {
-	lastID := "$" // 只读新消息
+	lastID := opts.StartID
 
 	for {
 		select {
@@ -342,6 +342,8 @@ type redisStreamMessage struct {
 	client  *redis.Client
 	group   string
 	ctx     context.Context
+	ackMu   sync.Mutex
+	acked   bool
 }
 
 func (m *redisStreamMessage) Context() context.Context {
@@ -364,11 +366,21 @@ func (m *redisStreamMessage) Headers() Headers {
 }
 
 func (m *redisStreamMessage) Ack() error {
-	if m.group == "" {
-		// 非 Consumer Group 模式，无需 Ack
+	m.ackMu.Lock()
+	defer m.ackMu.Unlock()
+	if m.acked {
 		return nil
 	}
-	return m.client.XAck(context.Background(), m.topic, m.group, m.id).Err()
+	if m.group == "" {
+		// 非 Consumer Group 模式，无需 Ack
+		m.acked = true
+		return nil
+	}
+	if err := m.client.XAck(context.Background(), m.topic, m.group, m.id).Err(); err != nil {
+		return err
+	}
+	m.acked = true
+	return nil
 }
 
 func (m *redisStreamMessage) Nak() error {

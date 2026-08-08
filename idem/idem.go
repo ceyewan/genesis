@@ -167,6 +167,9 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 	if logger != nil {
 		logger = logger.With(clog.String("component", "idem"))
 	}
+	if opt.store != nil {
+		return newIdempotency(cfg, opt.store, logger), nil
+	}
 
 	switch cfg.Driver {
 	case DriverRedis:

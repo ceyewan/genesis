@@ -209,6 +209,9 @@ func (i *idem) loadResultOrAcquireLock(ctx context.Context, key string, decode c
 		if err == nil {
 			return result, "", false, nil
 		}
+		if xerrors.Is(err, ErrKeyConflict) {
+			return nil, "", false, err
+		}
 
 		if deleteErr := i.deleteCorruptedResult(ctx, key); deleteErr != nil {
 			return nil, "", false, deleteErr
@@ -280,7 +283,9 @@ func (i *idem) startLockRefresh(key string, token LockToken, onFailure context.C
 		return func() {}, nil
 	}
 
-	interval := max(i.cfg.LockTTL/2, 500*time.Millisecond)
+	// Renew well before expiration, including for sub-second locks. Redis TTLs
+	// have millisecond precision, so one millisecond is the practical floor.
+	interval := max(i.cfg.LockTTL/3, time.Millisecond)
 
 	stopCtx, stop := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

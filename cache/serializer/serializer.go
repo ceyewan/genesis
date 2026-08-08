@@ -1,3 +1,9 @@
+// Package serializer defines the value encoding boundary used by cache.
+// Built-in JSON and MessagePack implementations are available through New;
+// callers can implement Serializer and inject it with cache.WithSerializer.
+// Changing encodings requires invalidating existing entries or changing the
+// cache key prefix because values written by one encoding may not decode with
+// another.
 package serializer
 
 import (

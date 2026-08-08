@@ -318,8 +318,8 @@ func TestExtractToken_Query(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test?token=test-token-456", nil)
 
 	token, err := auth.ExtractToken(req)
-	require.NoError(t, err)
-	require.Equal(t, "test-token-456", token)
+	require.ErrorIs(t, err, ErrMissingToken)
+	require.Empty(t, token)
 }
 
 func TestExtractToken_Cookie(t *testing.T) {
@@ -328,8 +328,8 @@ func TestExtractToken_Cookie(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "jwt", Value: "test-token-789"})
 
 	token, err := auth.ExtractToken(req)
-	require.NoError(t, err)
-	require.Equal(t, "test-token-789", token)
+	require.ErrorIs(t, err, ErrMissingToken)
+	require.Empty(t, token)
 }
 
 func TestExtractToken_HeaderPriority(t *testing.T) {
@@ -349,8 +349,8 @@ func TestExtractToken_QueryFallback(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "jwt", Value: "cookie-token"})
 
 	token, err := auth.ExtractToken(req)
-	require.NoError(t, err)
-	require.Equal(t, "query-token", token)
+	require.ErrorIs(t, err, ErrMissingToken)
+	require.Empty(t, token)
 }
 
 func TestExtractToken_CookieFallback(t *testing.T) {
@@ -359,8 +359,8 @@ func TestExtractToken_CookieFallback(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "jwt", Value: "cookie-token"})
 
 	token, err := auth.ExtractToken(req)
-	require.NoError(t, err)
-	require.Equal(t, "cookie-token", token)
+	require.ErrorIs(t, err, ErrMissingToken)
+	require.Empty(t, token)
 }
 
 func TestExtractToken_NoToken(t *testing.T) {

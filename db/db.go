@@ -113,6 +113,9 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 	default:
 		return nil, xerrors.Wrapf(ErrInvalidConfig, "unknown driver: %s", cfg.Driver)
 	}
+	if gormDB == nil {
+		return nil, xerrors.Wrapf(ErrConnectorNotReady, "%s connector returned a nil client", cfg.Driver)
+	}
 
 	// 配置 GORM logger
 	gormDB = gormDB.Session(&gorm.Session{Logger: newGormLogger(opt.logger, opt.silentMode, opt.slowThreshold)})
@@ -141,11 +144,20 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 
 // DB 获取底层的 *gorm.DB 实例
 func (d *database) DB(ctx context.Context) *gorm.DB {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return d.client.WithContext(ctx)
 }
 
 // Transaction 执行事务操作
 func (d *database) Transaction(ctx context.Context, fn func(ctx context.Context, tx *gorm.DB) error) error {
+	if fn == nil {
+		return ErrNilTransaction
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return d.client.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(ctx, tx)
 	})

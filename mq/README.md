@@ -99,7 +99,7 @@ defer sub.Unsubscribe()
 handler = mq.Chain(
     mq.WithRecover(logger),                          // 最外层：捕获 panic
     mq.WithLogging(logger),                          // 记录每条消息的处理结果
-    mq.WithRetry(mq.DefaultRetryConfig, logger),     // 内层：指数退避重试
+    mq.WithRetry(mq.DefaultRetryConfig(), logger),   // 内层：指数退避重试
 )(businessHandler)
 ```
 

@@ -190,17 +190,22 @@ func composeGeneratorID(timestamp int64, mode GeneratorMode, dcID, workerID, seq
 }
 
 // ParseGeneratorID 解析 Snowflake ID，返回其组成部分。
-// timestamp 为绝对 Unix 毫秒时间戳。
-func ParseGeneratorID(id int64, mode GeneratorMode) (timestamp, datacenterID, workerID, sequence int64) {
+// timestamp 为绝对 Unix 毫秒时间戳。非法 ID 或未知 mode 返回 ErrInvalidInput。
+func ParseGeneratorID(id int64, mode GeneratorMode) (timestamp, datacenterID, workerID, sequence int64, err error) {
+	if id < 0 {
+		return 0, 0, 0, 0, xerrors.WithCode(ErrInvalidInput, "id_must_be_non_negative")
+	}
 	timestamp = (id >> 22) + genesisEpochMilli
 	switch mode {
 	case GeneratorModeSingleDC:
 		datacenterID = 0
 		workerID = (id >> 12) & 0x3FF
-	default:
+	case GeneratorModeMultiDC:
 		datacenterID = (id >> 17) & 0x1F
 		workerID = (id >> 12) & 0x1F
+	default:
+		return 0, 0, 0, 0, xerrors.WithCode(ErrInvalidInput, "unsupported_generator_mode")
 	}
 	sequence = id & 0xFFF
-	return timestamp, datacenterID, workerID, sequence
+	return timestamp, datacenterID, workerID, sequence, nil
 }

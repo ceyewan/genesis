@@ -221,10 +221,10 @@ func TestUnaryClientInterceptor_WithFallback(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "error"})
 
 	fallbackCalled := false
-	fallback := func(ctx context.Context, serviceName string, err error) error {
+	fallback := func(ctx context.Context, serviceName string, err error) (any, error) {
 		fallbackCalled = true
 		// 返回降级响应
-		return status.Error(codes.ResourceExhausted, "circuit breaker open - fallback response")
+		return nil, status.Error(codes.ResourceExhausted, "circuit breaker open - fallback response")
 	}
 
 	cfg := &Config{
@@ -401,10 +401,14 @@ func TestInterceptorOption_WithKeyFunc(t *testing.T) {
 
 		// 应该使用第二个 key
 		internal := brk.(*circuitBreaker)
-		if _, ok := internal.breakers.Load("second-key"); !ok {
+		internal.mu.RLock()
+		_, secondOK := internal.breakers["second-key"]
+		_, firstOK := internal.breakers["first-key"]
+		internal.mu.RUnlock()
+		if !secondOK {
 			t.Fatal("last WithKeyFunc value was not used")
 		}
-		if _, ok := internal.breakers.Load("first-key"); ok {
+		if firstOK {
 			t.Fatal("earlier WithKeyFunc value was unexpectedly used")
 		}
 	})

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/metrics"
 )
 
 // ============================================================
@@ -251,11 +252,41 @@ func TestWithRetry(t *testing.T) {
 // ============================================================
 
 func TestDefaultRetryConfig(t *testing.T) {
-	require.Equal(t, 3, DefaultRetryConfig.MaxRetries)
-	require.Equal(t, 100*time.Millisecond, DefaultRetryConfig.InitialBackoff)
-	require.Equal(t, 5*time.Second, DefaultRetryConfig.MaxBackoff)
-	require.Equal(t, 2.0, DefaultRetryConfig.Multiplier)
+	cfg := DefaultRetryConfig()
+	require.Equal(t, 3, cfg.MaxRetries)
+	require.Equal(t, 100*time.Millisecond, cfg.InitialBackoff)
+	require.Equal(t, 5*time.Second, cfg.MaxBackoff)
+	require.Equal(t, 2.0, cfg.Multiplier)
 }
+
+func TestWithRetryNegativeConfigStillExecutesOnce(t *testing.T) {
+	calls := 0
+	handler := WithRetry(RetryConfig{MaxRetries: -10}, nil)(func(Message) error {
+		calls++
+		return errors.New("failed")
+	})
+	require.Error(t, handler(&mockMessage{}))
+	require.Equal(t, 1, calls)
+}
+
+func TestWithDeadLetterReturnsAckFailure(t *testing.T) {
+	transport := &mockTransport{}
+	client := &mq{transport: transport, logger: clog.Discard(), meter: metrics.Discard()}
+	message := &ackFailMessage{mockMessage: &mockMessage{}, err: errors.New("ack failed")}
+	handler := WithDeadLetter(client, "orders.dlq", -1, nil)(func(Message) error {
+		return errors.New("handler failed")
+	})
+	err := handler(message)
+	require.ErrorContains(t, err, "ack failed")
+	require.True(t, transport.publishCalled)
+}
+
+type ackFailMessage struct {
+	*mockMessage
+	err error
+}
+
+func (m *ackFailMessage) Ack() error { return m.err }
 
 // ============================================================
 // WithLogging 测试

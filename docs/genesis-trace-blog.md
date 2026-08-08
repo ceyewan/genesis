@@ -6,10 +6,10 @@ Genesis `trace` 是 Genesis 的 L0 基础组件，核心职责是提供统一的
 
 - `trace` 不是完整的 tracing 平台客户端，而是 Genesis 内部统一 tracing 语义的一层薄抽象
 - 它基于 OpenTelemetry，但当前更偏“初始化与传播 helper”，而不是完整 tracing 框架
-- 当前实现采用全局模式：`Init()` 和 `Discard()` 都会安装全局 `TracerProvider` 与传播器
+- 当前实现采用全局模式：`Init()` 和 `InstallLocalProvider()` 都会安装全局 `TracerProvider` 与传播器
 - Gin / gRPC 中间件保持薄包装，重点在于统一接入方式，而不是重造官方中间件
 - MQ 场景下提供 producer / consumer helper，并支持 `link` 与 `child_of` 两种关系建模
-- `Discard()` 虽然不导出 trace 数据，但仍然会修改全局 tracing 状态
+- `InstallLocalProvider()` 虽然不导出 trace 数据，但仍然会修改全局 tracing 状态
 
 ---
 
@@ -55,7 +55,7 @@ Genesis 需要自己的 `trace`，不是为了替代 OTel，而是为了把“�
 
 ```go
 func Init(cfg *Config) (func(context.Context) error, error)
-func Discard(serviceName string) (func(context.Context) error, error)
+func InstallLocalProvider(serviceName string) (func(context.Context) error, error)
 ```
 
 第二类是传播：
@@ -83,14 +83,14 @@ func MarkSpanError(span oteltrace.Span, err error)
 | `ServiceName` | 服务名，必填 |
 | `Endpoint` | OTLP gRPC 端点 |
 | `Sampler` | 采样率，范围 0 到 1 |
-| `Batcher` | `batch` 或 `simple` |
+| `Batcher` | `trace.BatcherBatch` 或 `trace.BatcherImmediate` |
 | `Insecure` | 是否使用非 TLS 连接 |
 
 这里最需要讲清楚的是两条契约。
 
 第一，`Init()` 当前采用**全局模式**。它不仅创建 `TracerProvider`，还会安装 OpenTelemetry 全局 `TracerProvider` 和全局 `TextMapPropagator`。因此它更像应用启动时的一次性初始化动作，而不是一个局部构造器。
 
-第二，`Discard()` 也采用全局模式。它的真实语义不是“给我一个局部无副作用的 tracer”，而是“安装一个不导出数据、但仍能生成 TraceID 并维持传播的全局 provider”。这个区别必须说透，否则调用方很容易误判它的副作用范围。
+第二，`InstallLocalProvider()` 也采用全局模式。它的语义是“安装一个不导出数据、但仍能生成 TraceID 并维持传播的全局 provider”。
 
 ---
 
@@ -165,9 +165,9 @@ func MarkSpanError(span oteltrace.Span, err error)
 
 但接受这种模式，不等于把它藏起来。真正的问题从来不是“用了全局状态”，而是“用了全局状态却不告诉调用方”。
 
-### 7.2 为什么 `Discard()` 仍然存在
+### 7.2 为什么 `InstallLocalProvider()` 存在
 
-有些场景下，应用确实希望本地生成 TraceID、维持传播链路，却不把数据导出到后端。例如示例程序、本地开发或没有 tracing 基础设施的环境。`Discard()` 的作用就是提供这样一种“无导出 provider”。
+有些场景下，应用确实希望本地生成 TraceID、维持传播链路，却不把数据导出到后端。例如示例程序、本地开发或没有 tracing 基础设施的环境。`InstallLocalProvider()` 提供这种“无导出 provider”。
 
 它的问题不在功能本身，而在容易被误解成“局部 helper”。因此保守方案不是删除它，而是把它的全局副作用明确写透。
 
@@ -204,12 +204,12 @@ func MarkSpanError(span oteltrace.Span, err error)
 
 第三，MQ 场景默认使用 `link`；只有在确实需要把生产和消费串成单条 trace 时，再显式改用 `child_of`。
 
-第四，明确把 `Discard()` 当成“安装无导出全局 provider”的手段，而不是“随手拿一个本地 tracer”的便捷函数。
+第四，明确把 `InstallLocalProvider()` 当成“安装无导出全局 provider”的手段。
 
 常见误区也很集中：
 
 - 把 `Init()` 当成没有副作用的普通构造器
-- 认为 `Discard()` 不会影响全局 tracing 状态
+- 认为 `InstallLocalProvider()` 不会影响全局 tracing 状态
 - 在异步消息场景里默认滥用 `child_of`
 - 中断 `context.Context` 传播，导致 trace 链路断裂
 

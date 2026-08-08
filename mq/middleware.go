@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // Middleware Handler 中间件
@@ -45,8 +46,17 @@ func Chain(middlewares ...Middleware) Middleware {
 //	dlMiddleware := mq.WithDeadLetter(mqClient, "orders.DLQ", 3, logger)
 //	handler = dlMiddleware(myHandler)
 func WithDeadLetter(pub MQ, dlTopic string, maxRetries int, logger clog.Logger) Middleware {
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	if logger == nil {
+		logger = clog.Discard()
+	}
 	return func(next Handler) Handler {
 		return func(msg Message) error {
+			if pub == nil || next == nil || msg == nil || dlTopic == "" {
+				return xerrors.Wrap(ErrInvalidConfig, "dead-letter middleware requires publisher, topic, handler, and message")
+			}
 			var err error
 			for attempt := 0; attempt <= maxRetries; attempt++ {
 				err = next(msg)
@@ -73,7 +83,9 @@ func WithDeadLetter(pub MQ, dlTopic string, maxRetries int, logger clog.Logger) 
 				headers = make(Headers)
 			}
 			headers.Set("x-original-topic", msg.Topic())
-			headers.Set("x-error", err.Error())
+			if err != nil {
+				headers.Set("x-error", err.Error())
+			}
 
 			dlErr := pub.Publish(msg.Context(), dlTopic, msg.Data(), WithHeaders(headers))
 			if dlErr != nil {
@@ -99,6 +111,7 @@ func WithDeadLetter(pub MQ, dlTopic string, maxRetries int, logger clog.Logger) 
 					clog.String("msg_id", msg.ID()),
 					clog.Error(ackErr),
 				)
+				return xerrors.Wrap(ackErr, "ack message after publishing to DLQ")
 			}
 
 			return nil
@@ -121,12 +134,15 @@ type RetryConfig struct {
 	Multiplier float64
 }
 
-// DefaultRetryConfig 默认重试配置
-var DefaultRetryConfig = RetryConfig{
-	MaxRetries:     3,
-	InitialBackoff: 100 * time.Millisecond,
-	MaxBackoff:     5 * time.Second,
-	Multiplier:     2.0,
+// DefaultRetryConfig returns a fresh default configuration. Returning a value
+// avoids mutable process-global retry behavior.
+func DefaultRetryConfig() RetryConfig {
+	return RetryConfig{
+		MaxRetries:     3,
+		InitialBackoff: 100 * time.Millisecond,
+		MaxBackoff:     5 * time.Second,
+		Multiplier:     2.0,
+	}
 }
 
 // WithRetry 创建重试中间件
@@ -140,14 +156,30 @@ var DefaultRetryConfig = RetryConfig{
 //
 // 示例：
 //
-//	handler := mq.WithRetry(mq.DefaultRetryConfig, logger)(myHandler)
+//	handler := mq.WithRetry(mq.DefaultRetryConfig(), logger)(myHandler)
 func WithRetry(cfg RetryConfig, logger clog.Logger) Middleware {
+	if cfg.MaxRetries < 0 {
+		cfg.MaxRetries = 0
+	}
+	defaults := DefaultRetryConfig()
+	if cfg.InitialBackoff <= 0 {
+		cfg.InitialBackoff = defaults.InitialBackoff
+	}
+	if cfg.MaxBackoff <= 0 || cfg.MaxBackoff < cfg.InitialBackoff {
+		cfg.MaxBackoff = max(defaults.MaxBackoff, cfg.InitialBackoff)
+	}
 	if cfg.Multiplier <= 1.0 {
-		cfg.Multiplier = 2.0
+		cfg.Multiplier = defaults.Multiplier
+	}
+	if logger == nil {
+		logger = clog.Discard()
 	}
 
 	return func(next Handler) Handler {
 		return func(msg Message) error {
+			if next == nil || msg == nil {
+				return xerrors.Wrap(ErrInvalidConfig, "retry middleware requires handler and message")
+			}
 			var err error
 			backoff := cfg.InitialBackoff
 
@@ -194,6 +226,9 @@ func WithRetry(cfg RetryConfig, logger clog.Logger) Middleware {
 //
 // 记录每条消息的处理情况，包括：topic、消息 ID、处理耗时、错误信息。
 func WithLogging(logger clog.Logger) Middleware {
+	if logger == nil {
+		logger = clog.Discard()
+	}
 	return func(next Handler) Handler {
 		return func(msg Message) error {
 			start := time.Now()
@@ -224,6 +259,9 @@ func WithLogging(logger clog.Logger) Middleware {
 //
 // 捕获 Handler 中的 panic，转换为错误返回，避免整个消费者崩溃。
 func WithRecover(logger clog.Logger) Middleware {
+	if logger == nil {
+		logger = clog.Discard()
+	}
 	return func(next Handler) Handler {
 		return func(msg Message) (err error) {
 			defer func() {

@@ -76,11 +76,7 @@ func NewLogger() clog.Logger {
 // NewMeter 返回一个用于测试的 meter。
 // 使用 Discard 模式，不实际输出指标。
 func NewMeter() metrics.Meter {
-	meter, err := metrics.New(metrics.NewDevDefaultConfig("test"))
-	if err != nil {
-		return metrics.Discard()
-	}
-	return meter
+	return metrics.Discard()
 }
 
 // NewContext 返回一个带有超时的测试上下文。

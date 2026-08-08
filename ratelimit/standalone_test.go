@@ -180,6 +180,40 @@ func TestStandaloneLimiter_Wait(t *testing.T) {
 	})
 }
 
+func TestStandaloneLimiter_CloseIsTerminal(t *testing.T) {
+	limiter := newStandaloneLimiter(t)
+	require.NoError(t, limiter.Close())
+
+	allowed, err := limiter.Allow(context.Background(), "closed", Limit{Rate: 1, Burst: 1})
+	require.False(t, allowed)
+	require.ErrorIs(t, err, ErrLimiterClosed)
+	require.ErrorIs(t, limiter.Wait(context.Background(), "closed", Limit{Rate: 1, Burst: 1}), ErrLimiterClosed)
+}
+
+func TestStandaloneLimiter_WaitDoesNotBlockConcurrentAllow(t *testing.T) {
+	limiter := newStandaloneLimiter(t)
+	defer limiter.Close()
+	ctx := context.Background()
+	limit := Limit{Rate: 10, Burst: 1}
+	_, _ = limiter.Allow(ctx, "same-key", limit)
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- limiter.Wait(ctx, "same-key", limit) }()
+	time.Sleep(10 * time.Millisecond)
+
+	allowDone := make(chan struct{})
+	go func() {
+		_, _ = limiter.Allow(ctx, "same-key", limit)
+		close(allowDone)
+	}()
+	select {
+	case <-allowDone:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("Allow was serialized behind Wait")
+	}
+	require.NoError(t, <-waitDone)
+}
+
 // ============================================================
 // 边界条件测试
 // ============================================================

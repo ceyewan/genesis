@@ -514,6 +514,17 @@ func TestMQ_AutoAckBehavior(t *testing.T) {
 	})
 }
 
+func TestSubscribeStartOptions(t *testing.T) {
+	opts := defaultSubscribeOptions()
+	require.Equal(t, "0", opts.StartID)
+	FromLatest()(&opts)
+	require.Equal(t, "$", opts.StartID)
+	FromID("123-0")(&opts)
+	require.Equal(t, "123-0", opts.StartID)
+	FromBeginning()(&opts)
+	require.Equal(t, "0", opts.StartID)
+}
+
 // ============================================================
 // Headers 测试
 // ============================================================

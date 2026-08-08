@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -76,6 +77,48 @@ func TestShutdownHonorsEachCallersContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-requestDone
+}
+
+func TestFirstCanceledShutdownDoesNotAbortCleanup(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(started)
+		<-release
+	})}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		_ = server.Serve(listener)
+	}()
+	go func() {
+		response, requestErr := http.Get("http://" + listener.Addr().String())
+		if requestErr == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	<-started
+	meter := &meterImpl{provider: sdkmetric.NewMeterProvider(), httpServer: server, httpDone: httpDone, shutdownDone: make(chan struct{})}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := meter.Shutdown(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first shutdown = %v, want context.Canceled", err)
+	}
+	second := make(chan error, 1)
+	go func() { second <- meter.Shutdown(context.Background()) }()
+	select {
+	case err := <-second:
+		t.Fatalf("cleanup ended before request release: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestNewCopiesConfigAndShutdownIsConcurrentIdempotent(t *testing.T) {
@@ -204,6 +247,35 @@ func TestNewFailsWhenMetricsPortIsInUse(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("New() error = nil, want listen failure")
+	}
+	if !errors.Is(err, ErrListen) {
+		t.Fatalf("New() error = %v, want ErrListen", err)
+	}
+}
+
+func TestNewUsesConfiguredListenAddress(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	meter, err := New(&Config{
+		ServiceName:   "test-service",
+		ListenAddress: "127.0.0.1",
+		Port:          port,
+		Path:          "/metrics",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := meter.(*meterImpl).httpServer.Addr; got != net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) {
+		t.Fatalf("server address = %q", got)
+	}
+	if err := meter.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

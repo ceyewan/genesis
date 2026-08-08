@@ -225,9 +225,9 @@ func TestFallbackFunc(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
 
 	fallbackCalled := false
-	fallback := func(ctx context.Context, serviceName string, err error) error {
+	fallback := func(ctx context.Context, serviceName string, err error) (any, error) {
 		fallbackCalled = true
-		return nil
+		return "cached", nil
 	}
 
 	cfg := &Config{
@@ -258,8 +258,8 @@ func TestFallbackFunc(t *testing.T) {
 		return nil, testErr
 	}
 	result, err := brk.Execute(ctx, "test-service", fn)
-	if err != nil || result != nil {
-		t.Fatalf("fallback Execute = (%v, %v), want (nil, nil)", result, err)
+	if err != nil || result != "cached" {
+		t.Fatalf("fallback Execute = (%v, %v), want (cached, nil)", result, err)
 	}
 	if !fallbackCalled {
 		t.Fatal("fallback was not called for an open breaker")
@@ -313,7 +313,11 @@ func TestDefaultKeyFunc(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := brk.(*circuitBreaker).breakers.Load(conn.Target()); !ok {
+	internal := brk.(*circuitBreaker)
+	internal.mu.RLock()
+	_, ok := internal.breakers[conn.Target()]
+	internal.mu.RUnlock()
+	if !ok {
 		t.Fatalf("default key %q was not used", conn.Target())
 	}
 }

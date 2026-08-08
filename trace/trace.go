@@ -1,17 +1,18 @@
 // Package trace 提供 Genesis 的 OpenTelemetry 链路追踪初始化与传播辅助能力。
 //
-// 这个组件当前采用“全局模式”工作：Init 和 Discard 都会安装全局
+// 这个组件当前采用“全局模式”工作：Init 和 InstallLocalProvider 都会安装全局
 // TracerProvider 与 TextMapPropagator。这样做便于 Gin、gRPC、数据库插件和
 // MQ helper 共享同一套全局 tracing 状态；代价是重复初始化会覆盖之前安装的
 // 全局 provider。
 //
 // 因此推荐的使用方式是：应用启动时只初始化一次 trace，并在退出时调用返回的
-// shutdown 函数。对于只需要本地生成 TraceID 的场景，也应明确知道 Discard
+// shutdown 函数。对于只需要本地生成 TraceID 的场景，也应明确知道 InstallLocalProvider
 // 仍然会修改全局 tracing 状态。
 package trace
 
 import (
 	"context"
+	"maps"
 	"sync"
 	"time"
 
@@ -52,6 +53,7 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 		return nil, xerrors.New("config is required")
 	}
 	config := *cfg
+	config.Headers = maps.Clone(cfg.Headers)
 	config.setDefaults()
 	if err := validateConfig(&config); err != nil {
 		return nil, err
@@ -63,6 +65,9 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(cfg.Endpoint),
 		otlptracegrpc.WithTimeout(cfg.ExporterTimeout),
+	}
+	if len(cfg.Headers) > 0 {
+		opts = append(opts, otlptracegrpc.WithHeaders(cfg.Headers))
 	}
 	if cfg.Insecure {
 		opts = append(opts, otlptracegrpc.WithInsecure())
@@ -94,8 +99,7 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.Sampler))),
 	}
 
-	if cfg.Batcher == "simple" {
-		// 保留 v0 配置值，但仍异步导出，避免 exporter 故障阻塞业务 span.End。
+	if cfg.Batcher == BatcherImmediate {
 		tpOpts = append(tpOpts, sdktrace.WithBatcher(spanExporter,
 			sdktrace.WithMaxExportBatchSize(1),
 			sdktrace.WithBatchTimeout(time.Millisecond),
@@ -119,9 +123,14 @@ func newTracerShutdown(tp *sdktrace.TracerProvider) func(context.Context) error 
 	shutdownDone := make(chan struct{})
 	var shutdownErr error
 	return func(ctx context.Context) error {
+		if ctx == nil {
+			return xerrors.New("trace shutdown context is nil")
+		}
 		shutdownOnce.Do(func() {
-			go func(shutdownCtx context.Context) {
+			go func() {
 				defer close(shutdownDone)
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
 				shutdownErr = tp.Shutdown(shutdownCtx)
 				if otel.GetTracerProvider() == tp {
 					otel.SetTracerProvider(tracenoop.NewTracerProvider())
@@ -130,7 +139,7 @@ func newTracerShutdown(tp *sdktrace.TracerProvider) func(context.Context) error 
 						propagation.Baggage{},
 					))
 				}
-			}(ctx)
+			}()
 		})
 		select {
 		case <-shutdownDone:
@@ -170,8 +179,8 @@ func validateConfig(cfg *Config) error {
 	if cfg.Sampler < 0 || cfg.Sampler > 1 {
 		return xerrors.New("sampler must be between 0 and 1")
 	}
-	if cfg.Batcher != "" && cfg.Batcher != "batch" && cfg.Batcher != "simple" {
-		return xerrors.New("batcher must be \"batch\" or \"simple\"")
+	if cfg.Batcher != "" && cfg.Batcher != BatcherBatch && cfg.Batcher != BatcherImmediate {
+		return xerrors.New("batcher must be \"batch\" or \"immediate\"")
 	}
 	return nil
 }

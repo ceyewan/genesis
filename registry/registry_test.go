@@ -113,9 +113,12 @@ func TestNew(t *testing.T) {
 		require.Empty(t, cfg.Namespace)
 		require.Zero(t, cfg.DefaultTTL)
 		require.Zero(t, cfg.RetryInterval)
+		require.Zero(t, cfg.LeaseFailureBuffer)
 		internal := reg.(*etcdRegistry).cfg
 		require.Equal(t, "/genesis/services", internal.Namespace)
 		require.Equal(t, 30*time.Second, internal.DefaultTTL)
+		require.Equal(t, 64, internal.LeaseFailureBuffer)
+		require.Equal(t, 64, cap(reg.LeaseFailures()))
 	})
 }
 
@@ -759,6 +762,7 @@ func TestShutdownDeadlineStillClosesLeaseFailuresAfterWorkersExit(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("lease failure channel did not close after workers exited")
 	}
+	require.NoError(t, reg.Shutdown(context.Background()))
 }
 
 func TestEmitSnapshotDiff(t *testing.T) {

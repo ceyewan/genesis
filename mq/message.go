@@ -114,13 +114,14 @@ type Subscription interface {
 	Unsubscribe() error
 
 	// Drain 停止接收新消息并等待已经交付的 Handler 完成。
-	// ctx 取消时会强制停止订阅并返回 context 错误。
+	// ctx 取消时会取消 Handler context 并返回 context 错误；忽略 context 的
+	// Handler 无法被 Go 运行时强制终止，可能在返回后继续运行。
 	Drain(ctx context.Context) error
 
 	// Done 返回一个 channel，订阅结束时关闭
 	//
 	// 可用于等待订阅完全停止：
-	//   <-sub.Done()
 	//   sub.Unsubscribe()
+	//   <-sub.Done()
 	Done() <-chan struct{}
 }

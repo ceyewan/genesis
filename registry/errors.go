@@ -23,10 +23,4 @@ var (
 
 	// ErrLeaseExpired 租约已过期
 	ErrLeaseExpired = xerrors.New("lease expired")
-
-	// ErrWatchClosed Watch 已关闭
-	ErrWatchClosed = xerrors.New("watch closed")
-
-	// ErrConnectionFailed 连接失败
-	ErrConnectionFailed = xerrors.New("connection failed")
 )

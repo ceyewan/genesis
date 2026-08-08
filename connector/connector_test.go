@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -1002,4 +1003,16 @@ func BenchmarkIsHealthy(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		conn.IsHealthy()
 	}
+}
+
+func TestWrapConnectorCausePreservesClassificationAndCause(t *testing.T) {
+	cause := context.DeadlineExceeded
+	err := wrapConnectorCause(ErrConnection, cause, "redis connector[%s]", "test")
+	require.ErrorIs(t, err, ErrConnection)
+	require.ErrorIs(t, err, cause)
+}
+
+func TestPostgresConnectTimeoutAppliedToDSNForms(t *testing.T) {
+	require.Contains(t, withPostgresConnectTimeout("postgres://u:p@localhost/db?sslmode=disable", 3*time.Second), "connect_timeout=3")
+	require.Contains(t, withPostgresConnectTimeout("host=localhost user=u", 3*time.Second), "connect_timeout=3")
 }

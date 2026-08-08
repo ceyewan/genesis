@@ -5,8 +5,9 @@
 // 设计原则：
 //   - 简单优于复杂：核心接口精简，通过 Option 扩展能力
 //   - 显式优于隐式：不做自动注入，用户完全掌控消息流
-//   - 语义明确：两个驱动都提供持久化和 At-least-once 投递，但 Ack/Nak、
-//     QueueGroup、Durable、BatchSize 等细节保留各自差异
+//   - 语义明确：持久 consumer/group 提供 At-least-once；Redis 广播模式
+//     没有服务端消费进度或重投保证。Ack/Nak、QueueGroup、Durable、BatchSize
+//     等细节保留各自差异
 package mq
 
 import (
@@ -22,7 +23,8 @@ import (
 //
 // 提供统一的发布订阅入口，并保留底层驱动的语义差异。
 // 当前支持的后端：NATS JetStream、Redis Stream。
-// 两者均提供持久化和 At-least-once 投递，但 Nak 语义不同，详见 Message.Nak()。
+// JetStream durable 与 Redis consumer group 提供持久化和 At-least-once；
+// Redis 广播模式只是读取 retained stream，不提供服务端重投语义。
 type MQ interface {
 	// Publish 发布消息到指定主题
 	//
@@ -46,7 +48,8 @@ type MQ interface {
 	Subscribe(ctx context.Context, topic string, handler Handler, opts ...SubscribeOption) (Subscription, error)
 
 	// Drain 停止接收新消息并等待所有已交付 Handler 完成。
-	// 达到 ctx deadline 后会强制停止剩余订阅。
+	// 达到 ctx deadline 后会取消 Handler context 并返回；Go 无法强制终止
+	// 忽略 context 的 Handler，因此这类 Handler 仍可能继续运行。
 	Drain(ctx context.Context) error
 
 	// Close 关闭 MQ 客户端

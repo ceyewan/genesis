@@ -685,3 +685,53 @@ func TestLoaderDotEnvReadFailureReturnsError(t *testing.T) {
 		t.Fatalf("Load() error = nil, want read .env error")
 	}
 }
+
+func TestLoaderEnvOnlyUnmarshal(t *testing.T) {
+	t.Setenv("ENV_ONLY_APP_NAME", "from-env")
+	t.Setenv("ENV_ONLY_SERVICE_NAME", "root-name")
+
+	loader, err := New(&Config{Paths: []string{t.TempDir()}, EnvPrefix: "ENV_ONLY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loader.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		App struct {
+			Name string `mapstructure:"name"`
+		} `mapstructure:"app"`
+		ServiceName string `mapstructure:"service_name"`
+	}
+	if err := loader.Unmarshal(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.App.Name != "from-env" || got.ServiceName != "root-name" {
+		t.Fatalf("Unmarshal() = %+v, want env-only values", got)
+	}
+}
+
+func TestLoaderFailedLoadKeepsLastGoodSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("app: {name: good}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loader, err := New(&Config{Paths: []string{dir}, EnvPrefix: "TRANSACTIONAL_LOAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loader.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("app: [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := loader.Load(context.Background()); err == nil {
+		t.Fatal("Load() = nil, want malformed YAML error")
+	}
+	if got := loader.Get("app.name"); got != "good" {
+		t.Fatalf("last good app.name = %v, want good", got)
+	}
+}

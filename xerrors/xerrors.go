@@ -166,11 +166,17 @@ func Combine(errs ...error) error {
 	}
 }
 
-// 标准库函数再导出，便于组件统一从 xerrors 使用 errors 能力。
-var (
-	New    = errors.New
-	Is     = errors.Is
-	As     = errors.As
-	Unwrap = errors.Unwrap
-	Join   = errors.Join
-)
+// New delegates to errors.New.
+func New(text string) error { return errors.New(text) }
+
+// Is delegates to errors.Is.
+func Is(err, target error) bool { return errors.Is(err, target) }
+
+// As delegates to errors.As.
+func As(err error, target any) bool { return errors.As(err, target) }
+
+// Unwrap delegates to errors.Unwrap.
+func Unwrap(err error) error { return errors.Unwrap(err) }
+
+// Join delegates to errors.Join.
+func Join(errs ...error) error { return errors.Join(errs...) }

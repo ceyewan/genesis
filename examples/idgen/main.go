@@ -100,7 +100,7 @@ func snowflakeAllocatorExample() {
 
 	// 3. 创建 Allocator 并分配 WorkerID
 	allocator, err := idgen.NewAllocator(&idgen.AllocatorConfig{
-		Driver:    "redis",
+		Driver:    idgen.DriverRedis,
 		KeyPrefix: "myapp:idgen",
 		MaxID:     1024,
 		TTL:       30 * time.Second,
@@ -216,7 +216,7 @@ func sequenceExample() {
 	// 3. IM 消息序列号场景
 	fmt.Println("IM 消息序列号场景:")
 	imCfg := &idgen.SequencerConfig{
-		Driver:    "redis",
+		Driver:    idgen.DriverRedis,
 		KeyPrefix: "im:msg_seq",
 		Step:      1,
 		TTL:       time.Hour,
@@ -253,7 +253,7 @@ func sequenceExample() {
 	// 5. 业务流水号场景 (步长 1000)
 	fmt.Println("\n业务流水号场景 (步长 1000):")
 	businessCfg := &idgen.SequencerConfig{
-		Driver:    "redis",
+		Driver:    idgen.DriverRedis,
 		KeyPrefix: "business:seq",
 		Step:      1000,
 		MaxValue:  9999,
