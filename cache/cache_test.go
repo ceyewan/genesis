@@ -15,6 +15,20 @@ import (
 func TestNewDistributed_Unit(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "info", Output: "stdout"})
 
+	t.Run("nil distributed config", func(t *testing.T) {
+		_, err := NewDistributed(nil)
+		if !xerrors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("expected ErrInvalidConfig, got %v", err)
+		}
+	})
+
+	t.Run("nil local config", func(t *testing.T) {
+		_, err := NewLocal(nil)
+		if !xerrors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("expected ErrInvalidConfig, got %v", err)
+		}
+	})
+
 	t.Run("missing connector", func(t *testing.T) {
 		_, err := NewDistributed(&DistributedConfig{Driver: DriverRedis})
 		if !xerrors.Is(err, ErrRedisConnectorRequired) {

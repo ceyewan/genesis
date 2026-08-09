@@ -30,8 +30,8 @@ func TestRC1ConsumerConstructorsRejectNilConfiguration(t *testing.T) {
 		class     error
 	}{
 		{name: "auth", construct: func() error { _, err := auth.New(nil); return err }, class: auth.ErrInvalidConfig},
-		{name: "cache local", construct: func() error { _, err := cache.NewLocal(nil); return err }},
-		{name: "cache distributed", construct: func() error { _, err := cache.NewDistributed(nil); return err }},
+		{name: "cache local", construct: func() error { _, err := cache.NewLocal(nil); return err }, class: cache.ErrInvalidConfig},
+		{name: "cache distributed", construct: func() error { _, err := cache.NewDistributed(nil); return err }, class: cache.ErrInvalidConfig},
 		{name: "metrics", construct: func() error { _, err := metrics.New(nil); return err }, class: metrics.ErrInvalidConfig},
 		{name: "mq", construct: func() error { _, err := mq.New(nil); return err }, class: mq.ErrInvalidConfig},
 		{name: "ratelimit", construct: func() error { _, err := ratelimit.New(nil); return err }, class: ratelimit.ErrConfigNil},
@@ -159,6 +159,9 @@ func TestRC1ErrorsPreservePublicClassification(t *testing.T) {
 	}
 	if _, err := cache.NewLocal(&cache.LocalConfig{DefaultTTL: -time.Second}); !errors.Is(err, cache.ErrInvalidTTL) {
 		t.Fatalf("NewLocal() error = %v, want ErrInvalidTTL", err)
+	}
+	if _, err := cache.NewLocal(nil); !errors.Is(err, cache.ErrInvalidConfig) {
+		t.Fatalf("NewLocal(nil) error = %v, want ErrInvalidConfig", err)
 	}
 	if _, err := db.New(&db.Config{Driver: "unknown"}); !errors.Is(err, db.ErrInvalidConfig) {
 		t.Fatalf("db.New() error = %v, want ErrInvalidConfig", err)

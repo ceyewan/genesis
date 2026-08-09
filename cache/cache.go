@@ -117,7 +117,7 @@ type Multi interface {
 // 当前仅支持 Redis，需要通过 WithRedisConnector 显式注入连接器。
 func NewDistributed(cfg *DistributedConfig, opts ...Option) (Distributed, error) {
 	if cfg == nil {
-		return nil, xerrors.New("cache: distributed config is nil")
+		return nil, xerrors.Wrap(ErrInvalidConfig, "distributed config is nil")
 	}
 	config := *cfg
 	cfg = &config
@@ -145,7 +145,7 @@ func NewDistributed(cfg *DistributedConfig, opts ...Option) (Distributed, error)
 // 当前默认实现基于 otter，面向进程内热点数据和短路径加速场景。
 func NewLocal(cfg *LocalConfig, opts ...Option) (Local, error) {
 	if cfg == nil {
-		return nil, xerrors.New("cache: local config is nil")
+		return nil, xerrors.Wrap(ErrInvalidConfig, "local config is nil")
 	}
 	config := *cfg
 	cfg = &config

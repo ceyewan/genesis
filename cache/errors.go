@@ -3,6 +3,9 @@ package cache
 import "github.com/ceyewan/genesis/xerrors"
 
 var (
+	// ErrInvalidConfig 表示缓存配置无效。
+	ErrInvalidConfig = xerrors.New("cache: invalid config")
+
 	// ErrMiss 表示缓存未命中。
 	ErrMiss = xerrors.New("cache: miss")
 
