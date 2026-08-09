@@ -74,10 +74,10 @@ func waitTimeout(t *testing.T, done <-chan struct{}, timeout time.Duration) {
 }
 
 func TestJetStreamPublishSubscribeIntegration(t *testing.T) {
+	mq := newJetStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 5*time.Second)
 	defer cancel()
 
-	mq := newJetStreamMQ(t)
 	subject := uniqueSubject()
 
 	done := make(chan struct{})
@@ -98,10 +98,10 @@ func TestJetStreamPublishSubscribeIntegration(t *testing.T) {
 }
 
 func TestJetStreamHeadersIntegration(t *testing.T) {
+	mq := newJetStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 5*time.Second)
 	defer cancel()
 
-	mq := newJetStreamMQ(t)
 	subject := uniqueSubject()
 
 	done := make(chan struct{})
@@ -122,10 +122,10 @@ func TestJetStreamHeadersIntegration(t *testing.T) {
 }
 
 func TestJetStreamQueueGroupIntegration(t *testing.T) {
+	mq := newJetStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()
 
-	mq := newJetStreamMQ(t)
 	subject := uniqueSubject()
 	group := uniqueGroup()
 
@@ -156,10 +156,10 @@ func TestJetStreamQueueGroupIntegration(t *testing.T) {
 }
 
 func TestJetStreamConsumerIdentityIsScopedByTopicIntegration(t *testing.T) {
+	q := newJetStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 15*time.Second)
 	defer cancel()
 
-	q := newJetStreamMQ(t)
 	tests := []struct {
 		name   string
 		option func(string) SubscribeOption
@@ -209,10 +209,10 @@ func TestJetStreamConsumerIdentityIsScopedByTopicIntegration(t *testing.T) {
 }
 
 func TestJetStreamMultiGroupBroadcastIntegration(t *testing.T) {
+	mq := newJetStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()
 
-	mq := newJetStreamMQ(t)
 	subject := uniqueSubject()
 	groupA := uniqueGroup()
 	groupB := uniqueGroup()
@@ -258,10 +258,10 @@ func TestJetStreamMultiGroupBroadcastIntegration(t *testing.T) {
 }
 
 func TestJetStreamDurableResumeIntegration(t *testing.T) {
+	mq := newJetStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()
 
-	mq := newJetStreamMQ(t)
 	subject := uniqueSubject()
 	durable := "d-" + testkit.NewID()
 
@@ -297,10 +297,10 @@ func TestJetStreamDurableResumeIntegration(t *testing.T) {
 }
 
 func TestJetStreamManualNakWithDelayRedeliveryIntegration(t *testing.T) {
+	q := newJetStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()
 
-	q := newJetStreamMQ(t)
 	subject := uniqueSubject()
 	var deliveries atomic.Int32
 	done := make(chan struct{})
@@ -325,9 +325,6 @@ func TestJetStreamManualNakWithDelayRedeliveryIntegration(t *testing.T) {
 }
 
 func TestJetStreamAutoCreateConfigAndPublishAckIntegration(t *testing.T) {
-	ctx, cancel := testkit.NewContext(t, 10*time.Second)
-	defer cancel()
-
 	q := newJetStreamMQWithConfig(t, &JetStreamConfig{
 		AutoCreateStream: true,
 		AckWait:          2 * time.Second,
@@ -338,6 +335,8 @@ func TestJetStreamAutoCreateConfigAndPublishAckIntegration(t *testing.T) {
 		MaxBytes:         1 << 20,
 		Replicas:         1,
 	})
+	ctx, cancel := testkit.NewContext(t, 10*time.Second)
+	defer cancel()
 	subject := uniqueSubject()
 	durable := "d-" + testkit.NewID()
 	done := make(chan struct{})
@@ -375,14 +374,13 @@ func TestJetStreamAutoCreateConfigAndPublishAckIntegration(t *testing.T) {
 }
 
 func TestJetStreamMaxDeliverIntegration(t *testing.T) {
-	ctx, cancel := testkit.NewContext(t, 10*time.Second)
-	defer cancel()
-
 	q := newJetStreamMQWithConfig(t, &JetStreamConfig{
 		AutoCreateStream: true,
 		AckWait:          100 * time.Millisecond,
 		MaxDeliver:       3,
 	})
+	ctx, cancel := testkit.NewContext(t, 10*time.Second)
+	defer cancel()
 	subject := uniqueSubject()
 	var deliveries atomic.Int32
 	third := make(chan struct{})
@@ -402,10 +400,10 @@ func TestJetStreamMaxDeliverIntegration(t *testing.T) {
 }
 
 func TestJetStreamMaxInflightBackpressureIntegration(t *testing.T) {
+	q := newJetStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()
 
-	q := newJetStreamMQ(t)
 	subject := uniqueSubject()
 	firstStarted := make(chan struct{})
 	secondStarted := make(chan struct{})
@@ -436,10 +434,10 @@ func TestJetStreamMaxInflightBackpressureIntegration(t *testing.T) {
 }
 
 func TestJetStreamDrainWaitsForHandlerIntegration(t *testing.T) {
+	q := newJetStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()
 
-	q := newJetStreamMQ(t)
 	subject := uniqueSubject()
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -469,9 +467,9 @@ func TestJetStreamDrainWaitsForHandlerIntegration(t *testing.T) {
 }
 
 func TestRedisStreamDefaultStartConsumesRetainedMessages(t *testing.T) {
+	q := newRedisStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()
-	q := newRedisStreamMQ(t)
 	topic := uniqueSubject()
 	require.NoError(t, q.Publish(ctx, topic, []byte("before-subscribe")))
 	done := make(chan struct{})
@@ -486,9 +484,9 @@ func TestRedisStreamDefaultStartConsumesRetainedMessages(t *testing.T) {
 }
 
 func TestRedisStreamFromLatestSkipsRetainedMessages(t *testing.T) {
+	q := newRedisStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()
-	q := newRedisStreamMQ(t)
 	topic := uniqueSubject()
 	require.NoError(t, q.Publish(ctx, topic, []byte("old")))
 	done := make(chan string, 1)
@@ -508,10 +506,10 @@ func TestRedisStreamFromLatestSkipsRetainedMessages(t *testing.T) {
 }
 
 func TestRedisStreamDrainPreservesActiveHandlerContext(t *testing.T) {
+	q := newRedisStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()
 
-	q := newRedisStreamMQ(t)
 	topic := uniqueSubject()
 	handlerContext := make(chan context.Context, 1)
 	release := make(chan struct{})
@@ -537,10 +535,10 @@ func TestRedisStreamDrainPreservesActiveHandlerContext(t *testing.T) {
 }
 
 func TestRedisStreamDrainDeadlineCancelsActiveHandler(t *testing.T) {
+	q := newRedisStreamMQ(t)
 	ctx, cancel := testkit.NewContext(t, 10*time.Second)
 	defer cancel()
 
-	q := newRedisStreamMQ(t)
 	topic := uniqueSubject()
 	handlerStarted := make(chan struct{})
 	handlerDone := make(chan error, 1)
@@ -562,10 +560,10 @@ func TestRedisStreamDrainDeadlineCancelsActiveHandler(t *testing.T) {
 }
 
 func TestJetStreamReconnectAndResumeIntegration(t *testing.T) {
+	container, natsCfg := testkit.NewNATSContainer(t)
 	ctx, cancel := testkit.NewContext(t, 20*time.Second)
 	defer cancel()
 
-	container, natsCfg := testkit.NewNATSContainer(t)
 	natsCfg.MaxReconnects = 100
 	natsCfg.ReconnectWait = 50 * time.Millisecond
 	natsCfg.PingInterval = 100 * time.Millisecond

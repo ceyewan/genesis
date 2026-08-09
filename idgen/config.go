@@ -98,7 +98,7 @@ func (c *SequencerConfig) setDefaults() {
 	if c.Driver == "" {
 		c.Driver = DriverRedis
 	}
-	if c.Step <= 0 {
+	if c.Step == 0 {
 		c.Step = 1
 	}
 }

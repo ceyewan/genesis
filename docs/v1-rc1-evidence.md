@@ -1,12 +1,13 @@
 # Genesis v1.0.0-rc.1 verification evidence
 
-This record describes the local and GitHub-hosted candidate verification performed on 2026-08-09. The candidate is published through draft PR [#58](https://github.com/ceyewan/genesis/pull/58). No tag, GitHub Release, or deployment has been created.
+This record describes the local and GitHub-hosted candidate verification performed on 2026-08-09. PR [#58](https://github.com/ceyewan/genesis/pull/58) was merged through the protected branch into `main`; its merge commit was `c80babaf35f71d656b85e28b8ae02a54e06ce7ce`. No tag, GitHub Release, or deployment has been created.
 
 ## Environment
 
 - Go: `go1.26.1 darwin/arm64`
 - Docker client/server: `29.4.0` / `29.4.0`
-- Remediation baseline: `48acd69eea91764bc8452ea3f55dfe7a2a027607`
+- Original remediation baseline: `48acd69eea91764bc8452ea3f55dfe7a2a027607`
+- Final pre-RC audit baseline: `c80babaf35f71d656b85e28b8ae02a54e06ce7ce`
 - Scope: all 18 externally importable packages, plus examples and internal API-inventory tooling
 
 ## Full local gates
@@ -31,6 +32,8 @@ git diff --check
 
 The ordinary and race suites executed real Docker/Testcontainers dependencies rather than skipping them. They covered Redis, etcd, PostgreSQL, MySQL, NATS JetStream, and Kafka. Connector tests took about 60 seconds in both suites; registry, dlock, DB, MQ, idem, idgen, and ratelimit also ran their container-backed cases. `make example-all` exited successfully without a separately started development stack: local examples ran normally, while external-service examples reported their documented classifiable connection failures or skips. Successful external paths are covered by Testcontainers.
 
+An independent rerun against `c80baba` exposed a concurrent local race-suite readiness failure: MySQL exceeded the module's default 60-second startup wait and three JetStream tests consumed their five-second business contexts while starting NATS containers. The remediation represented by this record starts MQ operation contexts only after container/connector initialization and gives MySQL an explicit two-minute startup wait. The exact non-serialized commands `go test -count=1 ./...` and `go test -race -count=1 ./...` then both passed with all containers executing.
+
 `make godoc-artifacts` generated exactly 18 package artifacts. `make api-inventory-check` passed after regeneration from `internal/cmd/apiinventory`.
 
 ## Directed contract evidence
@@ -46,6 +49,7 @@ The full ordinary and race suites include regression coverage for the audit find
 - Cache/dlock/idgen/ratelimit/trace reject negative public duration configuration instead of silently applying defaults. Cache methods reject negative operation TTLs.
 - Cache/idem/idgen/mq/ratelimit constructors reject unconnected borrowed connectors with errors classifiable as `connector.ErrClientNil`, without panicking.
 - Breaker/ratelimit/idgen: meaningful breaker assertions, bounded key cardinality, fallback results, failure classification, non-serializing rate-limit Wait, terminal Close, typed drivers, composable defaults, and rejecting invalid Snowflake parsing.
+- Idgen sequencer: zero `Step` defaults to one, while a negative `Step` reaches validation and returns `ErrInvalidInput` with `step_must_be_positive`.
 
 ## API and CI audit
 
@@ -56,9 +60,12 @@ The full ordinary and race suites include regression coverage for the audit find
 - `.github/workflows/ci.yml` gates PRs, pushes to `main`, and SemVer tags with separate ordinary/race Testcontainers jobs, exact Go patch and runner versions, commit-pinned Actions, job timeouts, actionlint/module drift checks, build/examples/API/GoDoc checks, exact artifact-count validation, and a release gate depending on every job.
 - A manual pre-tag workflow dispatch takes an exact candidate SHA and proposed SemVer tag, runs the same jobs against that SHA, and must succeed before the tag is created. The tag path revalidates the same identity after creation.
 - Hosted run [31288087305](https://github.com/ceyewan/genesis/actions/runs/31288087305) passed all four required jobs against candidate `76cb23ca6d31fcd6bc4a1d1e59e38de095e2da3e`: ordinary Testcontainers, race Testcontainers, static/API/GoDoc, and build/examples. The release gate was correctly skipped because this was a pull-request run.
+- PR #58's final run [31288491663](https://github.com/ceyewan/genesis/actions/runs/31288491663) passed all four required jobs against `8707620dab42a715a6eb6099f55ae27cecdaa2a1`; the protected merge produced `c80babaf35f71d656b85e28b8ae02a54e06ce7ce`.
+- Final `main` push run [31288717036](https://github.com/ceyewan/genesis/actions/runs/31288717036) passed all four required jobs against exact merge SHA `c80baba`, including ordinary and race Testcontainers artifacts.
+- Exact-SHA pre-tag run [31288875228](https://github.com/ceyewan/genesis/actions/runs/31288875228) passed all core jobs and the release identity gate for proposed tag `v1.0.0-rc.1` at `c80baba`.
 - `main` branch protection requires those four checks on an up-to-date branch, applies to administrators, requires pull requests and resolved conversations, and disallows force pushes and deletion.
 - Controlled negative PR [#59](https://github.com/ceyewan/genesis/pull/59) introduced generated API-inventory drift. Hosted run [31288303160](https://github.com/ceyewan/genesis/actions/runs/31288303160) failed specifically at `Check exported API inventory`, and GitHub reported the PR merge state as `BLOCKED`. The PR was then closed and its remote branch deleted.
-- The commit containing this updated evidence must receive the same complete hosted PR run before it replaces the preceding candidate. After merge, the protected `main` commit must pass its push run and an exact-SHA manual pre-tag dispatch with proposed tag `v1.0.0-rc.1` before tag creation.
+- Independent review nevertheless withheld tag approval after reproducing the negative sequencer-step bug and the local concurrent container flake described above. The commit containing this remediation and evidence must receive a complete hosted PR run, protected merge, `main` push run, and exact-SHA pre-tag dispatch before it replaces `c80baba` as the approved candidate.
 
 ## Accepted v1 boundaries
 
@@ -69,4 +76,4 @@ The full ordinary and race suites include regression coverage for the audit find
 - Dlock exposes ownership loss but does not issue fencing tokens; irreversible downstream writes still require CAS/version fencing.
 - Trace supports system TLS and static OTLP headers, but custom certificate-pool construction remains application/deployment configuration outside Genesis v1.
 
-No unresolved P0/P1 API, correctness, migration, or repository-workflow defect identified by the stage audits remains in this candidate. Required-check enforcement and both positive and negative hosted behavior are proven. Stage one remains pending only until this evidence update passes hosted CI, PR #58 is merged through the protected branch, the resulting exact `main` SHA passes both its push run and pre-tag dispatch, and the external stage goal records that final SHA. Tag and release creation remain separate, explicit actions.
+No unresolved local P0/P1 API, correctness, migration, test-stability, or repository-workflow defect identified by the stage audits remains after this remediation. Required-check enforcement and both positive and negative hosted behavior are proven. Stage one is reopened until this remediation passes the complete protected PR/main/pre-tag sequence and the external stage goal records the resulting exact SHA. Tag and release creation remain separate, explicit actions.
