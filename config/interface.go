@@ -38,6 +38,7 @@
 //	if err != nil {
 //		panic(err)
 //	}
+//	defer loader.Close()
 //
 //	if err := loader.Load(context.Background()); err != nil {
 //		panic(err)
@@ -97,6 +98,10 @@ type Loader interface {
 
 	// Validate 验证当前配置的有效性
 	Validate() error
+
+	// Close 停止文件监听 goroutine 并关闭所有 Watch 通道。
+	// Close 可安全地并发、重复调用；关闭后 Load 和 Watch 返回 ErrClosed。
+	Close() error
 }
 
 // Event 配置变更事件

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/ceyewan/genesis/clog"
 )
@@ -88,12 +89,15 @@ func TestExecuteFailure(t *testing.T) {
 	ctx := context.Background()
 	testErr := errors.New("test error")
 
-	// 触发足够的失败来打开熔断器
-	for range 5 {
+	// 触发最小数量的失败来打开熔断器。
+	for range 2 {
 		fn := func() (any, error) {
 			return nil, testErr
 		}
-		_, _ = brk.Execute(ctx, "test-service", fn)
+		_, err := brk.Execute(ctx, "test-service", fn)
+		if !errors.Is(err, testErr) {
+			t.Fatalf("Execute error = %v, want %v", err, testErr)
+		}
 	}
 
 	// 检查熔断器状态
@@ -102,8 +106,8 @@ func TestExecuteFailure(t *testing.T) {
 		t.Fatalf("State should not return error, got: %v", err)
 	}
 
-	if state == StateClosed {
-		t.Log("Breaker might still be closed (need more failures)")
+	if state != StateOpen {
+		t.Fatalf("State = %v, want open", state)
 	}
 }
 
@@ -124,8 +128,8 @@ func TestStateClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("State should not return error, got: %v", err)
 	}
-	if state != StateClosed && state != StateOpen {
-		t.Errorf("Unexpected state: %v", state)
+	if state != StateClosed {
+		t.Errorf("State = %v, want closed", state)
 	}
 }
 
@@ -221,9 +225,9 @@ func TestFallbackFunc(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "debug"})
 
 	fallbackCalled := false
-	fallback := func(ctx context.Context, serviceName string, err error) error {
+	fallback := func(ctx context.Context, serviceName string, err error) (any, error) {
 		fallbackCalled = true
-		return nil
+		return "cached", nil
 	}
 
 	cfg := &Config{
@@ -238,25 +242,27 @@ func TestFallbackFunc(t *testing.T) {
 	ctx := context.Background()
 	testErr := errors.New("test error")
 
-	// 触发失败
-	for range 10 {
+	// 两次失败打开 breaker，下一次调用必须走 fallback。
+	for range 2 {
 		fn := func() (any, error) {
 			return nil, testErr
 		}
 		_, _ = brk.Execute(ctx, "test-service", fn)
 	}
 
-	// 等待熔断器打开
-	time.Sleep(200 * time.Millisecond)
-
-	// 下一个调用应该触发降级
+	state, err := brk.State("test-service")
+	if err != nil || state != StateOpen {
+		t.Fatalf("State = %v, err = %v, want open", state, err)
+	}
 	fn := func() (any, error) {
 		return nil, testErr
 	}
-	_, _ = brk.Execute(ctx, "test-service", fn)
-
-	if fallbackCalled {
-		t.Log("Fallback was called as expected")
+	result, err := brk.Execute(ctx, "test-service", fn)
+	if err != nil || result != "cached" {
+		t.Fatalf("fallback Execute = (%v, %v), want (cached, nil)", result, err)
+	}
+	if !fallbackCalled {
+		t.Fatal("fallback was not called for an open breaker")
 	}
 }
 
@@ -295,12 +301,23 @@ func TestDefaultKeyFunc(t *testing.T) {
 
 	brk, _ := New(cfg, WithLogger(logger))
 
-	// 使用默认拦截器，其内部使用 defaultKeyFunc
-	interceptor := brk.UnaryClientInterceptor()
-	if interceptor == nil {
-		t.Fatal("UnaryClientInterceptor should not return nil")
+	conn, err := grpc.NewClient("passthrough:///default-key-target", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer conn.Close()
 
-	// 验证默认拦截器可以正常创建（说明 defaultKeyFunc 可用）
-	t.Log("Default keyFunc is functional")
+	interceptor := brk.UnaryClientInterceptor()
+	if err := interceptor(context.Background(), "/test/Method", nil, nil, conn, func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	internal := brk.(*circuitBreaker)
+	internal.mu.RLock()
+	_, ok := internal.breakers[conn.Target()]
+	internal.mu.RUnlock()
+	if !ok {
+		t.Fatalf("default key %q was not used", conn.Target())
+	}
 }

@@ -41,7 +41,7 @@ func BenchmarkSnowflake_Next_Parallel(b *testing.B) {
 func BenchmarkUUID(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		UUID()
+		_, _ = UUID()
 	}
 }
 
@@ -49,7 +49,7 @@ func BenchmarkUUID_Parallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			UUID()
+			_, _ = UUID()
 		}
 	})
 }

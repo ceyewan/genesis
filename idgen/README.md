@@ -5,7 +5,7 @@
 `idgen` 是 Genesis 的 ID 生成组件，位于业务层（L2）。它不只提供一种 ID，而是把四类常见能力收敛到同一个包里：
 
 - `Generator`：本地 Snowflake 风格 64bit ID
-- `UUID()`：UUID v7 字符串 ID
+- `UUID()`：返回 UUID v7 字符串 ID 和熵源错误
 - `Sequencer`：基于 Redis 的按键递增序列号
 - `Allocator`：基于 Redis/Etcd 的 WorkerID 自动分配
 
@@ -54,7 +54,10 @@ if err != nil {
 ### 2. UUID v7
 
 ```go
-id := idgen.UUID()
+id, err := idgen.UUID()
+if err != nil {
+	return err
+}
 ```
 
 当你更在意跨系统唯一性和字符串兼容性，而不是整数主键和位结构时，直接用 `UUID()` 更合适。
@@ -63,10 +66,10 @@ id := idgen.UUID()
 
 ```go
 seq, err := idgen.NewSequencer(&idgen.SequencerConfig{
-	Driver:    "redis",
+	Driver:    idgen.DriverRedis,
 	KeyPrefix: "order:seq",
 	Step:      1,
-	TTL:       86400,
+	TTL:       24 * time.Hour,
 }, idgen.WithRedisConnector(redisConn))
 if err != nil {
 	panic(err)
@@ -84,10 +87,10 @@ if err != nil {
 
 ```go
 allocator, err := idgen.NewAllocator(&idgen.AllocatorConfig{
-	Driver:    "etcd",
+	Driver:    idgen.DriverEtcd,
 	KeyPrefix: "myapp:worker",
 	MaxID:     512,
-	TTL:       30,
+	TTL:       30 * time.Second,
 }, idgen.WithEtcdConnector(etcdConn))
 if err != nil {
 	panic(err)
@@ -130,4 +133,8 @@ if err != nil {
 - `single_dc` 模式下 `WorkerID` 范围是 `0..1023`，且 `DatacenterID` 必须为 `0`。
 - `multi_dc` 模式下 `WorkerID` 范围是 `0..31`，`DatacenterID` 范围是 `0..31`。
 - `Sequencer` 当前不支持 Etcd。
-- `Allocator.KeepAlive()` 会启动后台保活并返回错误通道；如果不消费错误，租约丢失可能不会被上层及时感知。
+- `SequencerConfig.TTL`、`AllocatorConfig.TTL` 都是 `time.Duration`；不要再传裸整数秒。
+- `MaxValue` 是耗尽边界；超过时返回 `ErrSequenceExhausted`，Redis 中的值保持不变，永不回绕。
+- `Allocator.KeyPrefix` 是所有可能同时生成 Snowflake ID 的实例共享的 worker namespace；不同独立 worker 池必须使用不同前缀。
+- `Allocator.KeepAlive()` 只能在成功 `Allocate` 后启动一次。错误通道在停止或 context 取消后关闭；任何收到的错误都表示不能继续安全使用该 WorkerID。
+- `Allocator.Stop() error` 可并发重复调用，会先停止并等待保活 goroutine，再按 ownership token/lease 释放 WorkerID，并报告释放失败。

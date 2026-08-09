@@ -16,6 +16,15 @@ import (
 // 生命周期由 t.Cleanup 管理。
 func NewNATSContainerConfig(t *testing.T) *connector.NATSConfig {
 	t.Helper()
+	_, cfg := NewNATSContainer(t)
+	return cfg
+}
+
+// NewNATSContainer 返回容器和对应连接配置，供重连与恢复测试控制容器生命周期。
+// 容器最终清理由 t.Cleanup 负责。
+func NewNATSContainer(t *testing.T) (*natscontainer.NATSContainer, *connector.NATSConfig) {
+	t.Helper()
+	RequireDocker(t)
 
 	ctx := context.Background()
 
@@ -33,7 +42,7 @@ func NewNATSContainerConfig(t *testing.T) *connector.NATSConfig {
 		_ = container.Terminate(ctx)
 	})
 
-	return &connector.NATSConfig{
+	return container, &connector.NATSConfig{
 		Name:          "testcontainer-nats",
 		URL:           "nats://" + host + ":" + mappedPort.Port(),
 		MaxReconnects: 10,

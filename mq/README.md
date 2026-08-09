@@ -14,11 +14,16 @@
 ### NATS JetStream
 
 ```go
-natsConn, _ := connector.NewNATS(&connector.NATSConfig{
-    URLs: []string{"nats://localhost:4222"},
+natsConn, err := connector.NewNATS(&connector.NATSConfig{
+    URL: "nats://localhost:4222",
 })
-_ = natsConn.Connect(ctx)
+if err != nil {
+    return err
+}
 defer natsConn.Close()
+if err := natsConn.Connect(ctx); err != nil {
+    return err
+}
 
 q, err := mq.New(&mq.Config{
     Driver: mq.DriverNATSJetStream,
@@ -39,18 +44,27 @@ if err != nil {
 }
 defer sub.Unsubscribe()
 
-_ = q.Publish(ctx, "orders.created", []byte(`{"id": 123}`),
-    mq.WithHeader("trace-id", "abc123"))
+if err := q.Publish(ctx, "orders.created", []byte(`{"id": 123}`),
+    mq.WithHeader("trace-id", "abc123")); err != nil {
+    return err
+}
 ```
+
+JetStream 下 `Publish` 只有在 broker 返回 `PubAck` 后才返回 nil；它不是“只写入客户端 socket 即成功”。退出时可用 `q.Drain(ctx)` 停止新投递并等待已交付 Handler 完成。`Close()` 使用 5 秒上限强制停止，适合作为兜底清理。
 
 ### Redis Stream
 
 ```go
-redisConn, _ := connector.NewRedis(&connector.RedisConfig{
+redisConn, err := connector.NewRedis(&connector.RedisConfig{
     Addr: "localhost:6379",
 })
-_ = redisConn.Connect(ctx)
+if err != nil {
+    return err
+}
 defer redisConn.Close()
+if err := redisConn.Connect(ctx); err != nil {
+    return err
+}
 
 q, err := mq.New(&mq.Config{
     Driver: mq.DriverRedisStream,
@@ -63,10 +77,13 @@ if err != nil {
 }
 defer q.Close()
 
-sub, _ := q.Subscribe(ctx, "events", handler,
+sub, err := q.Subscribe(ctx, "events", handler,
     mq.WithQueueGroup("event-processors"),
     mq.WithDurable("worker-1"),
     mq.WithBatchSize(50))
+if err != nil {
+    return err
+}
 defer sub.Unsubscribe()
 ```
 
@@ -76,6 +93,7 @@ defer sub.Unsubscribe()
 |------|-----------|-------------|
 | `Ack()` | 发送 Ack 到服务端，消息从 pending 移除 | 执行 `XACK` |
 | `Nak()` | 触发消息立即重投 | 返回 `ErrNotSupported`；消息留在 Pending，由 `XAUTOCLAIM` 超时后重认领 |
+| `NakWithDelay(d)` | 延迟 `d` 后重投 | 返回 `ErrNotSupported` |
 
 **默认是手动确认**（ManualAck）。`WithAutoAck()` 开启后，Handler 返回 error 自动调用 Nak；Redis 下的 `ErrNotSupported` 会被静默忽略，不记录为错误。
 
@@ -83,12 +101,15 @@ defer sub.Unsubscribe()
 
 | 选项 | 描述 | 驱动支持 |
 |------|------|----------|
-| `WithQueueGroup(name)` | 消费组，多实例竞争消费 | JetStream: durable consumer 名；Redis: consumer group 名 |
+| `WithQueueGroup(name)` | 消费组，多实例竞争消费 | JetStream: 按 topic 隔离的 durable consumer 逻辑名；Redis: consumer group 名 |
 | `WithAutoAck()` | 开启自动确认 | 两者 |
 | `WithManualAck()` | 手动确认（默认） | 两者 |
-| `WithDurable(name)` | 消费者实例名 | JetStream: durable consumer 名（QueueGroup 为空时）；Redis: consumer name |
+| `WithDurable(name)` | 消费者实例名 | JetStream: 按 topic 隔离的 durable consumer 逻辑名（QueueGroup 为空时）；Redis: consumer name |
 | `WithBatchSize(n)` | 单次拉取大小，默认 10 | Redis 有效；JetStream 当前无效（push 模式） |
 | `WithMaxInflight(n)` | 最大在途消息数 | JetStream 对应 `MaxAckPending`；Redis 无对应 |
+| `FromBeginning()` | 新建 consumer 从保留消息起点消费（默认） | 两者 |
+| `FromLatest()` | 新建 consumer 只消费订阅后到达的消息 | 两者 |
+| `FromID(id)` | 从显式后端位置开始；JetStream 使用 Genesis sequence ID | 两者，ID 格式不同 |
 
 ## 中间件
 
@@ -96,7 +117,7 @@ defer sub.Unsubscribe()
 handler = mq.Chain(
     mq.WithRecover(logger),                          // 最外层：捕获 panic
     mq.WithLogging(logger),                          // 记录每条消息的处理结果
-    mq.WithRetry(mq.DefaultRetryConfig, logger),     // 内层：指数退避重试
+    mq.WithRetry(mq.DefaultRetryConfig(), logger),   // 内层：指数退避重试
 )(businessHandler)
 ```
 
@@ -111,6 +132,14 @@ handler = mq.Chain(
 | `AutoCreateStream` | `bool` | `false` | 自动建 Stream（生产环境建议关闭） |
 | `StreamPrefix` | `string` | `"S-"` | Stream 名称前缀 |
 | `AckWait` | `time.Duration` | `30s` | Ack 超时，超时后消息自动重投，建议设为最大处理时间的 2 倍 |
+| `MaxDeliver` | `int` | `5` | 最大投递次数；业务 DLQ 主题仍由应用定义 |
+| `Retention` | `StreamRetention` | `limits` | 新建 Stream 的 limits / interest / work_queue 策略 |
+| `Storage` | `StreamStorage` | `file` | 新建 Stream 的 file / memory 存储 |
+| `MaxAge` | `time.Duration` | `0`（不限） | 新建 Stream 的消息最长保留时间 |
+| `MaxBytes` | `int64` | `0`（服务端不限） | 新建 Stream 的最大字节数 |
+| `Replicas` | `int` | `1` | 新建 Stream 的副本数，范围 1–5 |
+
+这些 Stream 字段只用于 Genesis 自动创建的新 Stream。若 Stream 已存在，Genesis 只在需要时补充 subject，不覆盖其运维配置。生产环境建议关闭 `AutoCreateStream` 并预建 Stream。
 
 ### RedisStreamConfig
 
@@ -132,7 +161,7 @@ var (
 )
 ```
 
-`Close()` 是幂等操作，多次调用不报错。关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`，可通过 `errors.Is` 检测。
+`Drain(ctx)` 会停止新投递并等待已交付 Handler 完成；ctx 到期后强制停止。`Close()` 使用 5 秒默认上限执行立即停止。两者都可并发重复调用，生命周期开始关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`。
 
 ## 测试
 

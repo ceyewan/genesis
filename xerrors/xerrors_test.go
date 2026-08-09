@@ -64,6 +64,15 @@ func TestWithCode(t *testing.T) {
 	if code := GetCode(wrapped); code != "CACHE_MISS" {
 		t.Errorf("GetCode(wrapped) = %q，期望 %q", code, "CACHE_MISS")
 	}
+
+	// 空 code 应退化为原错误，不创建新的包装
+	plain := WithCode(base, "")
+	if plain != base {
+		t.Fatalf("WithCode(err, \"\") = %T(%v)，期望返回原错误", plain, plain)
+	}
+	if code := GetCode(plain); code != "" {
+		t.Errorf("GetCode(WithCode(err, \"\")) = %q，期望空字符串", code)
+	}
 }
 
 func TestAsCodedError(t *testing.T) {
@@ -109,6 +118,12 @@ func TestMustOK(t *testing.T) {
 		t.Errorf("MustOK(42, true) = %d，期望 42", v)
 	}
 
+	// 可直接消费 (T, bool) 形式的 helper 返回值
+	v = MustOK(testLookup())
+	if v != 7 {
+		t.Errorf("MustOK(testLookup()) = %d，期望 7", v)
+	}
+
 	// ok=false 应 panic
 	defer func() {
 		if r := recover(); r == nil {
@@ -116,6 +131,10 @@ func TestMustOK(t *testing.T) {
 		}
 	}()
 	MustOK(0, false)
+}
+
+func testLookup() (int, bool) {
+	return 7, true
 }
 
 func TestCollector(t *testing.T) {

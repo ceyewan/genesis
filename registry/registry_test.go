@@ -3,7 +3,11 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os/exec"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,6 +104,22 @@ func TestNew(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("constructor copies config before defaults", func(t *testing.T) {
+		cfg := &Config{}
+		reg, err := New(etcdConn, cfg)
+		require.NoError(t, err)
+		defer reg.Close()
+		require.Empty(t, cfg.Namespace)
+		require.Zero(t, cfg.DefaultTTL)
+		require.Zero(t, cfg.RetryInterval)
+		require.Zero(t, cfg.LeaseFailureBuffer)
+		internal := reg.(*etcdRegistry).cfg
+		require.Equal(t, "/genesis/services", internal.Namespace)
+		require.Equal(t, 30*time.Second, internal.DefaultTTL)
+		require.Equal(t, 64, internal.LeaseFailureBuffer)
+		require.Equal(t, 64, cap(reg.LeaseFailures()))
+	})
 }
 
 // TestNewSingleton 测试单实例约束
@@ -464,6 +484,15 @@ func TestWatch(t *testing.T) {
 			t.Fatalf("Failed to watch service: %v", err)
 		}
 
+		// Watch 首先发送线性一致的初始快照。
+		select {
+		case event := <-eventCh:
+			require.Equal(t, EventTypePut, event.Type)
+			require.Equal(t, service.ID, event.Service.ID)
+		case <-time.After(2 * time.Second):
+			t.Fatal("Timeout waiting for initial watch snapshot")
+		}
+
 		// 给 watch 一些时间启动
 		time.Sleep(100 * time.Millisecond)
 
@@ -567,6 +596,89 @@ func TestKeepAlive(t *testing.T) {
 	})
 }
 
+func TestLeaseFailureIsExposed(t *testing.T) {
+	reg := setupRegistry(t, "/test/lease-failure").(*etcdRegistry)
+	service := &ServiceInstance{
+		ID:        "lease-failure-001",
+		Name:      "lease-failure-test",
+		Version:   "1.0.0",
+		Endpoints: []string{"grpc://127.0.0.1:10002"},
+	}
+	require.NoError(t, reg.Register(context.Background(), service, 5*time.Second))
+
+	reg.mu.RLock()
+	leaseID := reg.keepAlives[service.ID].leaseID
+	reg.mu.RUnlock()
+	_, err := reg.client.Revoke(context.Background(), leaseID)
+	require.NoError(t, err)
+
+	select {
+	case failure := <-reg.LeaseFailures():
+		require.Equal(t, service.ID, failure.ServiceID)
+		require.Equal(t, service.Name, failure.ServiceName)
+		require.True(t, errors.Is(failure, ErrLeaseExpired))
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for lease failure signal")
+	}
+}
+
+func TestWatchReconnectAndRecoverIntegration(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 20*time.Second)
+	defer cancel()
+
+	container, cfg := testkit.NewEtcdContainer(t)
+	cfg.KeepAliveTime = 100 * time.Millisecond
+	cfg.KeepAliveTimeout = 100 * time.Millisecond
+	conn, err := connector.NewEtcd(cfg, connector.WithLogger(testkit.NewLogger()))
+	require.NoError(t, err)
+	require.NoError(t, conn.Connect(ctx))
+	t.Cleanup(func() { _ = conn.Close() })
+
+	reg, err := New(conn, &Config{
+		Namespace:     "/test/watch-reconnect-" + testkit.NewID(),
+		RetryInterval: 50 * time.Millisecond,
+	}, WithLogger(testkit.NewLogger()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reg.Close() })
+
+	eventCh, err := reg.Watch(ctx, "recover-test")
+	require.NoError(t, err)
+
+	containerID := container.GetContainerID()
+	pauseOutput, pauseErr := exec.CommandContext(ctx, "docker", "pause", containerID).CombinedOutput()
+	require.NoErrorf(t, pauseErr, "docker pause: %s", pauseOutput)
+	t.Cleanup(func() { _ = exec.Command("docker", "unpause", containerID).Run() })
+
+	outageCtx, outageCancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	_, outageErr := reg.GetService(outageCtx, "recover-test")
+	outageCancel()
+	require.Error(t, outageErr)
+
+	unpauseOutput, unpauseErr := exec.CommandContext(ctx, "docker", "unpause", containerID).CombinedOutput()
+	require.NoErrorf(t, unpauseErr, "docker unpause: %s", unpauseOutput)
+	require.Eventually(t, func() bool {
+		probeCtx, probeCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer probeCancel()
+		_, probeErr := reg.GetService(probeCtx, "recover-test")
+		return probeErr == nil
+	}, 10*time.Second, 50*time.Millisecond)
+
+	service := &ServiceInstance{
+		ID:        "recover-001",
+		Name:      "recover-test",
+		Version:   "1.0.0",
+		Endpoints: []string{"grpc://127.0.0.1:10003"},
+	}
+	require.NoError(t, reg.Register(ctx, service, 5*time.Second))
+	select {
+	case event := <-eventCh:
+		require.Equal(t, EventTypePut, event.Type)
+		require.Equal(t, service.ID, event.Service.ID)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for watch event after etcd recovery")
+	}
+}
+
 // TestClose 测试资源清理
 func TestClose(t *testing.T) {
 	etcdConn := setupEtcdConn(t)
@@ -595,10 +707,25 @@ func TestClose(t *testing.T) {
 		}
 	}
 
-	// 关闭 Registry
-	err = reg.Close()
-	if err != nil {
-		t.Fatalf("Failed to close registry: %v", err)
+	// 使用调用方 deadline 并发关闭 Registry。
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	const callers = 16
+	var closeWG sync.WaitGroup
+	closeErrs := make(chan error, callers)
+	closeWG.Add(callers)
+	for range callers {
+		go func() {
+			defer closeWG.Done()
+			closeErrs <- reg.Shutdown(shutdownCtx)
+		}()
+	}
+	closeWG.Wait()
+	close(closeErrs)
+	for closeErr := range closeErrs {
+		if closeErr != nil {
+			t.Fatalf("Failed to shutdown registry: %v", closeErr)
+		}
 	}
 
 	// 再次关闭应该是安全的
@@ -606,6 +733,36 @@ func TestClose(t *testing.T) {
 	if err != nil {
 		t.Errorf("Close should be idempotent, got error: %v", err)
 	}
+}
+
+func TestShutdownDeadlineStillClosesLeaseFailuresAfterWorkersExit(t *testing.T) {
+	reg := &etcdRegistry{
+		cfg:           &Config{},
+		logger:        testkit.NewLogger(),
+		keepAlives:    make(map[string]*leaseKeepAlive),
+		watchers:      make(map[uint64]context.CancelFunc),
+		stopChan:      make(chan struct{}),
+		closeDone:     make(chan struct{}),
+		leaseFailures: make(chan LeaseFailure),
+	}
+
+	releaseWorker := make(chan struct{})
+	reg.wg.Go(func() {
+		<-releaseWorker
+	})
+
+	shutdownCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, reg.Shutdown(shutdownCtx), context.Canceled)
+
+	close(releaseWorker)
+	select {
+	case _, ok := <-reg.LeaseFailures():
+		require.False(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("lease failure channel did not close after workers exited")
+	}
+	require.NoError(t, reg.Shutdown(context.Background()))
 }
 
 func TestEmitSnapshotDiff(t *testing.T) {
@@ -687,6 +844,64 @@ func TestResolverPushesEmptyState(t *testing.T) {
 	r.pushStateLocked()
 	require.NotNil(t, cc.lastState)
 	require.Empty(t, cc.lastState.Addresses)
+}
+
+func TestResolverPutReplacesInstanceEndpoints(t *testing.T) {
+	cc := &testResolverClientConn{}
+	r := &etcdResolver{
+		registry:    &etcdRegistry{logger: testkit.NewLogger()},
+		serviceName: "endpoint-update-test",
+		cc:          cc,
+		initialized: true,
+		localCache: map[string]resolver.Address{
+			"instance-1_127.0.0.1:9000": {Addr: "127.0.0.1:9000"},
+		},
+	}
+
+	r.handleEvent(ServiceEvent{Type: EventTypePut, Service: &ServiceInstance{
+		ID:        "instance-1",
+		Name:      "endpoint-update-test",
+		Endpoints: []string{"grpc://127.0.0.1:9001"},
+	}})
+
+	require.NotNil(t, cc.lastState)
+	require.Equal(t, []resolver.Address{{Addr: "127.0.0.1:9001", ServerName: "endpoint-update-test"}}, cc.lastState.Addresses)
+}
+
+func TestRegisterRechecksClosedStateInsideCriticalSection(t *testing.T) {
+	reg := setupRegistry(t, "/test/register-shutdown-race")
+	internal := reg.(*etcdRegistry)
+	internal.mu.Lock()
+	registerDone := make(chan error, 1)
+	go func() {
+		registerDone <- internal.Register(context.Background(), &ServiceInstance{
+			ID:        "race-instance",
+			Name:      "race-service",
+			Endpoints: []string{"grpc://127.0.0.1:9000"},
+		}, 10*time.Second)
+	}()
+	// Let Register pass its optimistic fast-path check and block on mu.
+	time.Sleep(20 * time.Millisecond)
+	atomic.StoreUint32(&internal.closed, 1)
+	internal.mu.Unlock()
+	require.ErrorIs(t, <-registerDone, ErrRegistryClosed)
+}
+
+func TestResolverConcurrentCloseWaitsForWorker(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	r := &etcdResolver{ctx: ctx, cancel: cancel}
+	r.workers.Go(func() { <-ctx.Done() })
+
+	const callers = 16
+	var callersWG sync.WaitGroup
+	for range callers {
+		callersWG.Go(r.Close)
+	}
+	callersWG.Wait()
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+
+	// ResolveNow after Close must not start new resolver work.
+	r.ResolveNow(resolver.ResolveNowOptions{})
 }
 
 type testResolverClientConn struct {

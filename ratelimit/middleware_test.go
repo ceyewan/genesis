@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/clog"
@@ -63,8 +62,8 @@ func TestGinMiddleware_Basic(t *testing.T) {
 
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Equal(t, "ok", w.Body.String())
+		require.Equal(t, http.StatusOK, w.Code)
+		require.Equal(t, "ok", w.Body.String())
 	})
 
 	t.Run("被限流的请求应该返回 429", func(t *testing.T) {
@@ -88,14 +87,14 @@ func TestGinMiddleware_Basic(t *testing.T) {
 		req1 := httptest.NewRequest("GET", "/test", nil)
 		w1 := httptest.NewRecorder()
 		router.ServeHTTP(w1, req1)
-		assert.Equal(t, http.StatusOK, w1.Code)
+		require.Equal(t, http.StatusOK, w1.Code)
 
 		// 第二次请求应该被限流
 		req2 := httptest.NewRequest("GET", "/test", nil)
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
-		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
-		assert.Contains(t, w2.Body.String(), "rate limit exceeded")
+		require.Equal(t, http.StatusTooManyRequests, w2.Code)
+		require.Contains(t, w2.Body.String(), "rate limit exceeded")
 	})
 
 	t.Run("不同客户端应该独立限流", func(t *testing.T) {
@@ -120,14 +119,14 @@ func TestGinMiddleware_Basic(t *testing.T) {
 		req1.RemoteAddr = "192.168.1.1:1234"
 		w1 := httptest.NewRecorder()
 		router.ServeHTTP(w1, req1)
-		assert.Equal(t, http.StatusOK, w1.Code)
+		require.Equal(t, http.StatusOK, w1.Code)
 
 		// 客户端 2（不同 IP，应该独立限流）
 		req2 := httptest.NewRequest("GET", "/test", nil)
 		req2.RemoteAddr = "192.168.1.2:5678"
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
-		assert.Equal(t, http.StatusOK, w2.Code, "不同 IP 应该独立限流")
+		require.Equal(t, http.StatusOK, w2.Code, "不同 IP 应该独立限流")
 	})
 }
 
@@ -157,7 +156,7 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 			req := httptest.NewRequest("GET", "/test", nil)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, http.StatusOK, w.Code)
 		}
 	})
 
@@ -177,7 +176,7 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		// 应该使用默认行为（ClientIP 作为 key，无效限流规则放行）
-		assert.Equal(t, http.StatusOK, w.Code)
+		require.Equal(t, http.StatusOK, w.Code)
 	})
 
 	t.Run("空 key 应该放行", func(t *testing.T) {
@@ -201,7 +200,7 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code, "空 key 应该放行")
+		require.Equal(t, http.StatusOK, w.Code, "空 key 应该放行")
 	})
 
 	t.Run("无效限流规则应该放行", func(t *testing.T) {
@@ -226,7 +225,7 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 			req := httptest.NewRequest("GET", "/test", nil)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, http.StatusOK, w.Code)
 		}
 	})
 
@@ -251,8 +250,8 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusTooManyRequests, w.Code)
-		assert.Contains(t, w.Body.String(), "rate limiter unavailable")
+		require.Equal(t, http.StatusTooManyRequests, w.Code)
+		require.Contains(t, w.Body.String(), "rate limiter unavailable")
 	})
 
 	t.Run("nil KeyFunc 应该使用默认 ClientIP", func(t *testing.T) {
@@ -273,7 +272,7 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code)
+		require.Equal(t, http.StatusOK, w.Code)
 	})
 
 	t.Run("nil LimitFunc 应该返回无效限流规则（放行）", func(t *testing.T) {
@@ -295,7 +294,7 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code)
+		require.Equal(t, http.StatusOK, w.Code)
 	})
 }
 
@@ -326,9 +325,9 @@ func TestGinMiddleware_WithHeaders(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("X-RateLimit-Limit"), "rate=10.00")
-		assert.Contains(t, w.Header().Get("X-RateLimit-Limit"), "burst=20")
+		require.Equal(t, http.StatusOK, w.Code)
+		require.Contains(t, w.Header().Get("X-RateLimit-Limit"), "rate=10.00")
+		require.Contains(t, w.Header().Get("X-RateLimit-Limit"), "burst=20")
 	})
 
 	t.Run("被限流时设置剩余数为 0", func(t *testing.T) {
@@ -353,14 +352,14 @@ func TestGinMiddleware_WithHeaders(t *testing.T) {
 		req1 := httptest.NewRequest("GET", "/test", nil)
 		w1 := httptest.NewRecorder()
 		router.ServeHTTP(w1, req1)
-		assert.Equal(t, http.StatusOK, w1.Code)
+		require.Equal(t, http.StatusOK, w1.Code)
 
 		// 第二次请求被限流
 		req2 := httptest.NewRequest("GET", "/test", nil)
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
-		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
-		assert.Equal(t, "0", w2.Header().Get("X-RateLimit-Remaining"))
+		require.Equal(t, http.StatusTooManyRequests, w2.Code)
+		require.Equal(t, "0", w2.Header().Get("X-RateLimit-Remaining"))
 	})
 
 	t.Run("不启用响应头时不设置头", func(t *testing.T) {
@@ -385,8 +384,8 @@ func TestGinMiddleware_WithHeaders(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Empty(t, w.Header().Get("X-RateLimit-Limit"))
+		require.Equal(t, http.StatusOK, w.Code)
+		require.Empty(t, w.Header().Get("X-RateLimit-Limit"))
 	})
 }
 
@@ -421,21 +420,21 @@ func TestGinMiddleware_CustomKeyFunc(t *testing.T) {
 		req1.Header.Set("X-User-ID", "user1")
 		w1 := httptest.NewRecorder()
 		router.ServeHTTP(w1, req1)
-		assert.Equal(t, http.StatusOK, w1.Code)
+		require.Equal(t, http.StatusOK, w1.Code)
 
 		// 用户 1 的第二次请求应该被限流
 		req2 := httptest.NewRequest("GET", "/test", nil)
 		req2.Header.Set("X-User-ID", "user1")
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
-		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+		require.Equal(t, http.StatusTooManyRequests, w2.Code)
 
 		// 用户 2 的第一次请求应该成功
 		req3 := httptest.NewRequest("GET", "/test", nil)
 		req3.Header.Set("X-User-ID", "user2")
 		w3 := httptest.NewRecorder()
 		router.ServeHTTP(w3, req3)
-		assert.Equal(t, http.StatusOK, w3.Code)
+		require.Equal(t, http.StatusOK, w3.Code)
 	})
 
 	t.Run("使用路径作为 key", func(t *testing.T) {
@@ -462,19 +461,19 @@ func TestGinMiddleware_CustomKeyFunc(t *testing.T) {
 		req1 := httptest.NewRequest("GET", "/api1", nil)
 		w1 := httptest.NewRecorder()
 		router.ServeHTTP(w1, req1)
-		assert.Equal(t, http.StatusOK, w1.Code)
+		require.Equal(t, http.StatusOK, w1.Code)
 
 		// /api1 的第二次请求被限流
 		req2 := httptest.NewRequest("GET", "/api1", nil)
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
-		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+		require.Equal(t, http.StatusTooManyRequests, w2.Code)
 
 		// /api2 的第一次请求应该成功
 		req3 := httptest.NewRequest("GET", "/api2", nil)
 		w3 := httptest.NewRecorder()
 		router.ServeHTTP(w3, req3)
-		assert.Equal(t, http.StatusOK, w3.Code)
+		require.Equal(t, http.StatusOK, w3.Code)
 	})
 }
 
@@ -515,19 +514,19 @@ func TestGinMiddleware_CustomLimitFunc(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/public", nil)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, http.StatusOK, w.Code)
 		}
 
 		// 管理 API 应该更容易被限流 (Rate=1, Burst=1)
 		req1 := httptest.NewRequest("GET", "/api/admin", nil)
 		w1 := httptest.NewRecorder()
 		router.ServeHTTP(w1, req1)
-		assert.Equal(t, http.StatusOK, w1.Code)
+		require.Equal(t, http.StatusOK, w1.Code)
 
 		req2 := httptest.NewRequest("GET", "/api/admin", nil)
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
-		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+		require.Equal(t, http.StatusTooManyRequests, w2.Code)
 	})
 
 	t.Run("根据 Header 返回不同限流规则", func(t *testing.T) {
@@ -560,13 +559,13 @@ func TestGinMiddleware_CustomLimitFunc(t *testing.T) {
 		req1.Header.Set("X-Tier", "free")
 		w1 := httptest.NewRecorder()
 		router.ServeHTTP(w1, req1)
-		assert.Equal(t, http.StatusOK, w1.Code)
+		require.Equal(t, http.StatusOK, w1.Code)
 
 		req2 := httptest.NewRequest("GET", "/api", nil)
 		req2.Header.Set("X-Tier", "free")
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
-		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+		require.Equal(t, http.StatusTooManyRequests, w2.Code)
 
 		// Premium 用户不容易被限流
 		for range 100 {
@@ -574,7 +573,7 @@ func TestGinMiddleware_CustomLimitFunc(t *testing.T) {
 			req.Header.Set("X-Tier", "premium")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, http.StatusOK, w.Code)
 		}
 	})
 }
@@ -609,7 +608,7 @@ func TestFormatLimit(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := formatLimit(tt.limit)
-			assert.Equal(t, tt.want, got)
+			require.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -630,9 +629,9 @@ func TestGinMiddlewareOptions(t *testing.T) {
 			},
 		}
 
-		assert.True(t, opts.WithHeaders)
-		assert.NotNil(t, opts.KeyFunc)
-		assert.NotNil(t, opts.LimitFunc)
+		require.True(t, opts.WithHeaders)
+		require.NotNil(t, opts.KeyFunc)
+		require.NotNil(t, opts.LimitFunc)
 	})
 }
 
@@ -674,12 +673,12 @@ func TestGinMiddleware_Chaining(t *testing.T) {
 		req1 := httptest.NewRequest("GET", "/test", nil)
 		w1 := httptest.NewRecorder()
 		router.ServeHTTP(w1, req1)
-		assert.Equal(t, http.StatusOK, w1.Code)
+		require.Equal(t, http.StatusOK, w1.Code)
 
 		// 第二次请求应该被第二个限流器限制
 		req2 := httptest.NewRequest("GET", "/test", nil)
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
-		assert.Equal(t, http.StatusTooManyRequests, w2.Code)
+		require.Equal(t, http.StatusTooManyRequests, w2.Code)
 	})
 }

@@ -2,13 +2,32 @@ package idgen
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
 )
+
+func TestConstructorsRejectUnconnectedConnectors(t *testing.T) {
+	t.Parallel()
+
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{Addr: "127.0.0.1:6379"})
+	require.NoError(t, err)
+	_, err = NewSequencer(&SequencerConfig{Driver: DriverRedis}, WithRedisConnector(redisConn))
+	require.ErrorIs(t, err, connector.ErrClientNil)
+	_, err = NewAllocator(&AllocatorConfig{Driver: DriverRedis}, WithRedisConnector(redisConn))
+	require.ErrorIs(t, err, connector.ErrClientNil)
+
+	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{Endpoints: []string{"127.0.0.1:2379"}})
+	require.NoError(t, err)
+	_, err = NewAllocator(&AllocatorConfig{Driver: DriverEtcd}, WithEtcdConnector(etcdConn))
+	require.ErrorIs(t, err, connector.ErrClientNil)
+}
 
 type testCounter struct {
 	incCount int
@@ -49,7 +68,8 @@ func (m *testMeter) Shutdown(ctx context.Context) error {
 
 func TestUUID_Unit(t *testing.T) {
 	t.Run("Generate UUID v7", func(t *testing.T) {
-		uuid := UUID()
+		uuid, err := UUID()
+		require.NoError(t, err)
 		if uuid == "" {
 			t.Error("Expected non-empty UUID")
 		}
@@ -59,15 +79,18 @@ func TestUUID_Unit(t *testing.T) {
 	})
 
 	t.Run("Generate unique UUIDs", func(t *testing.T) {
-		uuid1 := UUID()
-		uuid2 := UUID()
+		uuid1, err := UUID()
+		require.NoError(t, err)
+		uuid2, err := UUID()
+		require.NoError(t, err)
 		if uuid1 == uuid2 {
 			t.Error("Expected different UUIDs")
 		}
 	})
 
 	t.Run("UUID format validation", func(t *testing.T) {
-		uuid := UUID()
+		uuid, err := UUID()
+		require.NoError(t, err)
 		// UUID v7 格式: xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx
 		if len(uuid) != 36 {
 			t.Errorf("Expected UUID length 36, got %d", len(uuid))
@@ -266,7 +289,8 @@ func TestParseGeneratorID_RoundTrip_MultiDC_Unit(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, id)
 
-	timestamp, datacenterID, workerID, sequence := ParseGeneratorID(id, GeneratorModeMultiDC)
+	timestamp, datacenterID, workerID, sequence, err := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.NoError(t, err)
 	require.GreaterOrEqual(t, timestamp, int64(1704067200000))
 	require.EqualValues(t, 9, datacenterID)
 	require.EqualValues(t, 17, workerID)
@@ -286,7 +310,8 @@ func TestParseGeneratorID_RoundTrip_SingleDC_Unit(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, id)
 
-	timestamp, datacenterID, workerID, sequence := ParseGeneratorID(id, GeneratorModeSingleDC)
+	timestamp, datacenterID, workerID, sequence, err := ParseGeneratorID(id, GeneratorModeSingleDC)
+	require.NoError(t, err)
 	require.GreaterOrEqual(t, timestamp, int64(1704067200000))
 	require.EqualValues(t, 0, datacenterID)
 	require.EqualValues(t, 513, workerID)
@@ -317,9 +342,60 @@ func TestSnowflake_DefaultMode_MultiDC_Unit(t *testing.T) {
 
 	id, err := gen.Next()
 	require.NoError(t, err)
-	_, datacenterID, workerID, _ := ParseGeneratorID(id, GeneratorModeMultiDC)
+	_, datacenterID, workerID, _, err := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.NoError(t, err)
 	require.EqualValues(t, 0, datacenterID)
 	require.EqualValues(t, 1, workerID)
+}
+
+func TestNewGenerator_CopiesConfig_Unit(t *testing.T) {
+	t.Parallel()
+
+	cfg := &GeneratorConfig{WorkerID: 1}
+	gen, err := NewGenerator(cfg)
+	require.NoError(t, err)
+	require.Empty(t, cfg.Mode)
+
+	cfg.WorkerID = 31
+	id, err := gen.Next()
+	require.NoError(t, err)
+	_, _, workerID, _, err := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, workerID)
+}
+
+func TestSnowflake_ClockRollback_Unit(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(genesisEpochMilli + 10_000)
+	sf := &snowflake{
+		mode:     GeneratorModeMultiDC,
+		workerID: 1,
+		now:      func() time.Time { return now },
+		sleep:    func(time.Duration) {},
+	}
+
+	sf.state.Store(uint64(12_000) << 12)
+	_, err := sf.nextInt64()
+	require.ErrorIs(t, err, ErrClockBackwards)
+
+	sf.state.Store((uint64(10_004) << 12) | 7)
+	id, err := sf.nextInt64()
+	require.NoError(t, err)
+	timestamp, _, _, sequence, err := ParseGeneratorID(id, GeneratorModeMultiDC)
+	require.NoError(t, err)
+	require.Equal(t, genesisEpochMilli+10_004, timestamp)
+	require.EqualValues(t, 8, sequence)
+	require.False(t, errors.Is(err, ErrClockBackwards))
+}
+
+func TestParseGeneratorIDRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, _, err := ParseGeneratorID(1, GeneratorMode("unknown"))
+	require.ErrorIs(t, err, ErrInvalidInput)
+	_, _, _, _, err = ParseGeneratorID(-1, GeneratorModeMultiDC)
+	require.ErrorIs(t, err, ErrInvalidInput)
 }
 
 func TestSnowflake_Monotonicity_Unit(t *testing.T) {
@@ -393,6 +469,11 @@ func TestSequencerConfig_Unit(t *testing.T) {
 			t.Error("Expected error for unsupported driver")
 		}
 	})
+
+	t.Run("negative TTL returns error", func(t *testing.T) {
+		_, err := NewSequencer(&SequencerConfig{TTL: -time.Second})
+		require.Error(t, err)
+	})
 }
 
 // ========================================
@@ -425,6 +506,11 @@ func TestAllocatorConfig_Unit(t *testing.T) {
 		if err == nil {
 			t.Error("Expected error for unsupported driver")
 		}
+	})
+
+	t.Run("negative TTL returns error", func(t *testing.T) {
+		_, err := NewAllocator(&AllocatorConfig{TTL: -time.Second})
+		require.Error(t, err)
 	})
 }
 

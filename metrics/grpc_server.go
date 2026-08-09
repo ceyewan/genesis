@@ -34,7 +34,7 @@ func DefaultGRPCServerMetricsConfig(service string) *GRPCServerMetricsConfig {
 		Service:             service,
 		RequestTotalName:    MetricGRPCServerRequestTotal,
 		RequestDurationName: MetricGRPCServerDurationSeconds,
-		DurationBuckets:     defaultGRPCDurationBuckets,
+		DurationBuckets:     append([]float64(nil), defaultGRPCDurationBuckets...),
 	}
 }
 

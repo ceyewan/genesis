@@ -5,6 +5,7 @@
 Genesis 提供一组可以直接组合的基础设施与治理组件，目标不是接管应用，而是把日志、配置、连接管理、缓存、分布式锁、消息、认证、限流、熔断、注册发现等通用能力沉淀成统一积木。
 
 项目的核心约束只有三条：
+
 - 显式依赖注入，不使用运行时 DI 容器。
 - 组件边界清楚，能力按层组织但包结构保持扁平。
 - 谁创建，谁 `Close()`；连接器拥有资源，业务组件只借用资源。
@@ -21,6 +22,7 @@ Genesis 提供一组可以直接组合的基础设施与治理组件，目标不
 ## 项目状态
 
 当前分支已经系统收敛并重写了所有核心组件的实现边界与文档，重点包括：
+
 - `auth` 已切换为双 JWT 令牌模型。
 - `idgen` 已收紧 snowflake 位布局、allocator 所有权和 sequencer 语义。
 - `ratelimit` 已收紧分布式 key 设计、Redis 时间语义与错误策略。
@@ -49,14 +51,25 @@ func main() {
     ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer cancel()
 
-    cfg, _ := config.Load("config.yaml")
-    logger, _ := clog.New(&cfg.Log)
+    loader, err := config.New(nil)
+    if err != nil { panic(err) }
+    defer loader.Close()
+    if err := loader.Load(ctx); err != nil { panic(err) }
+
+    var cfg AppConfig
+    if err := loader.Unmarshal(&cfg); err != nil { panic(err) }
+    logger, err := clog.New(&cfg.Log)
+    if err != nil { panic(err) }
     defer logger.Close()
 
-    redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+    redisConn, err := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+    if err != nil { panic(err) }
     defer redisConn.Close()
+    if err := redisConn.Connect(ctx); err != nil { panic(err) }
 
-    cacheClient, _ := cache.New(&cfg.Cache, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
+    cacheClient, err := cache.NewDistributed(&cfg.Cache, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
+    if err != nil { panic(err) }
+    defer cacheClient.Close()
 
     _, _ = cacheClient.Get(ctx, "demo:key")
 }

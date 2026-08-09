@@ -44,6 +44,7 @@ loader, err := config.New(&config.Config{
 if err != nil {
     return err
 }
+defer loader.Close()
 
 if err := loader.Load(ctx); err != nil {
     return err
@@ -81,6 +82,7 @@ for event := range ch {
 - 不监听 `.env` 文件
 - 不监听运行时环境变量变化
 - 若重载时配置读取、合并或校验失败，不推送变更事件
+- `Close()` 会停止共享 fsnotify goroutine 并关闭所有 Watch channel；关闭后 `Load`/`Watch` 返回 `ErrClosed`
 
 如果你希望在热更新失败时看到明确告警，可以通过 `WithLogger` 注入日志器：
 

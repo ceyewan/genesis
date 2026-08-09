@@ -4,6 +4,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	natsgo "github.com/nats-io/nats.go"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcetcd "github.com/testcontainers/testcontainers-go/modules/etcd"
 	"github.com/testcontainers/testcontainers-go/modules/kafka"
@@ -34,6 +34,22 @@ func getTestLogger() clog.Logger {
 	return logger
 }
 
+func requireDocker(t *testing.T) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{.ServerVersion}}").CombinedOutput()
+	if err == nil {
+		return
+	}
+	detail := strings.TrimSpace(string(output))
+	if detail == "" {
+		detail = err.Error()
+	}
+	t.Fatalf("Docker is required for this integration test but is unavailable: %s", detail)
+}
+
 // newTestID 返回唯一的测试 ID
 func newTestID() string {
 	return time.Now().Format("20060102150405")
@@ -44,6 +60,7 @@ func newTestID() string {
 // =============================================================================
 
 func setupRedisContainer(t *testing.T) (*redis.RedisContainer, *RedisConfig) {
+	requireDocker(t)
 	ctx := context.Background()
 
 	container, err := redis.Run(ctx, "redis:7.2-alpine")
@@ -78,14 +95,14 @@ func TestRedisConnectorIntegration(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, conn)
 
-		assert.Equal(t, cfg.Name, conn.Name())
-		assert.False(t, conn.IsHealthy())
+		require.Equal(t, cfg.Name, conn.Name())
+		require.False(t, conn.IsHealthy())
 
 		ctx := context.Background()
 
 		err = conn.Connect(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 
 		client := conn.GetClient()
 		require.NotNil(t, client)
@@ -96,17 +113,17 @@ func TestRedisConnectorIntegration(t *testing.T) {
 
 		val, err := client.Get(ctx, testKey).Result()
 		require.NoError(t, err)
-		assert.Equal(t, "test-value", val)
+		require.Equal(t, "test-value", val)
 
 		client.Del(ctx, testKey)
 
 		err = conn.HealthCheck(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 
 		err = conn.Close()
 		require.NoError(t, err)
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 	})
 
 	t.Run("健康检查失败场景", func(t *testing.T) {
@@ -120,7 +137,7 @@ func TestRedisConnectorIntegration(t *testing.T) {
 		ctx := context.Background()
 		err = conn.Connect(ctx)
 		require.Error(t, err)
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 
 		conn.Close()
 	})
@@ -141,7 +158,7 @@ func TestRedisConnectorIntegration(t *testing.T) {
 		err = conn.Connect(ctx)
 		require.NoError(t, err)
 
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 	})
 }
 
@@ -150,6 +167,7 @@ func TestRedisConnectorIntegration(t *testing.T) {
 // =============================================================================
 
 func setupMySQLContainer(t *testing.T) (*mysql.MySQLContainer, *MySQLConfig) {
+	requireDocker(t)
 	ctx := context.Background()
 
 	container, err := mysql.Run(ctx,
@@ -193,14 +211,14 @@ func TestMySQLConnectorIntegration(t *testing.T) {
 		conn, err := NewMySQL(cfg, WithLogger(getTestLogger()))
 		require.NoError(t, err)
 
-		assert.Equal(t, cfg.Name, conn.Name())
-		assert.False(t, conn.IsHealthy())
+		require.Equal(t, cfg.Name, conn.Name())
+		require.False(t, conn.IsHealthy())
 
 		ctx := context.Background()
 
 		err = conn.Connect(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 
 		db := conn.GetClient()
 		require.NotNil(t, db)
@@ -208,14 +226,14 @@ func TestMySQLConnectorIntegration(t *testing.T) {
 		var result string
 		err = db.Raw("SELECT 1 as val").Scan(&result).Error
 		require.NoError(t, err)
-		assert.Equal(t, "1", result)
+		require.Equal(t, "1", result)
 
 		err = conn.HealthCheck(ctx)
 		require.NoError(t, err)
 
 		err = conn.Close()
 		require.NoError(t, err)
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 	})
 
 	t.Run("GORM 基本操作", func(t *testing.T) {
@@ -244,7 +262,7 @@ func TestMySQLConnectorIntegration(t *testing.T) {
 		var name string
 		err = db.Raw("SELECT name FROM test_users WHERE id = 1").Scan(&name).Error
 		require.NoError(t, err)
-		assert.Equal(t, "test-name", name)
+		require.Equal(t, "test-name", name)
 	})
 }
 
@@ -253,6 +271,7 @@ func TestMySQLConnectorIntegration(t *testing.T) {
 // =============================================================================
 
 func setupPostgreSQLContainer(t *testing.T) (*postgres.PostgresContainer, *PostgreSQLConfig) {
+	requireDocker(t)
 	ctx := context.Background()
 
 	container, err := postgres.Run(ctx, "postgres:17-alpine",
@@ -297,14 +316,14 @@ func TestPostgreSQLConnectorIntegration(t *testing.T) {
 		conn, err := NewPostgreSQL(cfg, WithLogger(getTestLogger()))
 		require.NoError(t, err)
 
-		assert.Equal(t, cfg.Name, conn.Name())
-		assert.False(t, conn.IsHealthy())
+		require.Equal(t, cfg.Name, conn.Name())
+		require.False(t, conn.IsHealthy())
 
 		ctx := context.Background()
 
 		err = conn.Connect(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 
 		db := conn.GetClient()
 		require.NotNil(t, db)
@@ -312,14 +331,14 @@ func TestPostgreSQLConnectorIntegration(t *testing.T) {
 		var result string
 		err = db.Raw("SELECT 1 as val").Scan(&result).Error
 		require.NoError(t, err)
-		assert.Equal(t, "1", result)
+		require.Equal(t, "1", result)
 
 		err = conn.HealthCheck(ctx)
 		require.NoError(t, err)
 
 		err = conn.Close()
 		require.NoError(t, err)
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 	})
 
 	t.Run("GORM 基本操作", func(t *testing.T) {
@@ -348,7 +367,7 @@ func TestPostgreSQLConnectorIntegration(t *testing.T) {
 		var name string
 		err = db.Raw("SELECT name FROM test_users WHERE id = 1").Scan(&name).Error
 		require.NoError(t, err)
-		assert.Equal(t, "test-name", name)
+		require.Equal(t, "test-name", name)
 	})
 
 	t.Run("PostgreSQL 特性测试", func(t *testing.T) {
@@ -377,7 +396,7 @@ func TestPostgreSQLConnectorIntegration(t *testing.T) {
 		var jsonData string
 		err = db.Raw("SELECT data->>'key' FROM test_documents WHERE id = 1").Scan(&jsonData).Error
 		require.NoError(t, err)
-		assert.Equal(t, "value", jsonData)
+		require.Equal(t, "value", jsonData)
 	})
 }
 
@@ -386,6 +405,7 @@ func TestPostgreSQLConnectorIntegration(t *testing.T) {
 // =============================================================================
 
 func setupEtcdContainer(t *testing.T) (*tcetcd.EtcdContainer, *EtcdConfig) {
+	requireDocker(t)
 	ctx := context.Background()
 
 	container, err := tcetcd.Run(ctx, "quay.io/coreos/etcd:v3.5.12")
@@ -422,7 +442,7 @@ func TestEtcdConnectorIntegration(t *testing.T) {
 
 		err = conn.Connect(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 
 		client := conn.GetClient()
 		require.NotNil(t, client)
@@ -434,8 +454,8 @@ func TestEtcdConnectorIntegration(t *testing.T) {
 
 		resp, err := client.Get(ctx, testKey)
 		require.NoError(t, err)
-		assert.Len(t, resp.Kvs, 1)
-		assert.Equal(t, "test-value", string(resp.Kvs[0].Value))
+		require.Len(t, resp.Kvs, 1)
+		require.Equal(t, "test-value", string(resp.Kvs[0].Value))
 
 		_, err = client.Delete(ctx, testKey)
 		require.NoError(t, err)
@@ -445,7 +465,7 @@ func TestEtcdConnectorIntegration(t *testing.T) {
 
 		err = conn.Close()
 		require.NoError(t, err)
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 	})
 
 	t.Run("Etcd 客户端基本操作", func(t *testing.T) {
@@ -476,7 +496,7 @@ func TestEtcdConnectorIntegration(t *testing.T) {
 		// 获取范围查询
 		resp, err := client.Get(ctx, testKeyPrefix+"/", clientv3.WithPrefix())
 		require.NoError(t, err)
-		assert.Len(t, resp.Kvs, 2)
+		require.Len(t, resp.Kvs, 2)
 	})
 }
 
@@ -485,6 +505,7 @@ func TestEtcdConnectorIntegration(t *testing.T) {
 // =============================================================================
 
 func setupNATSContainer(t *testing.T) (*nats.NATSContainer, *NATSConfig) {
+	requireDocker(t)
 	ctx := context.Background()
 
 	container, err := nats.Run(ctx, "nats:2.10-alpine")
@@ -522,11 +543,11 @@ func TestNATSConnectorIntegration(t *testing.T) {
 
 		err = conn.Connect(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 
 		nc := conn.GetClient()
 		require.NotNil(t, nc)
-		assert.Equal(t, natsgo.CONNECTED, nc.Status())
+		require.Equal(t, natsgo.CONNECTED, nc.Status())
 
 		subject := "test.connector." + newTestID()
 		sub, err := nc.Subscribe(subject, func(msg *natsgo.Msg) {
@@ -545,7 +566,7 @@ func TestNATSConnectorIntegration(t *testing.T) {
 
 		err = conn.Close()
 		require.NoError(t, err)
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 	})
 
 	t.Run("NATS 发布订阅", func(t *testing.T) {
@@ -576,7 +597,7 @@ func TestNATSConnectorIntegration(t *testing.T) {
 
 		select {
 		case msg := <-received:
-			assert.Equal(t, "hello-nats", msg)
+			require.Equal(t, "hello-nats", msg)
 		case <-time.After(2 * time.Second):
 			t.Fatal("timeout waiting for message")
 		}
@@ -595,12 +616,12 @@ func TestNATSConnectorIntegration(t *testing.T) {
 		defer conn.Close()
 
 		nc := conn.GetClient()
-		assert.Equal(t, natsgo.CONNECTED, nc.Status())
+		require.Equal(t, natsgo.CONNECTED, nc.Status())
 
 		// 健康检查应该通过
 		err = conn.HealthCheck(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 	})
 }
 
@@ -609,6 +630,7 @@ func TestNATSConnectorIntegration(t *testing.T) {
 // =============================================================================
 
 func setupKafkaContainer(t *testing.T) (*kafka.KafkaContainer, *KafkaConfig) {
+	requireDocker(t)
 	ctx := context.Background()
 
 	container, err := kafka.Run(ctx, "confluentinc/confluent-local:7.5.0")
@@ -644,7 +666,7 @@ func TestKafkaConnectorIntegration(t *testing.T) {
 
 		err = conn.Connect(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 
 		client := conn.GetClient()
 		require.NotNil(t, client)
@@ -652,11 +674,11 @@ func TestKafkaConnectorIntegration(t *testing.T) {
 		// Ping 测试
 		err = conn.HealthCheck(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 
 		err = conn.Close()
 		require.NoError(t, err)
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 	})
 
 	t.Run("Kafka 连接状态检查", func(t *testing.T) {
@@ -674,7 +696,7 @@ func TestKafkaConnectorIntegration(t *testing.T) {
 		// 健康检查应该通过
 		err = conn.HealthCheck(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 	})
 }
 
@@ -688,14 +710,14 @@ func TestSQLiteConnectorIntegration(t *testing.T) {
 		conn, err := NewSQLite(cfg, WithLogger(getTestLogger()))
 		require.NoError(t, err)
 
-		assert.Equal(t, "default", conn.Name())
-		assert.False(t, conn.IsHealthy())
+		require.Equal(t, "default", conn.Name())
+		require.False(t, conn.IsHealthy())
 
 		ctx := context.Background()
 
 		err = conn.Connect(ctx)
 		require.NoError(t, err)
-		assert.True(t, conn.IsHealthy())
+		require.True(t, conn.IsHealthy())
 
 		db := conn.GetClient()
 		require.NotNil(t, db)
@@ -709,14 +731,14 @@ func TestSQLiteConnectorIntegration(t *testing.T) {
 		var name string
 		err = db.Raw("SELECT name FROM test WHERE id = 1").Scan(&name).Error
 		require.NoError(t, err)
-		assert.Equal(t, "test-name", name)
+		require.Equal(t, "test-name", name)
 
 		err = conn.HealthCheck(ctx)
 		require.NoError(t, err)
 
 		err = conn.Close()
 		require.NoError(t, err)
-		assert.False(t, conn.IsHealthy())
+		require.False(t, conn.IsHealthy())
 	})
 
 	t.Run("文件数据库持久化", func(t *testing.T) {
@@ -751,7 +773,7 @@ func TestSQLiteConnectorIntegration(t *testing.T) {
 		var email string
 		err = conn2.GetClient().Raw("SELECT email FROM users WHERE id = 1").Scan(&email).Error
 		require.NoError(t, err)
-		assert.Equal(t, "test@example.com", email)
+		require.Equal(t, "test@example.com", email)
 	})
 
 	t.Run("GORM CRUD 操作", func(t *testing.T) {
@@ -779,14 +801,14 @@ func TestSQLiteConnectorIntegration(t *testing.T) {
 		product := Product{Name: "Test Product", Price: 99.99}
 		err = db.Create(&product).Error
 		require.NoError(t, err)
-		assert.Greater(t, product.ID, uint(0))
+		require.Greater(t, product.ID, uint(0))
 
 		// 查询记录
 		var result Product
 		err = db.First(&result, product.ID).Error
 		require.NoError(t, err)
-		assert.Equal(t, "Test Product", result.Name)
-		assert.Equal(t, 99.99, result.Price)
+		require.Equal(t, "Test Product", result.Name)
+		require.Equal(t, 99.99, result.Price)
 
 		// 更新记录
 		err = db.Model(&result).Update("Price", 149.99).Error
@@ -795,7 +817,7 @@ func TestSQLiteConnectorIntegration(t *testing.T) {
 		// 验证更新
 		var updated Product
 		db.First(&updated, product.ID)
-		assert.Equal(t, 149.99, updated.Price)
+		require.Equal(t, 149.99, updated.Price)
 
 		// 删除记录
 		err = db.Delete(&result).Error
@@ -804,7 +826,7 @@ func TestSQLiteConnectorIntegration(t *testing.T) {
 		// 验证删除
 		var deleted Product
 		err = db.First(&deleted, product.ID).Error
-		assert.Error(t, err)
-		assert.True(t, gorm.ErrRecordNotFound == err || strings.Contains(err.Error(), "record not found"))
+		require.Error(t, err)
+		require.True(t, gorm.ErrRecordNotFound == err || strings.Contains(err.Error(), "record not found"))
 	})
 }

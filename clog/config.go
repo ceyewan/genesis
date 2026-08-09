@@ -1,23 +1,33 @@
 package clog
 
 import (
-	"fmt"
 	"strings"
+
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 const timeFormat = "2006-01-02T15:04:05.000Z07:00"
 
 // Config 日志配置结构
 //
+// 零值默认配置为：
+//   - Level: info
+//   - Format: console
+//   - Output: stdout
+//
 // 当 Output 为文件路径时，Logger 会持有对应文件句柄，
 // 调用方应在不再使用时执行 logger.Close() 释放资源。
 type Config struct {
-	Level       string `json:"level" yaml:"level"`             // debug|info|warn|error|fatal
-	Format      string `json:"format" yaml:"format"`           // json|console
-	Output      string `json:"output" yaml:"output"`           // stdout|stderr|<file path>
-	EnableColor bool   `json:"enableColor" yaml:"enableColor"` // 仅在 console 格式下有效，开发环境可启用彩色输出
-	AddSource   bool   `json:"addSource" yaml:"addSource"`     // 是否添加调用源信息
-	SourceRoot  string `json:"sourceRoot" yaml:"sourceRoot"`   // 用于裁剪文件路径，推荐设置为你的项目根目录，获取相对路径
+	Level       string `json:"level" yaml:"level"`               // debug|info|warn|error|fatal
+	Format      string `json:"format" yaml:"format"`             // json|console
+	Output      string `json:"output" yaml:"output"`             // stdout|stderr|<file path>
+	EnableColor bool   `json:"enable_color" yaml:"enable_color"` // 仅在 console 格式下有效，开发环境可启用彩色输出
+	AddSource   bool   `json:"add_source" yaml:"add_source"`     // 是否添加调用源信息
+	SourceRoot  string `json:"source_root" yaml:"source_root"`   // 用于裁剪文件路径，推荐设置为你的项目根目录，获取相对路径
+	ServiceName string `json:"service_name" yaml:"service_name"` // OTel service.name
+	Version     string `json:"version" yaml:"version"`           // OTel service.version
+	InstanceID  string `json:"instance_id" yaml:"instance_id"`   // OTel service.instance.id
+	Environment string `json:"environment" yaml:"environment"`   // OTel deployment.environment
 }
 
 // NewDevDefaultConfig 创建开发环境的默认日志配置
@@ -70,7 +80,7 @@ func (c *Config) validate() error {
 	}
 	format := strings.ToLower(c.Format)
 	if format != "json" && format != "console" {
-		return fmt.Errorf("invalid format: %s, must be json or console", c.Format)
+		return xerrors.Wrapf(ErrInvalidConfig, "format %q must be json or console", c.Format)
 	}
 	// Output 字段可以是 stdout, stderr 或文件路径，不做严格校验
 	return nil

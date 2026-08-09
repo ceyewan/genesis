@@ -19,6 +19,7 @@ type mysqlConnector struct {
 	cfg     *MySQLConfig
 	db      *gorm.DB
 	logger  clog.Logger
+	metrics *connectorTelemetry
 	healthy atomic.Bool
 	mu      sync.RWMutex
 }
@@ -26,6 +27,11 @@ type mysqlConnector struct {
 // NewMySQL 创建 MySQL 连接器
 // 注意：实际连接在调用 Connect() 时建立
 func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
+	if cfg == nil {
+		return nil, xerrors.Wrap(ErrConfig, "mysql config is nil")
+	}
+	cfgCopy := *cfg
+	cfg = &cfgCopy
 	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid mysql config")
 	}
@@ -37,8 +43,9 @@ func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
 	opt.applyDefaults()
 
 	c := &mysqlConnector{
-		cfg:    cfg,
-		logger: opt.logger.With(clog.String("connector", "mysql"), clog.String("name", cfg.Name)),
+		cfg:     cfg,
+		logger:  opt.logger.With(clog.String("connector", "mysql"), clog.String("name", cfg.Name)),
+		metrics: newConnectorTelemetry(opt.meter, "mysql", cfg.Name),
 	}
 
 	return c, nil
@@ -81,13 +88,13 @@ func (c *mysqlConnector) Connect(ctx context.Context) error {
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
 		c.logger.Error("failed to open mysql connection", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "mysql connector[%s]: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "mysql connector[%s]", c.cfg.Name)
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
 		c.logger.Error("failed to get mysql db instance", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "mysql connector[%s]: failed to get db instance: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "mysql connector[%s]: failed to get db instance", c.cfg.Name)
 	}
 
 	// 配置连接池
@@ -99,7 +106,7 @@ func (c *mysqlConnector) Connect(ctx context.Context) error {
 	if err := sqlDB.PingContext(ctx); err != nil {
 		sqlDB.Close()
 		c.logger.Error("failed to connect to mysql", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "mysql connector[%s]: ping failed: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "mysql connector[%s]: ping failed", c.cfg.Name)
 	}
 
 	c.db = db
@@ -150,23 +157,23 @@ func (c *mysqlConnector) HealthCheck(ctx context.Context) error {
 
 	if db == nil {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(ErrClientNil, "mysql connector[%s]", c.cfg.Name)
+		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrClientNil, "mysql connector[%s]", c.cfg.Name))
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(ErrHealthCheck, "mysql connector[%s]: %v", c.cfg.Name, err)
+		return c.metrics.observeHealth(ctx, wrapConnectorCause(ErrHealthCheck, err, "mysql connector[%s]", c.cfg.Name))
 	}
 
 	if err := sqlDB.PingContext(ctx); err != nil {
 		c.healthy.Store(false)
 		c.logger.Warn("mysql health check failed", clog.Error(err))
-		return xerrors.Wrapf(ErrHealthCheck, "mysql connector[%s]: %v", c.cfg.Name, err)
+		return c.metrics.observeHealth(ctx, wrapConnectorCause(ErrHealthCheck, err, "mysql connector[%s]", c.cfg.Name))
 	}
 
 	c.healthy.Store(true)
-	return nil
+	return c.metrics.observeHealth(ctx, nil)
 }
 
 // IsHealthy 返回缓存的健康状态

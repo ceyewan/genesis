@@ -1,22 +1,25 @@
 // Package trace 提供 Genesis 的 OpenTelemetry 链路追踪初始化与传播辅助能力。
 //
-// 这个组件当前采用“全局模式”工作：Init 和 Discard 都会安装全局
+// 这个组件当前采用“全局模式”工作：Init 和 InstallLocalProvider 都会安装全局
 // TracerProvider 与 TextMapPropagator。这样做便于 Gin、gRPC、数据库插件和
 // MQ helper 共享同一套全局 tracing 状态；代价是重复初始化会覆盖之前安装的
 // 全局 provider。
 //
 // 因此推荐的使用方式是：应用启动时只初始化一次 trace，并在退出时调用返回的
-// shutdown 函数。对于只需要本地生成 TraceID 的场景，也应明确知道 Discard
+// shutdown 函数。对于只需要本地生成 TraceID 的场景，也应明确知道 InstallLocalProvider
 // 仍然会修改全局 tracing 状态。
 package trace
 
 import (
 	"context"
+	"maps"
+	"sync"
 	"time"
 
 	"github.com/ceyewan/genesis/xerrors"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -46,15 +49,25 @@ func Extract(ctx context.Context, carrier map[string]string) context.Context {
 // 返回的 shutdown 会关闭底层 provider；若当前全局 TracerProvider 仍指向该
 // 实例，还会将全局 tracing 状态重置为安全默认值。
 func Init(cfg *Config) (func(context.Context) error, error) {
-	if err := validateConfig(cfg); err != nil {
+	if cfg == nil {
+		return nil, xerrors.New("config is required")
+	}
+	config := *cfg
+	config.Headers = maps.Clone(cfg.Headers)
+	config.setDefaults()
+	if err := validateConfig(&config); err != nil {
 		return nil, err
 	}
+	cfg = &config
 
 	ctx := context.Background()
 
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(cfg.Endpoint),
-		otlptracegrpc.WithTimeout(5 * time.Second),
+		otlptracegrpc.WithTimeout(cfg.ExporterTimeout),
+	}
+	if len(cfg.Headers) > 0 {
+		opts = append(opts, otlptracegrpc.WithHeaders(cfg.Headers))
 	}
 	if cfg.Insecure {
 		opts = append(opts, otlptracegrpc.WithInsecure())
@@ -64,10 +77,17 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 	if err != nil {
 		return nil, xerrors.Wrap(err, "create otlp exporter")
 	}
+	spanExporter := sdktrace.SpanExporter(exporter)
+	if cfg.ExportErrors != nil {
+		spanExporter = &reportingExporter{SpanExporter: exporter, errors: cfg.ExportErrors}
+	}
 
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			semconv.ServiceNameKey.String(cfg.ServiceName),
+			semconv.ServiceVersionKey.String(cfg.Version),
+			attribute.String("service.instance.id", cfg.InstanceID),
+			attribute.String("deployment.environment", cfg.Environment),
 		),
 	)
 	if err != nil {
@@ -79,10 +99,13 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.Sampler))),
 	}
 
-	if cfg.Batcher == "simple" {
-		tpOpts = append(tpOpts, sdktrace.WithSyncer(exporter))
+	if cfg.Batcher == BatcherImmediate {
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(spanExporter,
+			sdktrace.WithMaxExportBatchSize(1),
+			sdktrace.WithBatchTimeout(time.Millisecond),
+		))
 	} else {
-		tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(spanExporter))
 	}
 
 	tp := sdktrace.NewTracerProvider(tpOpts...)
@@ -92,17 +115,55 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 		propagation.Baggage{},
 	))
 
+	return newTracerShutdown(tp), nil
+}
+
+func newTracerShutdown(tp *sdktrace.TracerProvider) func(context.Context) error {
+	var shutdownOnce sync.Once
+	shutdownDone := make(chan struct{})
+	var shutdownErr error
 	return func(ctx context.Context) error {
-		err := tp.Shutdown(ctx)
-		if otel.GetTracerProvider() == tp {
-			otel.SetTracerProvider(tracenoop.NewTracerProvider())
-			otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-				propagation.TraceContext{},
-				propagation.Baggage{},
-			))
+		if ctx == nil {
+			return xerrors.New("trace shutdown context is nil")
 		}
-		return err
-	}, nil
+		shutdownOnce.Do(func() {
+			go func() {
+				defer close(shutdownDone)
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				shutdownErr = tp.Shutdown(shutdownCtx)
+				if otel.GetTracerProvider() == tp {
+					otel.SetTracerProvider(tracenoop.NewTracerProvider())
+					otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+						propagation.TraceContext{},
+						propagation.Baggage{},
+					))
+				}
+			}()
+		})
+		select {
+		case <-shutdownDone:
+			return shutdownErr
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+type reportingExporter struct {
+	sdktrace.SpanExporter
+	errors chan<- error
+}
+
+func (e *reportingExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	err := e.SpanExporter.ExportSpans(ctx, spans)
+	if err != nil {
+		select {
+		case e.errors <- err:
+		default:
+		}
+	}
+	return err
 }
 
 func validateConfig(cfg *Config) error {
@@ -118,8 +179,11 @@ func validateConfig(cfg *Config) error {
 	if cfg.Sampler < 0 || cfg.Sampler > 1 {
 		return xerrors.New("sampler must be between 0 and 1")
 	}
-	if cfg.Batcher != "" && cfg.Batcher != "batch" && cfg.Batcher != "simple" {
-		return xerrors.New("batcher must be \"batch\" or \"simple\"")
+	if cfg.ExporterTimeout < 0 {
+		return xerrors.New("exporter_timeout must not be negative")
+	}
+	if cfg.Batcher != "" && cfg.Batcher != BatcherBatch && cfg.Batcher != BatcherImmediate {
+		return xerrors.New("batcher must be \"batch\" or \"immediate\"")
 	}
 	return nil
 }

@@ -20,4 +20,7 @@ var (
 
 	// ErrInvalidTTL TTL 配置非法
 	ErrInvalidTTL = xerrors.New("dlock: invalid ttl")
+
+	// ErrClosed Locker 已关闭。
+	ErrClosed = xerrors.New("dlock: locker closed")
 )

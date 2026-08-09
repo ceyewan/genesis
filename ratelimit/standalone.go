@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -21,10 +22,13 @@ type limiterWrapper struct {
 
 // standaloneLimiter 单机限流器实现（非导出）
 type standaloneLimiter struct {
-	cfg      *StandaloneConfig
-	logger   clog.Logger
-	limiters sync.Map // map[string]*limiterWrapper
-	stopCh   chan struct{}
+	cfg       *StandaloneConfig
+	logger    clog.Logger
+	limiters  sync.Map // map[string]*limiterWrapper
+	stopCh    chan struct{}
+	closeOnce sync.Once
+	workerWG  sync.WaitGroup
+	closed    atomic.Bool
 
 	// 指标
 	allowedCounter metrics.Counter
@@ -58,7 +62,9 @@ func newStandalone(
 	cleanupInterval := cfg.CleanupInterval
 	idleTimeout := cfg.IdleTimeout
 
-	go l.cleanup(cleanupInterval, idleTimeout)
+	l.workerWG.Go(func() {
+		l.cleanup(cleanupInterval, idleTimeout)
+	})
 
 	if logger != nil {
 		logger.Info("standalone rate limiter created",
@@ -76,6 +82,9 @@ func (l *standaloneLimiter) Allow(ctx context.Context, key string, limit Limit) 
 
 // AllowN 尝试获取 N 个令牌
 func (l *standaloneLimiter) AllowN(ctx context.Context, key string, limit Limit, n int) (bool, error) {
+	if l.closed.Load() {
+		return false, ErrLimiterClosed
+	}
 	if key == "" {
 		return false, ErrKeyEmpty
 	}
@@ -92,8 +101,8 @@ func (l *standaloneLimiter) AllowN(ctx context.Context, key string, limit Limit,
 	wrapper := l.getLimiter(key, limit)
 
 	// 尝试获取令牌
-	wrapper.mu.Lock()
 	allowed := wrapper.limiter.AllowN(time.Now(), n)
+	wrapper.mu.Lock()
 	wrapper.lastSeen = time.Now()
 	wrapper.mu.Unlock()
 
@@ -122,6 +131,9 @@ func (l *standaloneLimiter) AllowN(ctx context.Context, key string, limit Limit,
 
 // Wait 阻塞等待直到获取 1 个令牌
 func (l *standaloneLimiter) Wait(ctx context.Context, key string, limit Limit) error {
+	if l.closed.Load() {
+		return ErrLimiterClosed
+	}
 	if key == "" {
 		return ErrKeyEmpty
 	}
@@ -134,8 +146,8 @@ func (l *standaloneLimiter) Wait(ctx context.Context, key string, limit Limit) e
 	wrapper := l.getLimiter(key, limit)
 
 	// 等待直到获取令牌
-	wrapper.mu.Lock()
 	err := wrapper.limiter.Wait(ctx)
+	wrapper.mu.Lock()
 	wrapper.lastSeen = time.Now()
 	wrapper.mu.Unlock()
 
@@ -206,12 +218,10 @@ func (l *standaloneLimiter) cleanup(interval, idleTimeout time.Duration) {
 
 // Close 关闭限流器
 func (l *standaloneLimiter) Close() error {
-	select {
-	case <-l.stopCh:
-		// 已经关闭过
-		return nil
-	default:
+	l.closed.Store(true)
+	l.closeOnce.Do(func() {
 		close(l.stopCh)
-		return nil
-	}
+	})
+	l.workerWG.Wait()
+	return nil
 }

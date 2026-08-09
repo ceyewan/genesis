@@ -18,18 +18,70 @@ type lockEntry struct {
 
 // memoryStore 内存存储实现（非导出，仅用于单机）
 type memoryStore struct {
-	mu      sync.Mutex
-	prefix  string
-	locks   map[string]lockEntry
-	results map[string]memoryEntry
+	mu        sync.Mutex
+	prefix    string
+	locks     map[string]lockEntry
+	results   map[string]memoryEntry
+	stopCh    chan struct{}
+	closeOnce sync.Once
+	workerWG  sync.WaitGroup
 }
 
 func newMemoryStore(prefix string) Store {
-	return &memoryStore{
+	return newMemoryStoreWithCleanup(prefix, time.Minute)
+}
+
+func newMemoryStoreWithCleanup(prefix string, interval time.Duration) Store {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	ms := &memoryStore{
 		prefix:  prefix,
 		locks:   make(map[string]lockEntry),
 		results: make(map[string]memoryEntry),
+		stopCh:  make(chan struct{}),
 	}
+	ms.workerWG.Go(func() {
+		ms.cleanup(interval)
+	})
+	return ms
+}
+
+func (ms *memoryStore) cleanup(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case now := <-ticker.C:
+			ms.removeExpired(now)
+		case <-ms.stopCh:
+			return
+		}
+	}
+}
+
+func (ms *memoryStore) removeExpired(now time.Time) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	for key, entry := range ms.locks {
+		if !entry.expiresAt.After(now) {
+			delete(ms.locks, key)
+		}
+	}
+	for key, entry := range ms.results {
+		if !entry.expiresAt.After(now) {
+			delete(ms.results, key)
+		}
+	}
+}
+
+func (ms *memoryStore) Close() error {
+	ms.closeOnce.Do(func() {
+		close(ms.stopCh)
+	})
+	ms.workerWG.Wait()
+	return nil
 }
 
 func (ms *memoryStore) Lock(ctx context.Context, key string, ttl time.Duration) (LockToken, bool, error) {
@@ -95,14 +147,19 @@ func (ms *memoryStore) SetResult(ctx context.Context, key string, val []byte, tt
 	valCopy := append([]byte(nil), val...)
 
 	ms.mu.Lock()
+	if token != "" {
+		entry, ok := ms.locks[lockKey]
+		if !ok || entry.token != token || !entry.expiresAt.After(now) {
+			ms.mu.Unlock()
+			return ErrLockLost
+		}
+	}
 	ms.results[resultKey] = memoryEntry{
 		value:     valCopy,
 		expiresAt: now.Add(ttl),
 	}
 	if token != "" {
-		if entry, ok := ms.locks[lockKey]; ok && entry.token == token {
-			delete(ms.locks, lockKey)
-		}
+		delete(ms.locks, lockKey)
 	}
 	ms.mu.Unlock()
 

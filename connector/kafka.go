@@ -17,6 +17,7 @@ type kafkaConnector struct {
 	cfg     *KafkaConfig
 	client  *kgo.Client
 	logger  clog.Logger
+	metrics *connectorTelemetry
 	healthy atomic.Bool
 	mu      sync.RWMutex
 }
@@ -24,6 +25,12 @@ type kafkaConnector struct {
 // NewKafka 创建 Kafka 连接器
 // 注意：实际连接在调用 Connect() 时建立
 func NewKafka(cfg *KafkaConfig, opts ...Option) (KafkaConnector, error) {
+	if cfg == nil {
+		return nil, xerrors.Wrap(ErrConfig, "kafka config is nil")
+	}
+	cfgCopy := *cfg
+	cfgCopy.Seed = append([]string(nil), cfg.Seed...)
+	cfg = &cfgCopy
 	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid kafka config")
 	}
@@ -35,8 +42,9 @@ func NewKafka(cfg *KafkaConfig, opts ...Option) (KafkaConnector, error) {
 	opt.applyDefaults()
 
 	return &kafkaConnector{
-		cfg:    cfg,
-		logger: opt.logger.With(clog.String("connector", "kafka"), clog.String("name", cfg.Name)),
+		cfg:     cfg,
+		logger:  opt.logger.With(clog.String("connector", "kafka"), clog.String("name", cfg.Name)),
+		metrics: newConnectorTelemetry(opt.meter, "kafka", cfg.Name),
 	}, nil
 }
 
@@ -55,6 +63,8 @@ func (c *kafkaConnector) Connect(ctx context.Context) error {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(c.cfg.Seed...),
 		kgo.ClientID(c.cfg.ClientID),
+		kgo.DialTimeout(c.cfg.ConnectTimeout),
+		kgo.RequestTimeoutOverhead(c.cfg.RequestTimeout),
 		kgo.WithLogger(&kgoLogger{logger: c.logger}),
 	}
 	if c.cfg.AllowAutoTopicCreate {
@@ -74,14 +84,14 @@ func (c *kafkaConnector) Connect(ctx context.Context) error {
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		c.logger.Error("failed to create kafka client", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "kafka connector[%s]: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "kafka connector[%s]", c.cfg.Name)
 	}
 
 	// Ping to verify connection
 	if err := client.Ping(ctx); err != nil {
 		client.Close()
 		c.logger.Error("failed to connect to kafka seeds", clog.Error(err))
-		return xerrors.Wrapf(ErrConnection, "kafka connector[%s]: ping failed: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "kafka connector[%s]: ping failed", c.cfg.Name)
 	}
 
 	c.client = client
@@ -116,7 +126,7 @@ func (c *kafkaConnector) HealthCheck(ctx context.Context) error {
 
 	if client == nil {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(ErrClientNil, "kafka connector[%s]", c.cfg.Name)
+		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrClientNil, "kafka connector[%s]", c.cfg.Name))
 	}
 
 	// 只在用户未设置超时时才设置 5s 默认超时
@@ -131,11 +141,11 @@ func (c *kafkaConnector) HealthCheck(ctx context.Context) error {
 
 	if err := client.Ping(healthCtx); err != nil {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(ErrHealthCheck, "kafka connector[%s]: %v", c.cfg.Name, err)
+		return c.metrics.observeHealth(ctx, wrapConnectorCause(ErrHealthCheck, err, "kafka connector[%s]", c.cfg.Name))
 	}
 
 	c.healthy.Store(true)
-	return nil
+	return c.metrics.observeHealth(ctx, nil)
 }
 
 // IsHealthy 返回缓存的健康状态

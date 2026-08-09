@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ceyewan/genesis/clog"
 )
 
@@ -541,6 +543,37 @@ func TestLoaderWatchBeforeLoad(t *testing.T) {
 	}
 }
 
+func TestLoaderCloseIsConcurrentAndClosesWatches(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("app:\n  name: genesis\n"), 0o600))
+
+	loaded, err := New(&Config{Name: "config", Paths: []string{tempDir}, FileType: "yaml", EnvPrefix: "CLOSE_TEST"})
+	require.NoError(t, err)
+	require.NoError(t, loaded.Load(context.Background()))
+	watchCtx := t.Context()
+	ch, err := loaded.Watch(watchCtx, "app.name")
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			errs <- loaded.Close()
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	_, ok := <-ch
+	require.False(t, ok)
+	require.ErrorIs(t, loaded.Load(context.Background()), ErrClosed)
+	_, err = loaded.Watch(context.Background(), "app.name")
+	require.ErrorIs(t, err, ErrClosed)
+}
+
 func TestLoaderLoadIsIdempotent(t *testing.T) {
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "config.yaml")
@@ -650,5 +683,78 @@ func TestLoaderDotEnvReadFailureReturnsError(t *testing.T) {
 
 	if err := loader.Load(context.Background()); err == nil {
 		t.Fatalf("Load() error = nil, want read .env error")
+	}
+}
+
+func TestLoaderEnvOnlyUnmarshal(t *testing.T) {
+	t.Setenv("ENV_ONLY_APP_NAME", "from-env")
+	t.Setenv("ENV_ONLY_SERVICE_NAME", "root-name")
+
+	loader, err := New(&Config{Paths: []string{t.TempDir()}, EnvPrefix: "ENV_ONLY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loader.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		App struct {
+			Name string `mapstructure:"name"`
+		} `mapstructure:"app"`
+		ServiceName string `mapstructure:"service_name"`
+	}
+	if err := loader.Unmarshal(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.App.Name != "from-env" || got.ServiceName != "root-name" {
+		t.Fatalf("Unmarshal() = %+v, want env-only values", got)
+	}
+}
+
+func TestLoaderEnvOnlyUnmarshalPreservesUnderscoresInNestedField(t *testing.T) {
+	t.Setenv("REAUDIT_DATABASE_MAX_OPEN_CONNS", "42")
+
+	loader, err := New(&Config{Paths: []string{t.TempDir()}, EnvPrefix: "REAUDIT"})
+	require.NoError(t, err)
+	require.NoError(t, loader.Load(context.Background()))
+	require.Equal(t, "42", loader.Get("database.max_open_conns"))
+
+	var got struct {
+		Database struct {
+			MaxOpenConns int `mapstructure:"max_open_conns"`
+		} `mapstructure:"database"`
+	}
+	require.NoError(t, loader.Unmarshal(&got))
+	require.Equal(t, 42, got.Database.MaxOpenConns)
+
+	var database struct {
+		MaxOpenConns int `mapstructure:"max_open_conns"`
+	}
+	require.NoError(t, loader.UnmarshalKey("database", &database))
+	require.Equal(t, 42, database.MaxOpenConns)
+}
+
+func TestLoaderFailedLoadKeepsLastGoodSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("app: {name: good}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loader, err := New(&Config{Paths: []string{dir}, EnvPrefix: "TRANSACTIONAL_LOAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loader.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("app: [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := loader.Load(context.Background()); err == nil {
+		t.Fatal("Load() = nil, want malformed YAML error")
+	}
+	if got := loader.Get("app.name"); got != "good" {
+		t.Fatalf("last good app.name = %v, want good", got)
 	}
 }

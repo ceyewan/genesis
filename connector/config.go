@@ -2,6 +2,8 @@ package connector
 
 import (
 	"time"
+
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // MySQLConfig MySQL连接配置
@@ -53,21 +55,24 @@ func (c *MySQLConfig) setDefaults() {
 // validate 验证配置
 func (c *MySQLConfig) validate() error {
 	c.setDefaults()
+	if c.ConnMaxLifetime < 0 || c.ConnectTimeout < 0 {
+		return xerrors.Wrap(ErrConfig, "mysql durations must not be negative")
+	}
 	// 如果提供了 DSN，则跳过其他字段的校验
 	if c.DSN != "" {
 		return nil
 	}
 	if c.Host == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "mysql host is required when dsn is empty")
 	}
 	if c.Port <= 0 {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "mysql port must be greater than zero")
 	}
 	if c.Username == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "mysql username is required when dsn is empty")
 	}
 	if c.Database == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "mysql database is required when dsn is empty")
 	}
 	return nil
 }
@@ -118,11 +123,14 @@ func (c *RedisConfig) setDefaults() {
 // validate 验证配置
 func (c *RedisConfig) validate() error {
 	c.setDefaults()
+	if c.DialTimeout < 0 || c.ReadTimeout < 0 || c.WriteTimeout < 0 {
+		return xerrors.Wrap(ErrConfig, "redis durations must not be negative")
+	}
 	if c.Addr == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "redis addr is required")
 	}
 	if c.DB < 0 {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "redis db must not be negative")
 	}
 	return nil
 }
@@ -162,8 +170,11 @@ func (c *EtcdConfig) setDefaults() {
 // validate 验证配置
 func (c *EtcdConfig) validate() error {
 	c.setDefaults()
+	if c.DialTimeout < 0 || c.KeepAliveTime < 0 || c.KeepAliveTimeout < 0 {
+		return xerrors.Wrap(ErrConfig, "etcd durations must not be negative")
+	}
 	if len(c.Endpoints) == 0 {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "etcd endpoints are required")
 	}
 	return nil
 }
@@ -208,8 +219,11 @@ func (c *NATSConfig) setDefaults() {
 // validate 验证配置
 func (c *NATSConfig) validate() error {
 	c.setDefaults()
+	if c.ConnectTimeout < 0 || c.ReconnectWait < 0 || c.PingInterval < 0 {
+		return xerrors.Wrap(ErrConfig, "nats durations must not be negative")
+	}
 	if c.URL == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "nats url is required")
 	}
 	return nil
 }
@@ -252,8 +266,11 @@ func (c *KafkaConfig) setDefaults() {
 // validate 验证配置
 func (c *KafkaConfig) validate() error {
 	c.setDefaults()
+	if c.ConnectTimeout < 0 || c.RequestTimeout < 0 {
+		return xerrors.Wrap(ErrConfig, "kafka durations must not be negative")
+	}
 	if len(c.Seed) == 0 {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "kafka seed brokers are required")
 	}
 	return nil
 }
@@ -278,7 +295,7 @@ func (c *SQLiteConfig) setDefaults() {
 func (c *SQLiteConfig) validate() error {
 	c.setDefaults()
 	if c.Path == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "sqlite path is required")
 	}
 	return nil
 }
@@ -336,21 +353,24 @@ func (c *PostgreSQLConfig) setDefaults() {
 // validate 验证配置
 func (c *PostgreSQLConfig) validate() error {
 	c.setDefaults()
+	if c.ConnMaxLifetime < 0 || c.ConnectTimeout < 0 {
+		return xerrors.Wrap(ErrConfig, "postgresql durations must not be negative")
+	}
 	// 如果提供了 DSN，则跳过其他字段的校验
 	if c.DSN != "" {
 		return nil
 	}
 	if c.Host == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "postgresql host is required when dsn is empty")
 	}
 	if c.Port <= 0 {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "postgresql port must be greater than zero")
 	}
 	if c.Username == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "postgresql username is required when dsn is empty")
 	}
 	if c.Database == "" {
-		return ErrConfig
+		return xerrors.Wrap(ErrConfig, "postgresql database is required when dsn is empty")
 	}
 	return nil
 }

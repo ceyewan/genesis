@@ -3,6 +3,7 @@ package mq
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -64,29 +65,33 @@ func (t *redisStreamTransport) Publish(ctx context.Context, topic string, data [
 
 // Subscribe 订阅消息
 func (t *redisStreamTransport) Subscribe(ctx context.Context, topic string, handler Handler, opts subscribeOptions) (Subscription, error) {
-	subCtx, cancel := context.WithCancel(ctx)
+	consumeCtx, stopConsuming := context.WithCancel(ctx)
+	handlerCtx, cancelHandlers := context.WithCancel(ctx)
 	sub := &redisStreamSubscription{
-		cancel: cancel,
-		done:   make(chan struct{}),
+		stopConsuming:  stopConsuming,
+		cancelHandlers: cancelHandlers,
+		done:           make(chan struct{}),
 	}
 
 	// Consumer Group 创建在 goroutine 外执行，确保错误能在初始化阶段暴露
 	if opts.QueueGroup != "" {
-		if err := t.client.XGroupCreateMkStream(ctx, topic, opts.QueueGroup, "$").Err(); err != nil && !isGroupExistsError(err) {
-			cancel()
+		if err := t.client.XGroupCreateMkStream(ctx, topic, opts.QueueGroup, opts.StartID).Err(); err != nil && !isGroupExistsError(err) {
+			stopConsuming()
+			cancelHandlers()
 			return nil, xerrors.Wrap(err, "create consumer group failed")
 		}
 	}
 
 	go func() {
 		defer func() {
+			cancelHandlers()
 			sub.once.Do(func() { close(sub.done) })
 		}()
 
 		if opts.QueueGroup != "" {
-			t.consumeWithGroup(subCtx, topic, opts, handler)
+			t.consumeWithGroup(consumeCtx, handlerCtx, topic, opts, handler)
 		} else {
-			t.consumeBroadcast(subCtx, topic, opts, handler)
+			t.consumeBroadcast(consumeCtx, handlerCtx, topic, opts, handler)
 		}
 	}()
 
@@ -103,7 +108,7 @@ func isGroupExistsError(err error) bool {
 // 实现策略：
 // 1. 首先尝试 claim 超时的 Pending 消息（避免消费者崩溃后消息卡死）
 // 2. 然后读取新消息
-func (t *redisStreamTransport) consumeWithGroup(ctx context.Context, topic string, opts subscribeOptions, handler Handler) {
+func (t *redisStreamTransport) consumeWithGroup(ctx, handlerCtx context.Context, topic string, opts subscribeOptions, handler Handler) {
 	group := opts.QueueGroup
 	consumer := opts.DurableName
 	if consumer == "" {
@@ -128,7 +133,7 @@ func (t *redisStreamTransport) consumeWithGroup(ctx context.Context, topic strin
 
 		// 定期检查并 claim 超时的 Pending 消息
 		if loopCount%pendingCheckRatio == 0 {
-			claimCursor = t.claimPendingMessages(ctx, topic, group, consumer, pendingIdleTime, pendingClaimCount, claimCursor, handler)
+			claimCursor = t.claimPendingMessages(ctx, handlerCtx, topic, group, consumer, pendingIdleTime, pendingClaimCount, claimCursor, handler)
 		}
 
 		// 读取新消息
@@ -140,17 +145,22 @@ func (t *redisStreamTransport) consumeWithGroup(ctx context.Context, topic strin
 			Block:    2 * time.Second,
 		}).Result()
 		if err != nil {
-			if err == redis.Nil || err == context.Canceled {
+			if errors.Is(err, redis.Nil) || errors.Is(err, context.Canceled) {
 				continue
 			}
 			t.logger.Error("XReadGroup failed", clog.String("topic", topic), clog.Error(err))
-			time.Sleep(time.Second) // 避免忙轮询
+			if !waitForRetry(ctx, time.Second) {
+				return
+			}
 			continue
 		}
 
 		for _, stream := range streams {
 			for _, msg := range stream.Messages {
-				t.processMessage(ctx, topic, group, msg, handler)
+				if ctx.Err() != nil {
+					return
+				}
+				t.processMessage(handlerCtx, topic, group, msg, handler)
 			}
 		}
 	}
@@ -164,7 +174,7 @@ func (t *redisStreamTransport) consumeWithGroup(ctx context.Context, topic strin
 // 参数 cursor：上次扫描的位置，避免每次从头扫描导致 O(n) 性能问题
 // 返回值：下次扫描应使用的 cursor（如果扫描完成返回 "0-0" 重新开始）
 func (t *redisStreamTransport) claimPendingMessages(
-	ctx context.Context,
+	ctx, handlerCtx context.Context,
 	topic, group, consumer string,
 	minIdleTime time.Duration,
 	count int,
@@ -181,7 +191,7 @@ func (t *redisStreamTransport) claimPendingMessages(
 		Count:    int64(count),
 	}).Result()
 	if err != nil {
-		if err != redis.Nil {
+		if !errors.Is(err, redis.Nil) {
 			t.logger.Warn("XAutoClaim failed", clog.String("topic", topic), clog.Error(err))
 		}
 		return "0-0" // 出错时重置游标
@@ -197,7 +207,10 @@ func (t *redisStreamTransport) claimPendingMessages(
 
 	// 处理认领到的消息
 	for _, msg := range messages {
-		t.processMessage(ctx, topic, group, msg, handler)
+		if ctx.Err() != nil {
+			break
+		}
+		t.processMessage(handlerCtx, topic, group, msg, handler)
 	}
 
 	// 返回下次扫描的起点
@@ -206,8 +219,8 @@ func (t *redisStreamTransport) claimPendingMessages(
 }
 
 // consumeBroadcast 广播模式消费
-func (t *redisStreamTransport) consumeBroadcast(ctx context.Context, topic string, opts subscribeOptions, handler Handler) {
-	lastID := "$" // 只读新消息
+func (t *redisStreamTransport) consumeBroadcast(ctx, handlerCtx context.Context, topic string, opts subscribeOptions, handler Handler) {
+	lastID := opts.StartID
 
 	for {
 		select {
@@ -222,20 +235,36 @@ func (t *redisStreamTransport) consumeBroadcast(ctx context.Context, topic strin
 			Block:   2 * time.Second,
 		}).Result()
 		if err != nil {
-			if err == redis.Nil || err == context.Canceled {
+			if errors.Is(err, redis.Nil) || errors.Is(err, context.Canceled) {
 				continue
 			}
 			t.logger.Error("XRead failed", clog.String("topic", topic), clog.Error(err))
-			time.Sleep(time.Second)
+			if !waitForRetry(ctx, time.Second) {
+				return
+			}
 			continue
 		}
 
 		for _, stream := range streams {
 			for _, msg := range stream.Messages {
-				t.processMessage(ctx, topic, "", msg, handler)
+				if ctx.Err() != nil {
+					return
+				}
+				t.processMessage(handlerCtx, topic, "", msg, handler)
 				lastID = msg.ID
 			}
 		}
+	}
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -313,6 +342,8 @@ type redisStreamMessage struct {
 	client  *redis.Client
 	group   string
 	ctx     context.Context
+	ackMu   sync.Mutex
+	acked   bool
 }
 
 func (m *redisStreamMessage) Context() context.Context {
@@ -335,17 +366,31 @@ func (m *redisStreamMessage) Headers() Headers {
 }
 
 func (m *redisStreamMessage) Ack() error {
-	if m.group == "" {
-		// 非 Consumer Group 模式，无需 Ack
+	m.ackMu.Lock()
+	defer m.ackMu.Unlock()
+	if m.acked {
 		return nil
 	}
-	return m.client.XAck(context.Background(), m.topic, m.group, m.id).Err()
+	if m.group == "" {
+		// 非 Consumer Group 模式，无需 Ack
+		m.acked = true
+		return nil
+	}
+	if err := m.client.XAck(context.Background(), m.topic, m.group, m.id).Err(); err != nil {
+		return err
+	}
+	m.acked = true
+	return nil
 }
 
 func (m *redisStreamMessage) Nak() error {
 	// Redis Stream 没有原生 Nak 语义。
 	// 返回 ErrNotSupported，让调用方知道此操作在 Redis 下不成立。
 	// 消息会留在 Pending 列表，由 XAUTOCLAIM 在 PendingIdle 超时后重新认领。
+	return ErrNotSupported
+}
+
+func (m *redisStreamMessage) NakWithDelay(delay time.Duration) error {
 	return ErrNotSupported
 }
 
@@ -357,14 +402,32 @@ func (m *redisStreamMessage) ID() string {
 
 // redisStreamSubscription Redis Stream 订阅实现
 type redisStreamSubscription struct {
-	cancel context.CancelFunc
-	done   chan struct{}
-	once   sync.Once
+	stopConsuming  context.CancelFunc
+	cancelHandlers context.CancelFunc
+	done           chan struct{}
+	once           sync.Once
+	stopOnce       sync.Once
+	forceOnce      sync.Once
 }
 
 func (s *redisStreamSubscription) Unsubscribe() error {
-	s.cancel()
+	s.stopOnce.Do(s.stopConsuming)
+	s.forceOnce.Do(s.cancelHandlers)
 	return nil
+}
+
+func (s *redisStreamSubscription) Drain(ctx context.Context) error {
+	if ctx == nil {
+		return xerrors.New("mq subscription drain context is nil")
+	}
+	s.stopOnce.Do(s.stopConsuming)
+	select {
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		s.forceOnce.Do(s.cancelHandlers)
+		return xerrors.Wrap(ctx.Err(), "drain redis stream subscription")
+	}
 }
 
 func (s *redisStreamSubscription) Done() <-chan struct{} {

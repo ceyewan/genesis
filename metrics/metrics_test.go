@@ -2,12 +2,153 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"net"
+	"net/http"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
+
+func TestShutdownHonorsEachCallersContext(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(started)
+		<-release
+	})}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		_ = server.Serve(listener)
+	}()
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		response, requestErr := http.Get("http://" + listener.Addr().String())
+		if requestErr == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	<-started
+
+	meter := &meterImpl{
+		provider:     sdkmetric.NewMeterProvider(),
+		httpServer:   server,
+		httpDone:     httpDone,
+		shutdownDone: make(chan struct{}),
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- meter.Shutdown(context.Background()) }()
+
+	// Wait until the first caller has started Shutdown and closed the listener.
+	for {
+		conn, dialErr := net.DialTimeout("tcp", listener.Addr().String(), 10*time.Millisecond)
+		if dialErr != nil {
+			break
+		}
+		_ = conn.Close()
+		time.Sleep(time.Millisecond)
+	}
+
+	callerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- meter.Shutdown(callerCtx) }()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("second Shutdown error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second Shutdown ignored its context")
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	<-requestDone
+}
+
+func TestFirstCanceledShutdownDoesNotAbortCleanup(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(started)
+		<-release
+	})}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		_ = server.Serve(listener)
+	}()
+	go func() {
+		response, requestErr := http.Get("http://" + listener.Addr().String())
+		if requestErr == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	<-started
+	meter := &meterImpl{provider: sdkmetric.NewMeterProvider(), httpServer: server, httpDone: httpDone, shutdownDone: make(chan struct{})}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := meter.Shutdown(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first shutdown = %v, want context.Canceled", err)
+	}
+	second := make(chan error, 1)
+	go func() { second <- meter.Shutdown(context.Background()) }()
+	select {
+	case err := <-second:
+		t.Fatalf("cleanup ended before request release: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewCopiesConfigAndShutdownIsConcurrentIdempotent(t *testing.T) {
+	cfg := &Config{ServiceName: "svc", Version: "v1", InstanceID: "one", Environment: "test"}
+	meter, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ServiceName = "mutated"
+	if got := meter.(*meterImpl).config.ServiceName; got != "svc" {
+		t.Fatalf("internal service name = %q", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	errCh := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			errCh <- meter.Shutdown(ctx)
+		})
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent Shutdown: %v", err)
+		}
+	}
+}
 
 // TestNew 测试创建 Meter 实例
 func TestNew(t *testing.T) {
@@ -91,6 +232,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestNewFailsWhenMetricsPortIsInUse(t *testing.T) {
+	before := otel.GetMeterProvider()
 	ln, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatalf("listen failed: %v", err)
@@ -106,6 +248,38 @@ func TestNewFailsWhenMetricsPortIsInUse(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("New() error = nil, want listen failure")
+	}
+	if !errors.Is(err, ErrListen) {
+		t.Fatalf("New() error = %v, want ErrListen", err)
+	}
+	if after := otel.GetMeterProvider(); after != before {
+		t.Fatal("failed New replaced the global MeterProvider")
+	}
+}
+
+func TestNewUsesConfiguredListenAddress(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	meter, err := New(&Config{
+		ServiceName:   "test-service",
+		ListenAddress: "127.0.0.1",
+		Port:          port,
+		Path:          "/metrics",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := meter.(*meterImpl).httpServer.Addr; got != net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) {
+		t.Fatalf("server address = %q", got)
+	}
+	if err := meter.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

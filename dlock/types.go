@@ -35,10 +35,10 @@ func (c *Config) setDefaults() {
 	if c == nil {
 		return
 	}
-	if c.DefaultTTL <= 0 {
+	if c.DefaultTTL == 0 {
 		c.DefaultTTL = 10 * time.Second
 	}
-	if c.RetryInterval <= 0 {
+	if c.RetryInterval == 0 {
 		c.RetryInterval = 100 * time.Millisecond
 	}
 }
@@ -49,6 +49,9 @@ func (c *Config) validate() error {
 	}
 	if c.Driver == "" {
 		return xerrors.New("dlock: driver is required")
+	}
+	if c.DefaultTTL < 0 || c.RetryInterval < 0 {
+		return xerrors.Wrap(ErrInvalidTTL, "default_ttl and retry_interval must not be negative")
 	}
 	switch c.Driver {
 	case DriverRedis, DriverEtcd:
@@ -85,6 +88,13 @@ type Locker interface {
 	// Unlock 释放锁
 	// 只有锁的持有者才能成功释放
 	Unlock(ctx context.Context, key string) error
+
+	// Lost reports asynchronous ownership loss for a held key. The channel
+	// yields ErrOwnershipLost once and then closes if renewal/session ownership
+	// is lost. A normal Unlock closes the channel without a value. Call Lost
+	// immediately after acquiring the lock and monitor it for the whole critical
+	// section.
+	Lost(key string) <-chan error
 
 	// Close 关闭 Locker 的持有状态。
 	// 它会停止自动续期，并尽力释放当前 Locker 已持有的锁。

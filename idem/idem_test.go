@@ -12,6 +12,29 @@ import (
 	"github.com/ceyewan/genesis/testkit"
 )
 
+func TestRedisStoreRejectsStaleOwnerResult(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 10*time.Second)
+	defer cancel()
+	conn := testkit.NewRedisContainerConnector(t)
+	store := newRedisStore(conn, "test:idem:stale:"+testkit.NewID()+":")
+	token, locked, err := store.Lock(ctx, "key", 30*time.Millisecond)
+	if err != nil || !locked {
+		t.Fatalf("first Lock() = %v, %v", locked, err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	newToken, locked, err := store.Lock(ctx, "key", time.Second)
+	if err != nil || !locked {
+		t.Fatalf("second Lock() = %v, %v", locked, err)
+	}
+	if err := store.SetResult(ctx, "key", []byte("stale"), time.Minute, token); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("stale SetResult() = %v, want ErrLockLost", err)
+	}
+	if _, err := store.GetResult(ctx, "key"); !errors.Is(err, ErrResultNotFound) {
+		t.Fatalf("GetResult() = %v, want ErrResultNotFound", err)
+	}
+	_ = store.Unlock(ctx, "key", newToken)
+}
+
 // TestExecuteSuccess 测试成功执行
 func TestExecuteSuccess(t *testing.T) {
 	redisConn := testkit.NewRedisContainerConnector(t)

@@ -21,6 +21,10 @@ if err != nil {
 }
 defer redisConn.Close()
 
+if err := redisConn.Connect(ctx); err != nil {
+    return err
+}
+
 dist, err := cache.NewDistributed(&cache.DistributedConfig{
     Driver:     cache.DriverRedis,
     KeyPrefix:  "myapp:",
@@ -100,6 +104,8 @@ if err := multi.Set(ctx, "user:1001", user, 10*time.Minute); err != nil {
 | `MaxEntries` | `int` | `10000` | 缓存最大条目数，超出后 LRU 淘汰 |
 | `Serializer` | `string` | `"json"` | 序列化器，支持 `"json"` 和 `"msgpack"` |
 | `DefaultTTL` | `time.Duration` | `1h` | `ttl<=0` 时的兜底 TTL |
+
+JSON 与 MessagePack 不是可直接互换的线上编码。切换 `Serializer` 时必须清理旧缓存，或同时切换 `KeyPrefix`/版本；否则新实例可能无法解码旧值。自定义编码通过 `cache.WithSerializer` 注入，并承担同样的版本迁移责任。
 
 ### MultiConfig
 

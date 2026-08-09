@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,18 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/ceyewan/genesis/connector"
 )
+
+func TestNewRedisRejectsUnconnectedConnector(t *testing.T) {
+	t.Parallel()
+
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{Addr: "127.0.0.1:6379"})
+	require.NoError(t, err)
+	_, err = New(&Config{Driver: DriverRedis}, WithRedisConnector(redisConn))
+	require.ErrorIs(t, err, connector.ErrClientNil)
+}
 
 func TestExecute_ReturnTypeStable(t *testing.T) {
 	t.Parallel()
@@ -135,11 +147,11 @@ func TestGinMiddleware_CustomCacheStrategy(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	router.Use(gin.HandlerFunc(idemComp.GinMiddleware(
+	router.Use(idemComp.GinMiddleware(
 		WithHTTPStatusCacheFunc(func(status int) bool {
 			return status == http.StatusConflict
 		}),
-	).(func(*gin.Context))))
+	))
 
 	calls := 0
 	router.POST("/conflict", func(c *gin.Context) {
@@ -192,6 +204,46 @@ func TestUnaryServerInterceptor_CustomCacheStrategy(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, count)
 	require.Equal(t, resp1, resp2)
+}
+
+func TestGinMiddlewareScopesKeyAndRejectsFingerprintConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	idemComp, err := New(&Config{Driver: DriverMemory, LockTTL: time.Second})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = idemComp.Close() })
+	router := gin.New()
+	router.Use(idemComp.GinMiddleware())
+	calls := map[string]int{}
+	for _, path := range []string{"/orders", "/refunds"} {
+		router.POST(path, func(c *gin.Context) {
+			calls[path]++
+			c.JSON(http.StatusOK, gin.H{"path": path})
+		})
+	}
+
+	request := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("X-Idempotency-Key", "same-key")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+	require.Equal(t, http.StatusOK, request("/orders", `{"item":1}`).Code)
+	require.Equal(t, http.StatusConflict, request("/orders", `{"item":2}`).Code)
+	require.Equal(t, http.StatusOK, request("/refunds", `{"item":2}`).Code)
+	require.Equal(t, 1, calls["/orders"])
+	require.Equal(t, 1, calls["/refunds"])
+}
+
+func TestWithStoreUsesExternalImplementation(t *testing.T) {
+	store := newMemoryStore("external:")
+	idemComp, err := New(&Config{Driver: DriverRedis}, WithStore(store))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = idemComp.Close() })
+	_, err = idemComp.Execute(context.Background(), "key", func(context.Context) (any, error) {
+		return "value", nil
+	})
+	require.NoError(t, err)
 }
 
 func TestExecute_ReturnsLockLostOnRefreshFailure(t *testing.T) {

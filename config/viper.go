@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,11 @@ type loader struct {
 
 	watchOnce sync.Once
 	watchErr  error
+	watcher   *fsnotify.Watcher
+	stopCh    chan struct{}
+	wg        sync.WaitGroup
+	closed    bool
+	closeOnce sync.Once
 }
 
 // newLoader 创建一个新的配置加载器（内部使用）
@@ -44,6 +50,7 @@ func newLoader(cfg *Config, opts ...Option) (Loader, error) {
 		logger:    clog.Discard(),
 		watches:   make(map[string][]chan Event),
 		oldValues: make(map[string]any),
+		stopCh:    make(chan struct{}),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -73,27 +80,33 @@ func (l *loader) newConfiguredViper() *viper.Viper {
 func (l *loader) Load(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.closed {
+		return ErrClosed
+	}
 
-	l.v = l.newConfiguredViper()
+	next := l.newConfiguredViper()
 
 	if err := l.loadDotEnv(); err != nil {
 		return err
 	}
 
-	if err := l.v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+	if err := next.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
 			return xerrors.Wrapf(err, "failed to read config file %s", l.cfg.Name)
 		}
 	}
 
-	if err := l.loadEnvironmentConfig(l.v); err != nil {
+	if err := l.loadEnvironmentConfig(next); err != nil {
+		return err
+	}
+	if err := l.validateViper(next); err != nil {
 		return err
 	}
 
-	if err := l.validateViper(l.v); err != nil {
-		return err
-	}
-
+	// Commit the new snapshot only after every source has loaded and validated.
+	// A failed reload must leave the last known-good configuration intact.
+	l.v = next
 	l.loaded = true
 	l.captureCurrentValues()
 
@@ -147,7 +160,8 @@ func (l *loader) loadEnvironmentConfig(v *viper.Viper) error {
 	v.SetConfigName(envConfigName)
 
 	if err := v.MergeInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
 			return xerrors.Wrapf(err, "failed to merge environment config %s", envConfigName)
 		}
 	}
@@ -172,23 +186,101 @@ func (l *loader) Get(key string) any {
 
 // Unmarshal 将整个配置反序列化到结构体
 func (l *loader) Unmarshal(v any) error {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.materializeEnvironmentForTarget("", v)
 	return l.v.Unmarshal(v)
 }
 
 // UnmarshalKey 将特定配置 key 反序列化到结构体
 func (l *loader) UnmarshalKey(key string, v any) error {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.materializeEnvironmentForTarget(key, v)
 	return l.v.UnmarshalKey(key, v)
+}
+
+// materializeEnvironmentForTarget binds environment values using the target
+// schema. An underscore is valid inside a field name, so an environment name
+// cannot be safely converted to a dotted path without knowing that schema.
+func (l *loader) materializeEnvironmentForTarget(root string, target any) {
+	t := reflect.TypeOf(target)
+	if t == nil {
+		return
+	}
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return
+	}
+	l.materializeStructEnvironment(root, t)
+}
+
+func (l *loader) materializeStructEnvironment(root string, t reflect.Type) {
+	for field := range t.Fields() {
+		if field.PkgPath != "" {
+			continue
+		}
+		name, skip, squash := configFieldName(field)
+		if skip {
+			continue
+		}
+		path := root
+		if !squash {
+			if path != "" {
+				path += "."
+			}
+			path += name
+		}
+		fieldType := field.Type
+		for fieldType.Kind() == reflect.Pointer {
+			fieldType = fieldType.Elem()
+		}
+		if fieldType.Kind() == reflect.Struct && fieldType.PkgPath() != "time" {
+			l.materializeStructEnvironment(path, fieldType)
+			continue
+		}
+		envName := strings.ToUpper(l.cfg.EnvPrefix + "_" + strings.NewReplacer(".", "_", "-", "_").Replace(path))
+		if value, ok := os.LookupEnv(envName); ok {
+			l.v.Set(path, value)
+		}
+	}
+}
+
+func configFieldName(field reflect.StructField) (name string, skip, squash bool) {
+	name = field.Tag.Get("mapstructure")
+	if name == "" {
+		name = field.Tag.Get("yaml")
+	}
+	if name == "" {
+		name = field.Tag.Get("json")
+	}
+	parts := strings.Split(name, ",")
+	name = parts[0]
+	if name == "-" {
+		return "", true, false
+	}
+	for _, option := range parts[1:] {
+		if option == "squash" {
+			squash = true
+		}
+	}
+	if name == "" {
+		name = strings.ToLower(field.Name)
+	}
+	return name, false, squash
 }
 
 // Watch 订阅特定配置 key 的变更。
 func (l *loader) Watch(ctx context.Context, key string) (<-chan Event, error) {
 	l.mu.RLock()
 	loaded := l.loaded
+	closed := l.closed
 	l.mu.RUnlock()
+	if closed {
+		return nil, ErrClosed
+	}
 	if !loaded {
 		return nil, xerrors.Wrapf(ErrNotLoaded, "call Load before Watch")
 	}
@@ -198,15 +290,24 @@ func (l *loader) Watch(ctx context.Context, key string) (<-chan Event, error) {
 	}
 
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	if l.closed {
+		l.mu.Unlock()
+		return nil, ErrClosed
+	}
 
 	ch := make(chan Event, 10)
 	l.watches[key] = append(l.watches[key], ch)
 	l.oldValues[key] = l.v.Get(key)
+	l.wg.Add(1)
+	l.mu.Unlock()
 
 	go func() {
-		<-ctx.Done()
-		l.removeWatch(key, ch)
+		defer l.wg.Done()
+		select {
+		case <-ctx.Done():
+			l.removeWatch(key, ch)
+		case <-l.stopCh:
+		}
 	}()
 
 	return ch, nil
@@ -217,10 +318,12 @@ func (l *loader) removeWatch(key string, ch chan Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	found := false
 	if chans, ok := l.watches[key]; ok {
 		for i, c := range chans {
 			if c == ch {
 				l.watches[key] = append(chans[:i], chans[i+1:]...)
+				found = true
 				break
 			}
 		}
@@ -230,7 +333,9 @@ func (l *loader) removeWatch(key string, ch chan Event) {
 		}
 	}
 
-	close(ch)
+	if found {
+		close(ch)
+	}
 }
 
 // Validate 验证配置
@@ -287,6 +392,7 @@ func (l *loader) startFileWatch() error {
 	}
 
 	if len(watchDirs) == 0 {
+		_ = watcher.Close()
 		return nil
 	}
 
@@ -311,7 +417,19 @@ func (l *loader) startFileWatch() error {
 		}
 	}
 
-	go l.watchLoop(watcher, watchFiles)
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		_ = watcher.Close()
+		return ErrClosed
+	}
+	l.watcher = watcher
+	l.wg.Add(1)
+	l.mu.Unlock()
+	go func() {
+		defer l.wg.Done()
+		l.watchLoop(watcher, watchFiles)
+	}()
 	return nil
 }
 
@@ -342,6 +460,8 @@ func (l *loader) watchLoop(watcher *fsnotify.Watcher, targets map[string]struct{
 
 	for {
 		select {
+		case <-l.stopCh:
+			return
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return
@@ -384,6 +504,30 @@ func (l *loader) watchLoop(watcher *fsnotify.Watcher, targets map[string]struct{
 	}
 }
 
+// Close 停止文件监听并关闭所有订阅通道。
+func (l *loader) Close() error {
+	l.closeOnce.Do(func() {
+		l.mu.Lock()
+		l.closed = true
+		close(l.stopCh)
+		watcher := l.watcher
+		l.watcher = nil
+		for key, channels := range l.watches {
+			for _, ch := range channels {
+				close(ch)
+			}
+			delete(l.watches, key)
+			delete(l.oldValues, key)
+		}
+		l.mu.Unlock()
+		if watcher != nil {
+			_ = watcher.Close()
+		}
+		l.wg.Wait()
+	})
+	return nil
+}
+
 func (l *loader) reloadAndNotify(event fsnotify.Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -400,7 +544,8 @@ func (l *loader) reloadAndNotify(event fsnotify.Event) {
 	}
 
 	if err := next.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
 			l.logger.Warn("配置热更新失败：读取基础配置失败",
 				clog.String("event", event.Op.String()),
 				clog.String("path", event.Name),
@@ -418,7 +563,6 @@ func (l *loader) reloadAndNotify(event fsnotify.Event) {
 		)
 		return
 	}
-
 	if err := l.validateViper(next); err != nil {
 		l.logger.Warn("配置热更新失败：配置校验失败",
 			clog.String("event", event.Op.String()),

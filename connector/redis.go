@@ -17,6 +17,7 @@ type redisConnector struct {
 	cfg     *RedisConfig
 	client  *redis.Client
 	logger  clog.Logger
+	metrics *connectorTelemetry
 	healthy atomic.Bool
 	mu      sync.RWMutex
 }
@@ -24,6 +25,11 @@ type redisConnector struct {
 // NewRedis 创建 Redis 连接器
 // 注意：实际连接在调用 Connect() 时建立
 func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
+	if cfg == nil {
+		return nil, xerrors.Wrap(ErrConfig, "redis config is nil")
+	}
+	cfgCopy := *cfg
+	cfg = &cfgCopy
 	if err := cfg.validate(); err != nil {
 		return nil, xerrors.Wrapf(err, "invalid redis config")
 	}
@@ -35,8 +41,9 @@ func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
 	opt.applyDefaults()
 
 	c := &redisConnector{
-		cfg:    cfg,
-		logger: opt.logger.With(clog.String("connector", "redis"), clog.String("name", cfg.Name)),
+		cfg:     cfg,
+		logger:  opt.logger.With(clog.String("connector", "redis"), clog.String("name", cfg.Name)),
+		metrics: newConnectorTelemetry(opt.meter, "redis", cfg.Name),
 	}
 
 	return c, nil
@@ -73,7 +80,7 @@ func (c *redisConnector) Connect(ctx context.Context) error {
 	if c.cfg.EnableTracing {
 		if err := redisotel.InstrumentTracing(client); err != nil {
 			client.Close()
-			return xerrors.Wrapf(ErrConnection, "redis connector[%s]: enable tracing failed: %v", c.cfg.Name, err)
+			return wrapConnectorCause(ErrConnection, err, "redis connector[%s]: enable tracing failed", c.cfg.Name)
 		}
 	}
 
@@ -81,7 +88,7 @@ func (c *redisConnector) Connect(ctx context.Context) error {
 	if err := client.Ping(ctx).Err(); err != nil {
 		client.Close()
 		c.logger.Error("failed to connect to redis", clog.Error(err), clog.String("addr", c.cfg.Addr))
-		return xerrors.Wrapf(ErrConnection, "redis connector[%s]: ping failed: %v", c.cfg.Name, err)
+		return wrapConnectorCause(ErrConnection, err, "redis connector[%s]: ping failed", c.cfg.Name)
 	}
 
 	c.client = client
@@ -122,17 +129,17 @@ func (c *redisConnector) HealthCheck(ctx context.Context) error {
 
 	if client == nil {
 		c.healthy.Store(false)
-		return xerrors.Wrapf(ErrClientNil, "redis connector[%s]", c.cfg.Name)
+		return c.metrics.observeHealth(ctx, xerrors.Wrapf(ErrClientNil, "redis connector[%s]", c.cfg.Name))
 	}
 
 	if err := client.Ping(ctx).Err(); err != nil {
 		c.healthy.Store(false)
 		c.logger.Warn("redis health check failed", clog.Error(err))
-		return xerrors.Wrapf(ErrHealthCheck, "redis connector[%s]: %v", c.cfg.Name, err)
+		return c.metrics.observeHealth(ctx, wrapConnectorCause(ErrHealthCheck, err, "redis connector[%s]", c.cfg.Name))
 	}
 
 	c.healthy.Store(true)
-	return nil
+	return c.metrics.observeHealth(ctx, nil)
 }
 
 // IsHealthy 返回缓存的健康状态

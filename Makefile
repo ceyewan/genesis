@@ -1,4 +1,4 @@
-.PHONY: help up down test lint modernize modernize-check clean logs status examples buf-lint
+.PHONY: help up down test test-race lint modernize modernize-check clean logs status examples examples-check buf-lint api-inventory api-inventory-check exported-comments godoc-artifacts
 
 DEV_COMPOSE_FILE := deploy/dev/docker-compose.yml
 BUF_DIR := examples/proto
@@ -14,6 +14,8 @@ help:
 	@echo "  make buf-lint  - 检查共享示例 proto 定义"
 	@echo "  make modernize - 运行 go fix 现代化代码"
 	@echo "  make modernize-check - 检查是否存在 go fix 建议"
+	@echo "  make api-inventory - 更新 v1 导出 API 清单"
+	@echo "  make api-inventory-check - 检查 v1 导出 API 清单漂移"
 	@echo "  make clean     - 清理卷和网络"
 	@echo "  make logs      - 显示所有服务日志"
 	@echo "  make status    - 查看服务状态"
@@ -30,6 +32,10 @@ test:
 	@echo "运行测试..."
 	@go test ./...
 
+test-race:
+	@echo "运行 race tests..."
+	@go test -race -count=1 ./...
+
 lint:
 	@echo "运行代码检查..."
 	@golangci-lint run
@@ -44,13 +50,41 @@ modernize:
 
 modernize-check:
 	@echo "检查 go fix 建议..."
-	@out="$$(go fix -diff ./...)"; \
-	if [ -n "$$out" ]; then \
-		printf '%s\n' "$$out"; \
+	@out_file="$$(mktemp)"; \
+	if ! go fix -diff ./... >"$$out_file"; then \
+		cat "$$out_file"; \
+		rm -f "$$out_file"; \
+		exit 1; \
+	fi; \
+	if [ -s "$$out_file" ]; then \
+		cat "$$out_file"; \
 		echo ""; \
 		echo "检测到可应用的 go fix 变更，请运行: go fix ./..."; \
+		rm -f "$$out_file"; \
 		exit 1; \
-	fi
+	fi; \
+	rm -f "$$out_file"
+
+api-inventory:
+	@go run ./internal/cmd/apiinventory -write docs/v1-api-inventory.md
+
+api-inventory-check:
+	@go run ./internal/cmd/apiinventory -check docs/v1-api-inventory.md
+
+exported-comments:
+	@golangci-lint run --config .golangci-doc.yml ./...
+
+godoc-artifacts:
+	@mkdir -p artifacts/godoc
+	@for pkg in $$(go list ./... | grep -v '/examples/' | grep -v '/internal/'); do \
+		name=$$(echo "$$pkg" | tr '/.' '__'); \
+		go doc -all "$$pkg" > "artifacts/godoc/$$name.txt" || exit 1; \
+	done
+	@count=$$(find artifacts/godoc -type f -name '*.txt' | wc -l | tr -d ' '); \
+	test "$$count" = "18" || { echo "expected 18 GoDoc artifacts, got $$count"; exit 1; }
+
+examples-check:
+	@go test ./examples/...
 
 clean:
 	@echo "清理卷和网络..."
@@ -75,8 +109,8 @@ example-%:
 example-all:
 	@echo "运行所有示例..."
 	for d in examples/*; do \
-		if [ -f "$d/main.go" ]; then \
-			echo "运行 $(basename $d) 示例..."; \
-			(cd "$d" && go run main.go) || exit 1; \
+		if [ -f "$$d/main.go" ]; then \
+			echo "运行 $$(basename $$d) 示例..."; \
+			(cd "$$d" && go run main.go) || exit 1; \
 		fi; \
 	done

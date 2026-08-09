@@ -28,8 +28,9 @@ type Allocator interface {
 	// 保活失败时会向返回的通道发送错误
 	KeepAlive(ctx context.Context) <-chan error
 
-	// Stop 停止保活并释放资源
-	Stop()
+	// Stop 停止保活、等待后台任务并释放租约。释放失败会返回错误；
+	// 方法可并发重复调用，所有调用者观察同一个最终结果。
+	Stop() error
 }
 
 // ========================================
@@ -43,7 +44,7 @@ type Allocator interface {
 //
 //	// Redis 分配器
 //	allocator, _ := idgen.NewAllocator(&idgen.AllocatorConfig{
-//	    Driver: "redis",
+//	    Driver: idgen.DriverRedis,
 //	    MaxID:  512,
 //	}, idgen.WithRedisConnector(redisConn))
 //
@@ -60,8 +61,9 @@ func NewAllocator(cfg *AllocatorConfig, opts ...Option) (Allocator, error) {
 		return nil, xerrors.WithCode(ErrInvalidInput, "config_nil")
 	}
 
-	cfg.setDefaults()
-	if err := cfg.validate(); err != nil {
+	config := *cfg
+	config.setDefaults()
+	if err := config.validate(); err != nil {
 		return nil, err
 	}
 
@@ -71,18 +73,24 @@ func NewAllocator(cfg *AllocatorConfig, opts ...Option) (Allocator, error) {
 		o(&opt)
 	}
 
-	switch cfg.Driver {
-	case "redis":
+	switch config.Driver {
+	case DriverRedis:
 		if opt.RedisConnector == nil {
 			return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required")
 		}
-		return newRedisAllocator(cfg, opt.RedisConnector, opt.Logger)
+		if opt.RedisConnector.GetClient() == nil {
+			return nil, xerrors.Wrap(connector.ErrClientNil, "idgen: redis connector is not connected")
+		}
+		return newRedisAllocator(&config, opt.RedisConnector, opt.Logger)
 
-	case "etcd":
+	case DriverEtcd:
 		if opt.EtcdConnector == nil {
 			return nil, xerrors.WithCode(ErrConnectorNil, "etcd_connector_required")
 		}
-		return newEtcdAllocator(cfg, opt.EtcdConnector, opt.Logger)
+		if opt.EtcdConnector.GetClient() == nil {
+			return nil, xerrors.Wrap(connector.ErrClientNil, "idgen: etcd connector is not connected")
+		}
+		return newEtcdAllocator(&config, opt.EtcdConnector, opt.Logger)
 
 	default:
 		return nil, xerrors.WithCode(ErrInvalidInput, "unsupported_driver")
@@ -101,6 +109,12 @@ type redisAllocator struct {
 
 	mu            sync.Mutex
 	stopOnce      sync.Once
+	stopDone      chan struct{}
+	stopErr       error
+	keepAlive     bool
+	wg            sync.WaitGroup
+	lifecycleCtx  context.Context
+	lifecycleStop context.CancelFunc
 	instanceID    int64
 	instanceValue string
 	redisKey      string
@@ -112,18 +126,28 @@ func newRedisAllocator(cfg *AllocatorConfig, redis connector.RedisConnector, log
 	if logger == nil {
 		logger = clog.Discard()
 	}
+	lifecycleCtx, lifecycleStop := context.WithCancel(context.Background())
 
 	return &redisAllocator{
-		redis:  redis,
-		cfg:    cfg,
-		logger: logger.With(clog.String("component", "allocator")),
-		stopCh: make(chan struct{}),
+		redis:         redis,
+		cfg:           cfg,
+		logger:        logger.With(clog.String("component", "allocator")),
+		stopCh:        make(chan struct{}),
+		stopDone:      make(chan struct{}),
+		lifecycleCtx:  lifecycleCtx,
+		lifecycleStop: lifecycleStop,
 	}, nil
 }
 
 // Allocate 分配 WorkerID（使用随机起点遍历优化并发性能）
 func (a *redisAllocator) Allocate(ctx context.Context) (int64, error) {
 	a.mu.Lock()
+	select {
+	case <-a.stopCh:
+		a.mu.Unlock()
+		return 0, ErrAllocatorStopped
+	default:
+	}
 	if a.redisKey != "" {
 		defer a.mu.Unlock()
 		return 0, xerrors.WithCode(ErrAlreadyAllocated, "worker_id_already_allocated")
@@ -146,7 +170,7 @@ func (a *redisAllocator) Allocate(ctx context.Context) (int64, error) {
 	script := `
 		local prefix = KEYS[1]
 		local value = ARGV[1]
-		local ttl = tonumber(ARGV[2])
+		local ttl_ms = tonumber(ARGV[2])
 		local max_id = tonumber(ARGV[3])
 		local offset = tonumber(ARGV[4])
 
@@ -154,14 +178,14 @@ func (a *redisAllocator) Allocate(ctx context.Context) (int64, error) {
 		for i = 0, max_id - 1 do
 			local id = (offset + i) % max_id
 			local key = prefix .. ":" .. id
-			if redis.call("SET", key, value, "NX", "EX", ttl) then
+			if redis.call("SET", key, value, "NX", "PX", ttl_ms) then
 				return id
 			end
 		end
 		return -1
 	`
 
-	ttl := a.cfg.TTL
+	ttl := a.cfg.TTL.Milliseconds()
 	value := fmt.Sprintf("instance:%d:%d", time.Now().UnixNano(), rand.Uint64())
 	result, err := client.Eval(ctx, script, []string{a.cfg.KeyPrefix}, value, ttl, a.cfg.MaxID, offset).Result()
 	if err != nil {
@@ -194,58 +218,78 @@ func (a *redisAllocator) Allocate(ctx context.Context) (int64, error) {
 // KeepAlive 启动后台保活并返回错误通道。
 func (a *redisAllocator) KeepAlive(ctx context.Context) <-chan error {
 	errCh := make(chan error, 1)
+	fail := func(err error) <-chan error {
+		errCh <- err
+		close(errCh)
+		return errCh
+	}
 
 	if a.redis == nil {
-		errCh <- xerrors.WithCode(ErrConnectorNil, "redis_connector_required")
-		return errCh
+		return fail(xerrors.WithCode(ErrConnectorNil, "redis_connector_required"))
 	}
 
 	client := a.redis.GetClient()
 	if client == nil {
-		errCh <- xerrors.WithCode(ErrConnectorNil, "redis_client_required")
-		return errCh
+		return fail(xerrors.WithCode(ErrConnectorNil, "redis_client_required"))
 	}
 
 	a.mu.Lock()
+	select {
+	case <-a.stopCh:
+		a.mu.Unlock()
+		return fail(ErrAllocatorStopped)
+	default:
+	}
 	redisKey := a.redisKey
 	instanceValue := a.instanceValue
-	a.mu.Unlock()
 	if redisKey == "" || instanceValue == "" {
-		errCh <- xerrors.WithCode(ErrInvalidInput, "allocate_must_be_called_first")
-		return errCh
+		a.mu.Unlock()
+		return fail(xerrors.WithCode(ErrInvalidInput, "allocate_must_be_called_first"))
 	}
+	if a.keepAlive {
+		a.mu.Unlock()
+		return fail(ErrKeepAliveStarted)
+	}
+	a.keepAlive = true
+	a.wg.Add(1)
+	a.mu.Unlock()
 
 	go func() {
-		ticker := time.NewTicker(time.Duration(a.cfg.TTL/3) * time.Second)
+		defer a.wg.Done()
+		defer close(errCh)
+		keepAliveCtx, cancel := context.WithCancel(ctx)
+		stopAfter := context.AfterFunc(a.lifecycleCtx, cancel)
+		defer stopAfter()
+		defer cancel()
+
+		ticker := time.NewTicker(a.cfg.TTL / 3)
 		defer ticker.Stop()
 
 		script := `
 			local key = KEYS[1]
 			local expected = ARGV[1]
-			local ttl = tonumber(ARGV[2])
+			local ttl_ms = tonumber(ARGV[2])
 
 			local current = redis.call("GET", key)
 			if not current or current ~= expected then
 				return 0
 			end
 
-			redis.call("EXPIRE", key, ttl)
+			redis.call("PEXPIRE", key, ttl_ms)
 			return 1
 		`
 
 		for {
 			select {
-			case <-a.stopCh:
-				return
-			case <-ctx.Done():
+			case <-keepAliveCtx.Done():
 				return
 			case <-ticker.C:
 				result, err := client.Eval(
-					context.Background(),
+					keepAliveCtx,
 					script,
 					[]string{redisKey},
 					instanceValue,
-					a.cfg.TTL,
+					a.cfg.TTL.Milliseconds(),
 				).Result()
 				if err != nil {
 					a.logger.Error("keep alive failed",
@@ -278,9 +322,12 @@ func (a *redisAllocator) KeepAlive(ctx context.Context) <-chan error {
 }
 
 // Stop 停止保活并释放资源
-func (a *redisAllocator) Stop() {
+func (a *redisAllocator) Stop() error {
 	a.stopOnce.Do(func() {
 		close(a.stopCh)
+		a.lifecycleStop()
+		a.wg.Wait()
+		defer close(a.stopDone)
 
 		if a.redis == nil {
 			return
@@ -311,12 +358,24 @@ func (a *redisAllocator) Stop() {
 			return 0
 		`
 
-		_, _ = client.Eval(context.Background(), script, []string{redisKey}, instanceValue).Result()
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		result, err := client.Eval(releaseCtx, script, []string{redisKey}, instanceValue).Int64()
+		if err != nil {
+			a.stopErr = xerrors.Wrap(err, "release worker id")
+			return
+		}
+		if result == 0 {
+			a.stopErr = xerrors.Wrap(ErrLeaseExpired, "worker id ownership lost before Stop")
+			return
+		}
 		a.logger.Info("worker id released",
 			clog.Int64("worker_id", instanceID),
 			clog.String("key", redisKey),
 		)
 	})
+	<-a.stopDone
+	return a.stopErr
 }
 
 // ========================================
@@ -329,12 +388,18 @@ type etcdAllocator struct {
 	cfg    *AllocatorConfig
 	logger clog.Logger
 
-	mu       sync.Mutex
-	stopOnce sync.Once
-	leaseID  clientv3.LeaseID
-	workerID int64
-	etcdKey  string
-	stopCh   chan struct{}
+	mu            sync.Mutex
+	stopOnce      sync.Once
+	stopDone      chan struct{}
+	stopErr       error
+	keepAlive     bool
+	wg            sync.WaitGroup
+	lifecycleCtx  context.Context
+	lifecycleStop context.CancelFunc
+	leaseID       clientv3.LeaseID
+	workerID      int64
+	etcdKey       string
+	stopCh        chan struct{}
 }
 
 // newEtcdAllocator 创建 Etcd 分配器
@@ -342,18 +407,28 @@ func newEtcdAllocator(cfg *AllocatorConfig, etcdConn connector.EtcdConnector, lo
 	if logger == nil {
 		logger = clog.Discard()
 	}
+	lifecycleCtx, lifecycleStop := context.WithCancel(context.Background())
 
 	return &etcdAllocator{
-		client: etcdConn.GetClient(),
-		cfg:    cfg,
-		logger: logger.With(clog.String("component", "allocator")),
-		stopCh: make(chan struct{}),
+		client:        etcdConn.GetClient(),
+		cfg:           cfg,
+		logger:        logger.With(clog.String("component", "allocator")),
+		stopCh:        make(chan struct{}),
+		stopDone:      make(chan struct{}),
+		lifecycleCtx:  lifecycleCtx,
+		lifecycleStop: lifecycleStop,
 	}, nil
 }
 
 // Allocate 分配 WorkerID（使用随机起点遍历优化并发性能）
 func (a *etcdAllocator) Allocate(ctx context.Context) (int64, error) {
 	a.mu.Lock()
+	select {
+	case <-a.stopCh:
+		a.mu.Unlock()
+		return 0, ErrAllocatorStopped
+	default:
+	}
 	if a.leaseID != 0 || a.etcdKey != "" {
 		defer a.mu.Unlock()
 		return 0, xerrors.WithCode(ErrAlreadyAllocated, "worker_id_already_allocated")
@@ -365,7 +440,8 @@ func (a *etcdAllocator) Allocate(ctx context.Context) (int64, error) {
 	}
 
 	// 创建 Lease
-	lease, err := a.client.Grant(ctx, int64(a.cfg.TTL))
+	leaseTTL := int64((a.cfg.TTL + time.Second - 1) / time.Second)
+	lease, err := a.client.Grant(ctx, leaseTTL)
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Error("etcd grant lease failed", clog.Error(err))
@@ -390,7 +466,7 @@ func (a *etcdAllocator) Allocate(ctx context.Context) (int64, error) {
 			Commit()
 		if err != nil {
 			// 清理已创建的 Lease
-			if _, revokeErr := a.client.Revoke(context.Background(), lease.ID); revokeErr != nil {
+			if revokeErr := a.revokeLease(lease.ID); revokeErr != nil {
 				if a.logger != nil {
 					a.logger.Warn("etcd revoke lease failed during cleanup", clog.Error(revokeErr))
 				}
@@ -420,7 +496,7 @@ func (a *etcdAllocator) Allocate(ctx context.Context) (int64, error) {
 	}
 
 	// 所有 ID 都被占用，清理 Lease
-	if _, revokeErr := a.client.Revoke(context.Background(), lease.ID); revokeErr != nil {
+	if revokeErr := a.revokeLease(lease.ID); revokeErr != nil {
 		if a.logger != nil {
 			a.logger.Warn("etcd revoke lease failed during cleanup", clog.Error(revokeErr))
 		}
@@ -431,23 +507,46 @@ func (a *etcdAllocator) Allocate(ctx context.Context) (int64, error) {
 // KeepAlive 启动后台保活并返回错误通道。
 func (a *etcdAllocator) KeepAlive(ctx context.Context) <-chan error {
 	errCh := make(chan error, 1)
+	fail := func(err error) <-chan error {
+		errCh <- err
+		close(errCh)
+		return errCh
+	}
 
 	if a.client == nil {
-		errCh <- xerrors.WithCode(ErrConnectorNil, "etcd_client_required")
-		return errCh
+		return fail(xerrors.WithCode(ErrConnectorNil, "etcd_client_required"))
 	}
 
 	a.mu.Lock()
-	leaseID := a.leaseID
-	a.mu.Unlock()
-	if leaseID == 0 {
-		errCh <- xerrors.WithCode(ErrInvalidInput, "allocate_must_be_called_first")
-		return errCh
+	select {
+	case <-a.stopCh:
+		a.mu.Unlock()
+		return fail(ErrAllocatorStopped)
+	default:
 	}
+	leaseID := a.leaseID
+	if leaseID == 0 {
+		a.mu.Unlock()
+		return fail(xerrors.WithCode(ErrInvalidInput, "allocate_must_be_called_first"))
+	}
+	if a.keepAlive {
+		a.mu.Unlock()
+		return fail(ErrKeepAliveStarted)
+	}
+	a.keepAlive = true
+	a.wg.Add(1)
+	a.mu.Unlock()
 
 	go func() {
+		defer a.wg.Done()
+		defer close(errCh)
+		keepAliveCtx, cancel := context.WithCancel(ctx)
+		stopAfter := context.AfterFunc(a.lifecycleCtx, cancel)
+		defer stopAfter()
+		defer cancel()
+
 		// 启动 KeepAlive
-		kaCh, err := a.client.KeepAlive(ctx, leaseID)
+		kaCh, err := a.client.KeepAlive(keepAliveCtx, leaseID)
 		if err != nil {
 			a.logger.Error("etcd keep alive failed",
 				clog.Error(err),
@@ -462,9 +561,7 @@ func (a *etcdAllocator) KeepAlive(ctx context.Context) <-chan error {
 
 		for {
 			select {
-			case <-a.stopCh:
-				return
-			case <-ctx.Done():
+			case <-keepAliveCtx.Done():
 				return
 			case ka, ok := <-kaCh:
 				if !ok || ka == nil {
@@ -486,9 +583,12 @@ func (a *etcdAllocator) KeepAlive(ctx context.Context) <-chan error {
 }
 
 // Stop 停止保活并释放资源
-func (a *etcdAllocator) Stop() {
+func (a *etcdAllocator) Stop() error {
 	a.stopOnce.Do(func() {
 		close(a.stopCh)
+		a.lifecycleStop()
+		a.wg.Wait()
+		defer close(a.stopDone)
 
 		if a.client == nil {
 			return
@@ -504,11 +604,23 @@ func (a *etcdAllocator) Stop() {
 		}
 
 		// 撤销 Lease，关联的 key 会自动删除
-		_, _ = a.client.Revoke(context.Background(), leaseID)
+		if err := a.revokeLease(leaseID); err != nil {
+			a.stopErr = xerrors.Wrap(err, "revoke allocator lease")
+			return
+		}
 		a.logger.Info("worker id released",
 			clog.Int64("worker_id", workerID),
 			clog.String("key", etcdKey),
 			clog.Int64("lease_id", int64(leaseID)),
 		)
 	})
+	<-a.stopDone
+	return a.stopErr
+}
+
+func (a *etcdAllocator) revokeLease(leaseID clientv3.LeaseID) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := a.client.Revoke(ctx, leaseID)
+	return err
 }

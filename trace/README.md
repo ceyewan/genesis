@@ -14,7 +14,7 @@
 
 这意味着它更适合作为**应用启动时初始化一次**的基础组件，而不是在运行时反复调用。
 
-`Discard()` 也是全局模式：它不是一个局部 helper，而是安装一个“不导出数据”的全局 provider，仅在本地生成 TraceID 并维持传播链路。
+`InstallLocalProvider()` 也是全局模式：它安装一个“不导出数据”的全局 provider，仅在本地生成 TraceID 并维持传播链路。
 
 ## 快速开始
 
@@ -35,18 +35,44 @@ defer shutdown(context.Background())
 `trace.Config` 当前是一个**最小 OTLP gRPC 初始化器**，支持：
 
 - `ServiceName`
+- `Version`、`InstanceID`、`Environment`
 - `Endpoint`
 - `Sampler`
-- `Batcher`，可选 `batch` 或 `simple`
+- `Batcher`，可选 `trace.BatcherBatch` 或 `trace.BatcherImmediate`
 - `Insecure`
+- `ExporterTimeout`
+- 可选的有缓冲 `ExportErrors` channel
 
-其中 `Batcher` 在默认配置里会设置为 `batch`，而空字符串行为也等同于 `batch`，适合常规服务；`simple` 更适合测试或需要更直接刷出的场景。组件当前不负责更复杂的 exporter 能力，例如 TLS、认证头和附加 resource attributes。
+其中 `Batcher` 在默认配置里会设置为 `batch`，空字符串也等同于 `batch`。`immediate` 使用异步单条小批量，不会让 exporter 故障阻塞 `span.End`。`Headers` 可配置 OTLP 认证或路由头；`Insecure=false` 使用系统 TLS 信任。`ExportErrors` 的发送是非阻塞的，通道已满时会丢弃该次通知。
 
 ## HTTP / gRPC 中间件
 
+`GinMiddleware` 和 `GRPCServerStatsHandler` 的作用不仅是记录 span，还会把活跃 Span 写入 `context.Context`。`clog.WithTraceContext()` 正是从这个 context 里提取 `trace_id` / `span_id` 注入日志——**如果不注册中间件，日志里的 trace_id 字段会静默为空，不报任何错误**。
+
+标准库 HTTP 使用 `HTTPHandler(handler, operation)` 包装服务端 handler，客户端把 `HTTPTransport(nil)` 配置到 `http.Client.Transport`。两者使用全局 W3C Trace Context/Baggage 传播器。
+
+完整的三步接入顺序：
+
 ```go
+// 1. 启动时初始化（安装全局 TracerProvider）
+shutdown, err := trace.Init(&trace.Config{ServiceName: "my-service", Endpoint: "localhost:4317"})
+if err != nil { return err }
+defer shutdown(ctx)
+
+// 2. 创建 logger（依赖全局 TracerProvider 已就位）
+logger, err := clog.New(&clog.Config{Level: "info", Format: "json"}, clog.WithTraceContext())
+if err != nil { return err }
+defer logger.Close()
+
+// 3. 注册中间件（为每个请求创建 Span，写入 ctx）
 r := gin.New()
-r.Use(trace.GinMiddleware("gateway"))
+r.Use(trace.GinMiddleware("my-service"))
+```
+
+gRPC 场景：
+
+```go
+s := grpc.NewServer(grpc.StatsHandler(trace.GRPCServerStatsHandler()))
 
 conn, _ := grpc.NewClient(
     "localhost:9090",
@@ -95,14 +121,15 @@ defer consumeSpan.End()
 
 - `Init()` 通常应在应用启动时调用一次
 - 返回的 `shutdown` 函数由调用方负责执行；关闭后若全局状态仍指向该实例，会回退到安全默认值
-- `Discard()` 虽然不导出 trace 数据，但仍然会修改全局 tracing 状态
+- `Init` 和 `InstallLocalProvider` 返回的 shutdown 可并发重复调用，并遵守 context deadline
+- `InstallLocalProvider()` 虽然不导出 trace 数据，但仍然会修改全局 tracing 状态
 
 ## 推荐实践
 
 - 应用启动时统一初始化一次 `trace`
 - HTTP、gRPC、MQ 传播都共用同一套全局 tracing 状态
 - 异步消息默认使用 `link`，只在确实需要单条 trace 演示时使用 `child_of`
-- 不要把 `Discard()` 当成“无副作用的局部 tracer helper”
+- 不要把 `InstallLocalProvider()` 当成“无副作用的局部 tracer helper”
 
 ## 相关文档
 

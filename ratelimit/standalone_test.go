@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/clog"
@@ -63,19 +62,19 @@ func TestStandaloneLimiter_Allow_Basic(t *testing.T) {
 	t.Run("第一次请求应该被允许", func(t *testing.T) {
 		allowed, err := limiter.Allow(ctx, "test-key", Limit{Rate: 1, Burst: 1})
 		require.NoError(t, err)
-		assert.True(t, allowed, "第一次请求应该被允许")
+		require.True(t, allowed, "第一次请求应该被允许")
 	})
 
 	t.Run("Rate=1,Burst=1 时第二次请求应该被拒绝", func(t *testing.T) {
 		// 使用新 key 避免受之前的测试影响
 		allowed, err := limiter.Allow(ctx, "test-key-2", Limit{Rate: 1, Burst: 1})
 		require.NoError(t, err)
-		assert.True(t, allowed, "第一次请求应该被允许")
+		require.True(t, allowed, "第一次请求应该被允许")
 
 		// 立即第二次请求
 		allowed, err = limiter.Allow(ctx, "test-key-2", Limit{Rate: 1, Burst: 1})
 		require.NoError(t, err)
-		assert.False(t, allowed, "第二次请求应该被限流拒绝")
+		require.False(t, allowed, "第二次请求应该被限流拒绝")
 	})
 
 	t.Run("不同 key 独立限流", func(t *testing.T) {
@@ -83,7 +82,7 @@ func TestStandaloneLimiter_Allow_Basic(t *testing.T) {
 			key := "independent-key-" + string(rune('a'+i))
 			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 1})
 			require.NoError(t, err)
-			assert.True(t, allowed, "不同 key 的第一次请求都应该被允许")
+			require.True(t, allowed, "不同 key 的第一次请求都应该被允许")
 		}
 	})
 }
@@ -96,19 +95,19 @@ func TestStandaloneLimiter_AllowN(t *testing.T) {
 	t.Run("AllowN 请求多个令牌", func(t *testing.T) {
 		allowed, err := limiter.AllowN(ctx, "allown-test", Limit{Rate: 10, Burst: 10}, 5)
 		require.NoError(t, err)
-		assert.True(t, allowed, "请求 5 个令牌应该成功")
+		require.True(t, allowed, "请求 5 个令牌应该成功")
 	})
 
 	t.Run("AllowN 超过 Burst 应该被拒绝", func(t *testing.T) {
 		// 第一次消耗 5 个令牌
 		allowed, err := limiter.AllowN(ctx, "allown-test-2", Limit{Rate: 10, Burst: 10}, 5)
 		require.NoError(t, err)
-		assert.True(t, allowed)
+		require.True(t, allowed)
 
 		// 第二次请求 10 个令牌（总共需要 15 个，超过 burst=10）
 		allowed, err = limiter.AllowN(ctx, "allown-test-2", Limit{Rate: 10, Burst: 10}, 10)
 		require.NoError(t, err)
-		assert.False(t, allowed, "超过 Burst 的请求应该被拒绝")
+		require.False(t, allowed, "超过 Burst 的请求应该被拒绝")
 	})
 
 	t.Run("AllowN 请求 1 个令牌等同于 Allow", func(t *testing.T) {
@@ -118,7 +117,7 @@ func TestStandaloneLimiter_AllowN(t *testing.T) {
 		allowedN, errN := limiter.AllowN(ctx, "allown-test-3", Limit{Rate: 5, Burst: 5}, 1)
 		require.NoError(t, errN)
 
-		assert.Equal(t, allowed1, allowedN, "Allow 和 AllowN(..., 1) 应该有相同结果")
+		require.Equal(t, allowed1, allowedN, "Allow 和 AllowN(..., 1) 应该有相同结果")
 	})
 }
 
@@ -147,8 +146,8 @@ func TestStandaloneLimiter_Wait(t *testing.T) {
 
 		require.NoError(t, err)
 		// Wait 应该等待约 1 秒 (1 token / 1 rate = 1s)
-		assert.Greater(t, elapsed, 800*time.Millisecond, "Wait 应该阻塞一段时间")
-		assert.Less(t, elapsed, 1500*time.Millisecond, "Wait 不应该阻塞太久")
+		require.Greater(t, elapsed, 800*time.Millisecond, "Wait 应该阻塞一段时间")
+		require.Less(t, elapsed, 1500*time.Millisecond, "Wait 不应该阻塞太久")
 	})
 
 	t.Run("Wait 多次应该累积等待时间", func(t *testing.T) {
@@ -163,7 +162,7 @@ func TestStandaloneLimiter_Wait(t *testing.T) {
 		elapsed := time.Since(start)
 
 		// 应该等待约 100ms
-		assert.Greater(t, elapsed, 80*time.Millisecond)
+		require.Greater(t, elapsed, 80*time.Millisecond)
 	})
 
 	t.Run("Wait 支持取消", func(t *testing.T) {
@@ -177,8 +176,42 @@ func TestStandaloneLimiter_Wait(t *testing.T) {
 		defer cancel()
 
 		err := limiter.Wait(cancelCtx, "wait-test-3", Limit{Rate: 0.01, Burst: 1})
-		assert.Error(t, err, "超时 context 应该导致 Wait 返回错误")
+		require.Error(t, err, "超时 context 应该导致 Wait 返回错误")
 	})
+}
+
+func TestStandaloneLimiter_CloseIsTerminal(t *testing.T) {
+	limiter := newStandaloneLimiter(t)
+	require.NoError(t, limiter.Close())
+
+	allowed, err := limiter.Allow(context.Background(), "closed", Limit{Rate: 1, Burst: 1})
+	require.False(t, allowed)
+	require.ErrorIs(t, err, ErrLimiterClosed)
+	require.ErrorIs(t, limiter.Wait(context.Background(), "closed", Limit{Rate: 1, Burst: 1}), ErrLimiterClosed)
+}
+
+func TestStandaloneLimiter_WaitDoesNotBlockConcurrentAllow(t *testing.T) {
+	limiter := newStandaloneLimiter(t)
+	defer limiter.Close()
+	ctx := context.Background()
+	limit := Limit{Rate: 10, Burst: 1}
+	_, _ = limiter.Allow(ctx, "same-key", limit)
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- limiter.Wait(ctx, "same-key", limit) }()
+	time.Sleep(10 * time.Millisecond)
+
+	allowDone := make(chan struct{})
+	go func() {
+		_, _ = limiter.Allow(ctx, "same-key", limit)
+		close(allowDone)
+	}()
+	select {
+	case <-allowDone:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("Allow was serialized behind Wait")
+	}
+	require.NoError(t, <-waitDone)
 }
 
 // ============================================================
@@ -193,52 +226,52 @@ func TestStandaloneLimiter_EdgeCases(t *testing.T) {
 	t.Run("空 key 应该返回错误", func(t *testing.T) {
 		allowed, err := limiter.Allow(ctx, "", Limit{Rate: 10, Burst: 10})
 		require.Error(t, err)
-		assert.False(t, allowed)
-		assert.ErrorIs(t, err, ErrKeyEmpty)
+		require.False(t, allowed)
+		require.ErrorIs(t, err, ErrKeyEmpty)
 	})
 
 	t.Run("负数 Rate 应该返回错误", func(t *testing.T) {
 		allowed, err := limiter.Allow(ctx, "test-key", Limit{Rate: -1, Burst: 10})
 		require.Error(t, err)
-		assert.False(t, allowed)
-		assert.ErrorIs(t, err, ErrInvalidLimit)
+		require.False(t, allowed)
+		require.ErrorIs(t, err, ErrInvalidLimit)
 	})
 
 	t.Run("零 Burst 应该返回错误", func(t *testing.T) {
 		allowed, err := limiter.Allow(ctx, "test-key", Limit{Rate: 10, Burst: 0})
 		require.Error(t, err)
-		assert.False(t, allowed)
-		assert.ErrorIs(t, err, ErrInvalidLimit)
+		require.False(t, allowed)
+		require.ErrorIs(t, err, ErrInvalidLimit)
 	})
 
 	t.Run("负数 Burst 应该返回错误", func(t *testing.T) {
 		allowed, err := limiter.Allow(ctx, "test-key", Limit{Rate: 10, Burst: -1})
 		require.Error(t, err)
-		assert.False(t, allowed)
-		assert.ErrorIs(t, err, ErrInvalidLimit)
+		require.False(t, allowed)
+		require.ErrorIs(t, err, ErrInvalidLimit)
 	})
 
 	t.Run("浮点数 Rate 应该正常工作", func(t *testing.T) {
 		// Rate=0.1 表示每 10 秒生成 1 个令牌
 		allowed, err := limiter.Allow(ctx, "float-rate-test", Limit{Rate: 0.1, Burst: 1})
 		require.NoError(t, err)
-		assert.True(t, allowed)
+		require.True(t, allowed)
 
 		// 立即再次请求应该被拒绝
 		allowed, err = limiter.Allow(ctx, "float-rate-test", Limit{Rate: 0.1, Burst: 1})
 		require.NoError(t, err)
-		assert.False(t, allowed)
+		require.False(t, allowed)
 	})
 
 	t.Run("AllowN n<=0 应该返回错误", func(t *testing.T) {
 		allowed, err := limiter.AllowN(ctx, "test-key", Limit{Rate: 10, Burst: 10}, 0)
 		require.Error(t, err)
-		assert.False(t, allowed)
-		assert.ErrorIs(t, err, ErrInvalidLimit)
+		require.False(t, allowed)
+		require.ErrorIs(t, err, ErrInvalidLimit)
 
 		allowed, err = limiter.AllowN(ctx, "test-key", Limit{Rate: 10, Burst: 10}, -1)
 		require.Error(t, err)
-		assert.False(t, allowed)
+		require.False(t, allowed)
 	})
 }
 
@@ -282,9 +315,9 @@ func TestStandaloneLimiter_Concurrency(t *testing.T) {
 		wg.Wait()
 
 		totalRequests := int64(goroutines * requestsPerGoroutine)
-		assert.Equal(t, totalRequests, allowedCount+deniedCount, "总请求数应该匹配")
+		require.Equal(t, totalRequests, allowedCount+deniedCount, "总请求数应该匹配")
 		// 限流器应该工作正常，不应该所有请求都被允许
-		assert.Less(t, allowedCount, totalRequests, "应该有部分请求被限流")
+		require.Less(t, allowedCount, totalRequests, "应该有部分请求被限流")
 	})
 
 	t.Run("并发访问不同 key", func(t *testing.T) {
@@ -374,7 +407,7 @@ func TestStandaloneLimiter_Cleanup(t *testing.T) {
 		for _, key := range keys {
 			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 1})
 			require.NoError(t, err)
-			assert.True(t, allowed, "清理后重新创建的限流器应该允许请求")
+			require.True(t, allowed, "清理后重新创建的限流器应该允许请求")
 		}
 	})
 
@@ -421,6 +454,32 @@ func TestStandaloneLimiter_Cleanup(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 		// 如果没有 panic，测试通过
 	})
+
+	t.Run("并发重复 Close", func(t *testing.T) {
+		logger, _ := clog.New(&clog.Config{Level: "error"})
+		limiter, err := newStandalone(&StandaloneConfig{
+			CleanupInterval: 10 * time.Millisecond,
+			IdleTimeout:     time.Minute,
+		}, logger, nil)
+		require.NoError(t, err)
+
+		const callers = 64
+		var wg sync.WaitGroup
+		errs := make(chan error, callers)
+		wg.Add(callers)
+		for range callers {
+			go func() {
+				defer wg.Done()
+				errs <- limiter.Close()
+			}()
+		}
+		wg.Wait()
+		close(errs)
+
+		for err := range errs {
+			require.NoError(t, err)
+		}
+	})
 }
 
 // ============================================================
@@ -438,12 +497,12 @@ func TestStandaloneLimiter_DifferentLimits(t *testing.T) {
 		// 使用限流规则 A
 		allowed1, err := limiter.Allow(ctx, key, Limit{Rate: 10, Burst: 10})
 		require.NoError(t, err)
-		assert.True(t, allowed1)
+		require.True(t, allowed1)
 
 		// 使用不同的限流规则 B（应该创建独立的 limiter）
 		allowed2, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 1})
 		require.NoError(t, err)
-		assert.True(t, allowed2, "不同限流规则应该独立限流")
+		require.True(t, allowed2, "不同限流规则应该独立限流")
 
 		// 再次使用规则 A，应该被限流（因为 burst 已消耗）
 		allowed3, err := limiter.Allow(ctx, key, Limit{Rate: 10, Burst: 10})
@@ -469,12 +528,12 @@ func TestStandaloneLimiter_Precision(t *testing.T) {
 		// 消耗所有 burst
 		allowed, err := limiter.AllowN(ctx, key, Limit{Rate: 10, Burst: 10}, 10)
 		require.NoError(t, err)
-		assert.True(t, allowed)
+		require.True(t, allowed)
 
 		// 立即请求应该被拒绝
 		allowed, err = limiter.Allow(ctx, key, Limit{Rate: 10, Burst: 10})
 		require.NoError(t, err)
-		assert.False(t, allowed)
+		require.False(t, allowed)
 
 		// 等待 110ms（约补充 1 个令牌）
 		time.Sleep(110 * time.Millisecond)
@@ -482,7 +541,7 @@ func TestStandaloneLimiter_Precision(t *testing.T) {
 		// 现在应该允许 1 个请求
 		allowed, err = limiter.Allow(ctx, key, Limit{Rate: 10, Burst: 10})
 		require.NoError(t, err)
-		assert.True(t, allowed, "110ms 后应该补充了 1 个令牌")
+		require.True(t, allowed, "110ms 后应该补充了 1 个令牌")
 	})
 
 	t.Run("突发流量应该使用 Burst", func(t *testing.T) {
@@ -492,13 +551,13 @@ func TestStandaloneLimiter_Precision(t *testing.T) {
 		for i := range 5 {
 			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 5})
 			require.NoError(t, err)
-			assert.True(t, allowed, "Burst 应该允许前 %d 个请求", i+1)
+			require.True(t, allowed, "Burst 应该允许前 %d 个请求", i+1)
 		}
 
 		// 第 6 个请求应该被拒绝
 		allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 5})
 		require.NoError(t, err)
-		assert.False(t, allowed, "超过 Burst 的请求应该被拒绝")
+		require.False(t, allowed, "超过 Burst 的请求应该被拒绝")
 	})
 }
 
@@ -511,8 +570,8 @@ func TestStandaloneConfig_SetDefaults(t *testing.T) {
 		cfg := &StandaloneConfig{}
 		cfg.setDefaults()
 
-		assert.Equal(t, 1*time.Minute, cfg.CleanupInterval)
-		assert.Equal(t, 5*time.Minute, cfg.IdleTimeout)
+		require.Equal(t, 1*time.Minute, cfg.CleanupInterval)
+		require.Equal(t, 5*time.Minute, cfg.IdleTimeout)
 	})
 
 	t.Run("非零值不应该被覆盖", func(t *testing.T) {
@@ -522,7 +581,7 @@ func TestStandaloneConfig_SetDefaults(t *testing.T) {
 		}
 		cfg.setDefaults()
 
-		assert.Equal(t, 5*time.Second, cfg.CleanupInterval)
-		assert.Equal(t, 30*time.Second, cfg.IdleTimeout)
+		require.Equal(t, 5*time.Second, cfg.CleanupInterval)
+		require.Equal(t, 30*time.Second, cfg.IdleTimeout)
 	})
 }

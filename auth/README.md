@@ -129,6 +129,7 @@ type Claims struct {
 - `TokenType` 由组件内部写入，业务方通常不需要手动设置。
 - `Username`、`Roles`、`Extra` 用于承载业务身份信息。
 - `GenerateTokenPair` 会复制输入 claims，不会修改原对象。
+- 机器身份使用标准 `Subject`、`Roles` 与带业务命名空间的 `Extra` 字段表达；组件不建立独立机器身份目录，也不承担 OAuth2 client credentials 流程。
 
 ### TokenPair
 
@@ -159,18 +160,15 @@ type TokenPair struct {
 | `Audience` | 空 | 可选受众约束 |
 | `AccessTokenTTL` | `15m` | access token 有效期 |
 | `RefreshTokenTTL` | `7d` | refresh token 有效期 |
-| `TokenLookup` | 空 | access token 提取方式，留空使用默认多源查找 |
+| `TokenLookup` | `header:Authorization` | access token 提取方式；可显式改为单一 query 或 cookie 来源 |
 | `TokenHeadName` | `Bearer` | Authorization header 前缀 |
 
 ### Access Token 提取方式
 
 `GinMiddleware()` 内部只负责提取和校验 **access token**。
 
-当 `TokenLookup` 留空时，提取顺序为：
-
-1. `Authorization: Bearer <token>`
-2. `?token=<token>`
-3. `jwt=<token>` cookie
+当 `TokenLookup` 留空时，只读取 `Authorization: Bearer <token>`。默认不从
+query 或 cookie 读取 token，避免 token 意外进入 URL、日志或浏览器 cookie 发送路径。
 
 如果希望只从固定来源提取，可配置：
 

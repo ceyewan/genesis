@@ -76,7 +76,7 @@ type Distributed interface {
     ZRangeByScore(ctx context.Context, key string, min, max float64, destSlice any) error
     MGet(ctx context.Context, keys []string, destSlice any) error
     MSet(ctx context.Context, items map[string]any, ttl time.Duration) error
-    RawClient() any
+    RawClient() *redis.Client
 }
 ```
 

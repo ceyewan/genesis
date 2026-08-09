@@ -68,9 +68,11 @@ if code := xerrors.GetCode(err); code == "USER_NOT_FOUND" {
 ```go
 cfg := xerrors.Must(config.Load("config.yaml"))
 logger := xerrors.Must(clog.New(&cfg.Log))
+port := xerrors.MustOK(loadBootstrapPort())
 ```
 
 运行时业务逻辑不应该依赖 `Must`，否则会把普通错误处理升级成进程级 panic。
+`MustOK` 更适合消费已经封装成 helper 的 `(T, bool)` 返回值；普通运行时分支里直接显式处理 `ok` 往往更清晰。
 
 ### 4. 顺序错误收集与合并
 
@@ -86,9 +88,9 @@ logger := xerrors.Must(clog.New(&cfg.Log))
 
 - 业务代码里优先使用 `Wrap` / `Wrapf` 追加上下文，而不是重新丢失错误链。
 - Sentinel error 仍然使用 `xerrors.New(...)` 定义，再通过 `errors.Is` / `xerrors.Is` 判断。
-- 只有在确实需要协议映射或稳定机器码时，才使用 `WithCode`。
+- 只有在确实需要协议映射或稳定机器码时，才使用 `WithCode`；空字符串 code 会退化为 no-op。
 - `Collector` 适合“顺序校验多个字段，返回第一个错误”的场景；如果需要保留所有错误，应直接使用 `Combine` 或在上层定义更明确的数据结构。
-- `Must` 仅用于初始化和测试，不应进入运行时业务分支。
+- `Must` / `MustOK` 仅用于初始化和测试，不应进入运行时业务分支。
 
 ## 能力边界
 

@@ -11,7 +11,7 @@ Genesis `mq` 是业务层（L2）的消息队列组件。它面向的核心问�
 - `Ack()` 是稳定统一能力；`Nak()` 在 Redis 下返回 `ErrNotSupported`，不伪装成成功。
 - 默认是手动确认（ManualAck）；AutoAck 模式统一处理跨驱动的 `ErrNotSupported`。
 - 中间件层（Retry / Logging / Recover / DeadLetter）是横切逻辑的主承载点，独立于驱动实现。
-- `Close()` 是幂等操作，关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`。
+- `Drain(ctx)` 停止新投递并等待已交付 Handler；`Close()` 是有界的立即关闭兜底。两者都可并发重复调用，关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`。
 
 ---
 
@@ -92,6 +92,9 @@ JetStream 和 Redis Stream 各有独立的配置块，只在对应驱动下生�
 
 JetStream 的 `Nak` 会触发消息立即重新投递给该 consumer。Redis Stream 没有这个机制——消息不 Ack 的唯一后果是它继续留在 Pending 列表，当 `PendingIdle` 超时后才会被 `XAUTOCLAIM` 捡起来重新处理。两者的恢复时间窗口差异显著：JetStream 是毫秒级，Redis 依赖 `PendingIdle` 配置，通常是秒到分钟级。
 
+`NakWithDelay(d)` 在 JetStream 中请求延迟重投，负 delay 会返回配置错误；Redis Stream
+不支持服务端延迟 Nak，明确返回 `ErrNotSupported`，不会伪装成功。
+
 当前设计选择：Redis 的 `Nak()` 返回 `ErrNotSupported`，而不是返回 nil 制造"调用成功"的假象。这遵循"显式失败好过静默降级"的原则：调用方可以通过 `errors.Is(err, ErrNotSupported)` 知道这个操作没有执行，并选择是否做其他处理。AutoAck 模式下，`wrapHandler` 静默忽略 `ErrNotSupported`，因为 Redis 的恢复机制本来就不依赖显式 Nak。
 
 ### 4.3 QueueGroup 与 Durable 的语义差异
@@ -152,9 +155,13 @@ NATS Core 是 fire-and-forget 语义：没有持久化，没有 Ack，消费者�
 
 JetStream 当前使用 `consumer.Consume()`——push 模式，服务端主动推送消息，不需要客户端主动 fetch。`BatchSize` 的语义是"单次 fetch 多少条"，在 push 模式下没有对应的调优点。要让 BatchSize 生效需要切换为 `consumer.Fetch(n)` 主动拉取模式，代价是消费循环需要由组件自己驱动，实现复杂度上升。当前选择 push 模式，BatchSize 在注释中明确标注对 JetStream 无效，不做静默假装生效。
 
-### 6.3 为什么 Close 是幂等的
+### 6.3 Drain 与 Close
 
-`mq.Close()` 设计为幂等：第二次调用返回 nil，不重复关闭底层 transport。原因是：调用方在 defer 链路中可能多次触发 Close（服务优雅退出、测试清理等），幂等性让调用方不需要做额外的"是否已关闭"检查。关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`，调用方通过 `errors.Is` 检测。
+`mq.Drain(ctx)` 先停止新消息投递，再等待已经进入 Handler 的任务完成；ctx 到期后才强制取消。`Close()` 使用内部五秒上限执行立即关闭，适合作为 defer 兜底。两者都可并发重复调用，不重复关闭底层 transport。关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`，调用方通过 `errors.Is` 检测。
+
+新建 consumer 默认从保留历史开始。`FromBeginning()` 显式表达相同行为，`FromLatest()`
+跳过订阅前已有消息，`FromID(id)` 从后端位置开始。已存在 durable/group 的服务端进度优先于
+初始位置选项；同名 durable 或 queue group 会按 topic 隔离，避免多 topic 冲突。
 
 ### 6.4 为什么中间件不放在 Transport 里
 
@@ -180,7 +187,7 @@ JetStream 当前使用 `consumer.Consume()`——push 模式，服务端主动�
 handler = mq.Chain(
     mq.WithRecover(logger),                          // 最外层：捕获 panic，防止消费者崩溃
     mq.WithLogging(logger),                          // 记录每条消息的处理结果和耗时
-    mq.WithRetry(mq.DefaultRetryConfig, logger),     // 内层：在应用层指数退避重试
+    mq.WithRetry(mq.DefaultRetryConfig(), logger),   // 内层：在应用层指数退避重试
 )(businessHandler)
 ```
 

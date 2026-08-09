@@ -17,4 +17,7 @@ var (
 
 	// ErrRemoteCacheRequired 表示多级缓存缺少远程缓存实例。
 	ErrRemoteCacheRequired = xerrors.New("cache: remote cache is required")
+
+	// ErrInvalidTTL 表示缓存 TTL 为负值。
+	ErrInvalidTTL = xerrors.New("cache: ttl must not be negative")
 )

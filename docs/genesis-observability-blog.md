@@ -56,31 +56,45 @@ Genesis 推荐把可观测性拆成三个明确角色，而不是堆成一个大
 推荐初始化模式如下：
 
 ```go
-func InitObservability(serviceName string) (func(context.Context) error, error) {
-    shutdownTrace, err := trace.Init(&trace.Config{
-        ServiceName: serviceName,
-        Endpoint:    "localhost:4317",
-        Sampler:     1.0,
-        Insecure:    true,
-    })
-    if err != nil { return nil, err }
+// 步骤一：初始化 tracing（最先执行，安装全局 TracerProvider）
+shutdownTrace, err := trace.Init(&trace.Config{
+    ServiceName: serviceName,
+    Endpoint:    "localhost:4317",
+    Sampler:     1.0,
+    Insecure:    true,
+})
+if err != nil { return nil, err }
 
-    meter, err := metrics.New(metrics.NewDevDefaultConfig(serviceName))
-    if err != nil { return nil, err }
+// 步骤二：初始化 metrics
+meter, err := metrics.New(metrics.NewDevDefaultConfig(serviceName))
+if err != nil { return nil, err }
 
-    logger, _ := clog.New(
-        &clog.Config{Level: "info", Format: "json"},
-        clog.WithTraceContext(),
-    )
-
-    return func(ctx context.Context) error {
-        _ = meter.Shutdown(ctx)
-        return shutdownTrace(ctx)
-    }, nil
-}
+// 步骤三：创建 logger（trace 已就位，WithTraceContext 才能生效）
+logger, err := clog.New(
+    &clog.Config{Level: "info", Format: "json"},
+    clog.WithTraceContext(),
+)
+if err != nil { return nil, err }
 ```
 
-这里的重点不是把三段代码写在一起，而是把它们纳入统一生命周期。应用退出时，`trace` 和 `metrics` 的 shutdown 都应该被显式调用；logger 则按各自组件约定释放资源。
+**步骤四**是注册框架中间件，必须在业务路由前完成：
+
+```go
+// HTTP
+r := gin.New()
+r.Use(trace.GinMiddleware(serviceName))          // 为每个请求创建 Span，写入 ctx
+r.Use(metrics.GinHTTPMiddleware(httpMetrics))    // 记录 RED 指标
+
+// gRPC
+s := grpc.NewServer(
+    grpc.StatsHandler(trace.GRPCServerStatsHandler()),
+    grpc.UnaryInterceptor(grpcMetrics.UnaryServerInterceptor()),
+)
+```
+
+> **静默失效陷阱**：`clog.WithTraceContext()` 从 context 里提取 TraceID，但只有中间件注册之后请求的 context 里才有活跃 Span。如果漏掉步骤四，日志里的 `trace_id` 字段会一直为空，不报任何错误。初始化顺序错误（如 logger 在 trace.Init 之前创建）也会导致同样的静默失效。
+
+应用退出时，`trace` 和 `metrics` 的 shutdown 都应该被显式调用；logger 则按各自组件约定释放资源。
 
 ---
 

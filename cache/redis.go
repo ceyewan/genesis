@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strconv"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/ceyewan/genesis/cache/serializer"
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -21,35 +21,40 @@ type redisCache struct {
 	prefix     string
 	defaultTTL time.Duration
 	logger     clog.Logger
-	meter      metrics.Meter
 }
 
 // newRedis 创建 Redis 缓存实例
-func newRedis(conn connector.RedisConnector, cfg *DistributedConfig, logger clog.Logger, meter metrics.Meter) (Distributed, error) {
+func newRedis(conn connector.RedisConnector, cfg *DistributedConfig, injected serializer.Serializer, logger clog.Logger) (Distributed, error) {
 	if conn == nil {
 		return nil, ErrRedisConnectorRequired
 	}
 	if cfg == nil {
 		return nil, xerrors.New("cache: distributed config is nil")
 	}
-
-	serializerType := cfg.Serializer
-	if serializerType == "" {
-		serializerType = "json"
+	client := conn.GetClient()
+	if client == nil {
+		return nil, xerrors.Wrap(connector.ErrClientNil, "cache: redis connector is not connected")
 	}
 
-	s, err := serializer.New(serializerType)
-	if err != nil {
-		return nil, err
+	s := injected
+	if s == nil {
+		serializerType := cfg.Serializer
+		if serializerType == "" {
+			serializerType = "json"
+		}
+		var err error
+		s, err = serializer.New(serializerType)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &redisCache{
-		client:     conn.GetClient(),
+		client:     client,
 		serializer: s,
 		prefix:     cfg.KeyPrefix,
 		defaultTTL: cfg.DefaultTTL,
 		logger:     logger,
-		meter:      meter,
 	}, nil
 }
 
@@ -68,11 +73,14 @@ func (c *redisCache) unmarshal(data []byte, dest any) error {
 // --- 键值（Key-Value） ---
 
 func (c *redisCache) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
+	if ttl < 0 {
+		return ErrInvalidTTL
+	}
 	data, err := c.marshal(value)
 	if err != nil {
 		return err
 	}
-	if ttl <= 0 {
+	if ttl == 0 {
 		ttl = c.defaultTTL
 	}
 	if err := c.client.Set(ctx, c.getKey(key), data, ttl).Err(); err != nil {
@@ -107,7 +115,10 @@ func (c *redisCache) Has(ctx context.Context, key string) (bool, error) {
 }
 
 func (c *redisCache) Expire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
-	if ttl <= 0 {
+	if ttl < 0 {
+		return false, ErrInvalidTTL
+	}
+	if ttl == 0 {
 		ttl = c.defaultTTL
 	}
 	ok, err := c.client.Expire(ctx, c.getKey(key), ttl).Result()
@@ -292,11 +303,14 @@ func (c *redisCache) MGet(ctx context.Context, keys []string, destSlice any) err
 }
 
 func (c *redisCache) MSet(ctx context.Context, items map[string]any, ttl time.Duration) error {
+	if ttl < 0 {
+		return ErrInvalidTTL
+	}
 	if len(items) == 0 {
 		return nil
 	}
 
-	if ttl <= 0 {
+	if ttl == 0 {
 		ttl = c.defaultTTL
 	}
 
@@ -316,7 +330,7 @@ func (c *redisCache) MSet(ctx context.Context, items map[string]any, ttl time.Du
 // --- 高级操作（Advanced） ---
 
 // RawClient 返回底层 Redis 客户端，用于执行 Pipeline、Lua 脚本等高级操作。
-func (c *redisCache) RawClient() any {
+func (c *redisCache) RawClient() *redis.Client {
 	return c.client
 }
 
@@ -331,7 +345,7 @@ func normalizeRedisError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return ErrMiss
 	}
 	return err

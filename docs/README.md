@@ -1,9 +1,15 @@
 # Genesis 文档
 
+- [v1 API 与生命周期决策](./v1-api-decisions.md)
+- [v0.5.0 到 v1.0.0 迁移说明](./v1-migration.md)
+- [v1 导出 API 清单](./v1-api-inventory.md)
+- [v1.0.0-rc.1 验收证据](./v1-rc1-evidence.md)
+
 本文档目录包含 Genesis 项目的设计文档和规范。
 
 ## 文档列表
 
+- [v0.6.0 开发计划](./v0.6.0-plan.md) - v0.6.0 体验优化任务清单（P0–P3 优先级）
 - [架构设计](./genesis-design.md) - Genesis 的总体架构设计和核心理念
 - [组件文档审计规范](./component-doc-audit-guide.md) - `go doc`、README 与组件 blog 的统一审计标准
 - [Auth 设计与 JWT 原理](./genesis-auth-blog.md) - Auth 组件设计、JWT 底层机制与认证扩展方案

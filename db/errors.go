@@ -14,4 +14,10 @@ var (
 
 	// ErrSQLiteConnectorRequired SQLite 连接器未提供
 	ErrSQLiteConnectorRequired = xerrors.New("db: sqlite connector is required")
+
+	// ErrConnectorNotReady 表示连接器尚未 Connect 或已被关闭。
+	ErrConnectorNotReady = xerrors.New("db: connector is not ready")
+
+	// ErrNilTransaction 表示 Transaction 收到了 nil 回调。
+	ErrNilTransaction = xerrors.New("db: transaction function is nil")
 )

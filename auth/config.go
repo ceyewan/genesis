@@ -21,10 +21,9 @@ type Config struct {
 	AccessTokenTTL  time.Duration `mapstructure:"access_token_ttl"`  // Access Token TTL，默认 15m
 	RefreshTokenTTL time.Duration `mapstructure:"refresh_token_ttl"` // Refresh Token TTL，默认 7d
 
-	// Token 提取配置（可选，覆盖默认查找顺序）
-	// 默认顺序: header:Authorization -> query:token -> cookie:jwt
+	// Token 提取配置（可选，覆盖安全默认值 header:Authorization）
 	// 可指定单一来源如 "header:Authorization" 或 "query:token"
-	TokenLookup   string `mapstructure:"token_lookup"`    // 提取方式，留空使用默认多源查找
+	TokenLookup   string `mapstructure:"token_lookup"`    // 提取方式，默认 header:Authorization
 	TokenHeadName string `mapstructure:"token_head_name"` // Header 前缀，默认 Bearer
 }
 
@@ -42,7 +41,9 @@ func (c *Config) setDefaults() {
 	if c.TokenHeadName == "" {
 		c.TokenHeadName = "Bearer"
 	}
-	// TokenLookup 留空时使用默认多源查找，不设置默认值
+	if c.TokenLookup == "" {
+		c.TokenLookup = "header:Authorization"
+	}
 }
 
 // validate 验证配置

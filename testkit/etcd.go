@@ -16,6 +16,15 @@ import (
 // 生命周期由 t.Cleanup 管理。
 func NewEtcdContainerConfig(t *testing.T) *connector.EtcdConfig {
 	t.Helper()
+	_, cfg := NewEtcdContainer(t)
+	return cfg
+}
+
+// NewEtcdContainer 返回容器和连接配置，供重连与故障恢复测试控制容器。
+// 容器最终清理由 t.Cleanup 负责。
+func NewEtcdContainer(t *testing.T) (*etcdcontainer.EtcdContainer, *connector.EtcdConfig) {
+	t.Helper()
+	RequireDocker(t)
 
 	ctx := context.Background()
 
@@ -33,7 +42,7 @@ func NewEtcdContainerConfig(t *testing.T) *connector.EtcdConfig {
 		_ = container.Terminate(ctx)
 	})
 
-	return &connector.EtcdConfig{
+	return container, &connector.EtcdConfig{
 		Name:        "testcontainer-etcd",
 		Endpoints:   []string{host + ":" + mappedPort.Port()},
 		DialTimeout: 5 * time.Second,

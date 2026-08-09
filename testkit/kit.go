@@ -2,6 +2,8 @@ package testkit
 
 import (
 	"context"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +12,33 @@ import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
 )
+
+const dockerProbeTimeout = 10 * time.Second
+
+// RequireDocker verifies Docker before entering testcontainers, whose provider
+// discovery may panic when the daemon socket is inaccessible. Integration tests
+// deliberately fail (rather than silently skip) because a release gate must
+// prove that its containers really ran.
+func RequireDocker(t *testing.T) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), dockerProbeTimeout)
+	defer cancel()
+
+	output, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{.ServerVersion}}").CombinedOutput()
+	if err == nil {
+		return
+	}
+
+	detail := strings.TrimSpace(string(output))
+	if detail == "" {
+		detail = err.Error()
+	}
+	if ctx.Err() != nil {
+		detail = "probe timed out after " + dockerProbeTimeout.String() + ": " + detail
+	}
+	t.Fatalf("Docker is required for this integration test but is unavailable: %s", detail)
+}
 
 // Kit 包含通用的测试依赖。
 type Kit struct {
@@ -47,11 +76,7 @@ func NewLogger() clog.Logger {
 // NewMeter 返回一个用于测试的 meter。
 // 使用 Discard 模式，不实际输出指标。
 func NewMeter() metrics.Meter {
-	meter, err := metrics.New(metrics.NewDevDefaultConfig("test"))
-	if err != nil {
-		return metrics.Discard()
-	}
-	return meter
+	return metrics.Discard()
 }
 
 // NewContext 返回一个带有超时的测试上下文。

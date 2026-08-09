@@ -68,6 +68,10 @@ type subscribeOptions struct {
 	// MaxInflight 最大在途消息数
 	// JetStream: MaxAckPending
 	MaxInflight int
+
+	// StartID controls the initial retained-message position for a newly created
+	// consumer. "0" means beginning and "$" means latest.
+	StartID string
 }
 
 // defaultSubscribeOptions 返回默认订阅选项
@@ -75,6 +79,28 @@ func defaultSubscribeOptions() subscribeOptions {
 	return subscribeOptions{
 		AutoAck:   false, // 默认手动确认
 		BatchSize: 10,
+		StartID:   "0",
+	}
+}
+
+// FromBeginning consumes retained messages when a subscription or durable
+// consumer is created for the first time. This is the default.
+func FromBeginning() SubscribeOption {
+	return func(o *subscribeOptions) { o.StartID = "0" }
+}
+
+// FromLatest starts after messages that already exist at first subscription.
+func FromLatest() SubscribeOption {
+	return func(o *subscribeOptions) { o.StartID = "$" }
+}
+
+// FromID starts at a backend message ID. Redis accepts stream IDs; JetStream
+// accepts Genesis IDs such as "S-orders:42" and uses the numeric sequence.
+func FromID(id string) SubscribeOption {
+	return func(o *subscribeOptions) {
+		if id != "" {
+			o.StartID = id
+		}
 	}
 }
 
@@ -122,7 +148,8 @@ func WithAutoAck() SubscribeOption {
 // WithDurable 设置消费者实例名称
 //
 // 驱动映射（语义不同，请注意区分）：
-//   - NATS JetStream: 映射为 durable consumer 名称，是消费进度游标的身份标识；
+//   - NATS JetStream: 作为 durable consumer 的逻辑名称；实现会按 topic 添加稳定后缀，
+//     避免同一 stream 内多个 topic 共用名称时互相改写 FilterSubject。
 //     未设置 WithQueueGroup 时生效，设置后 WithQueueGroup 优先。
 //   - Redis Stream: 映射为 consumer name，是同一 group 内消费者实例的标识；
 //     需与 WithQueueGroup 配合使用，单独设置无持久化效果。

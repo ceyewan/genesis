@@ -2,6 +2,8 @@ package idgen
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -412,6 +414,38 @@ func TestSequencer_SetIfNotExists_Integration(t *testing.T) {
 	})
 }
 
+func TestSequencer_DoesNotWrap_Integration(t *testing.T) {
+	redis := testkit.NewRedisContainerConnector(t)
+	ctx := context.Background()
+	cfg := &SequencerConfig{
+		KeyPrefix: "test:no-wrap",
+		Step:      1,
+		MaxValue:  3,
+		TTL:       1500 * time.Millisecond,
+	}
+	seq, err := NewSequencer(cfg, WithRedisConnector(redis))
+	require.NoError(t, err)
+
+	// Constructor owns a copy: caller mutation cannot change the live contract.
+	cfg.MaxValue = 100
+	values, err := seq.NextBatch(ctx, "conversation", 3)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2, 3}, values)
+
+	_, err = seq.Next(ctx, "conversation")
+	require.ErrorIs(t, err, ErrSequenceExhausted)
+	_, err = seq.Next(ctx, "conversation")
+	require.ErrorIs(t, err, ErrSequenceExhausted)
+
+	stored, err := redis.GetClient().Get(ctx, "test:no-wrap:conversation").Int64()
+	require.NoError(t, err)
+	require.EqualValues(t, 3, stored)
+	pttl, err := redis.GetClient().PTTL(ctx, "test:no-wrap:conversation").Result()
+	require.NoError(t, err)
+	require.Positive(t, pttl)
+	require.LessOrEqual(t, pttl, 1500*time.Millisecond)
+}
+
 // ========================================
 // Allocator 集成测试（使用 testkit）
 // ========================================
@@ -425,7 +459,7 @@ func TestRedisAllocator_Integration(t *testing.T) {
 			Driver:    "redis",
 			KeyPrefix: "test:allocator",
 			MaxID:     100,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithRedisConnector(redis))
 		if err != nil {
 			t.Fatalf("Failed to create allocator: %v", err)
@@ -449,7 +483,7 @@ func TestRedisAllocator_Integration(t *testing.T) {
 			Driver:    "redis",
 			KeyPrefix: "test:unique",
 			MaxID:     50,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithRedisConnector(redis))
 		if err != nil {
 			t.Fatalf("Failed to create allocator: %v", err)
@@ -459,7 +493,7 @@ func TestRedisAllocator_Integration(t *testing.T) {
 			Driver:    "redis",
 			KeyPrefix: "test:unique",
 			MaxID:     50,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithRedisConnector(redis))
 		if err != nil {
 			t.Fatalf("Failed to create allocator: %v", err)
@@ -493,7 +527,7 @@ func TestRedisAllocator_Integration(t *testing.T) {
 				Driver:    "redis",
 				KeyPrefix: "test:exhaust",
 				MaxID:     maxID,
-				TTL:       30,
+				TTL:       30 * time.Second,
 			}, WithRedisConnector(redis))
 			if err != nil {
 				t.Fatalf("Failed to create allocator: %v", err)
@@ -519,7 +553,7 @@ func TestRedisAllocator_Integration(t *testing.T) {
 			Driver:    "redis",
 			KeyPrefix: "test:exhaust",
 			MaxID:     maxID,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithRedisConnector(redis))
 		if err != nil {
 			t.Fatalf("Failed to create allocator: %v", err)
@@ -538,7 +572,7 @@ func TestRedisAllocator_Integration(t *testing.T) {
 			Driver:    "redis",
 			KeyPrefix: "test:keepalive:pre",
 			MaxID:     10,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithRedisConnector(redis))
 		require.NoError(t, err)
 
@@ -552,7 +586,7 @@ func TestRedisAllocator_Integration(t *testing.T) {
 			Driver:    "redis",
 			KeyPrefix: "test:allocate:twice",
 			MaxID:     10,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithRedisConnector(redis))
 		require.NoError(t, err)
 		defer allocator.Stop()
@@ -570,7 +604,7 @@ func TestRedisAllocator_Integration(t *testing.T) {
 			Driver:    "redis",
 			KeyPrefix: "test:stop:idempotent",
 			MaxID:     10,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithRedisConnector(redis))
 		require.NoError(t, err)
 
@@ -583,13 +617,39 @@ func TestRedisAllocator_Integration(t *testing.T) {
 		})
 	})
 
+	t.Run("KeepAlive starts once and concurrent Stop waits", func(t *testing.T) {
+		ctx := t.Context()
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "redis",
+			KeyPrefix: "test:keepalive:once",
+			MaxID:     10,
+			TTL:       3 * time.Second,
+		}, WithRedisConnector(redis))
+		require.NoError(t, err)
+		_, err = allocator.Allocate(ctx)
+		require.NoError(t, err)
+		first := allocator.KeepAlive(ctx)
+		second := allocator.KeepAlive(ctx)
+		require.ErrorIs(t, <-second, ErrKeepAliveStarted)
+
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Go(func() {
+				allocator.Stop()
+			})
+		}
+		wg.Wait()
+		_, ok := <-first
+		require.False(t, ok)
+	})
+
 	t.Run("KeepAlive reports ownership loss", func(t *testing.T) {
 		ctx := context.Background()
 		allocator, err := NewAllocator(&AllocatorConfig{
 			Driver:    "redis",
 			KeyPrefix: "test:ownership:loss",
 			MaxID:     1,
-			TTL:       3,
+			TTL:       3 * time.Second,
 		}, WithRedisConnector(redis))
 		require.NoError(t, err)
 		defer allocator.Stop()
@@ -601,7 +661,7 @@ func TestRedisAllocator_Integration(t *testing.T) {
 		require.True(t, ok)
 
 		client := redis.GetClient()
-		require.NoError(t, client.Set(ctx, ra.redisKey, "other-instance", time.Duration(ra.cfg.TTL)*time.Second).Err())
+		require.NoError(t, client.Set(ctx, ra.redisKey, "other-instance", ra.cfg.TTL).Err())
 
 		errCh := allocator.KeepAlive(ctx)
 		require.Eventually(t, func() bool {
@@ -635,7 +695,7 @@ func TestEtcdAllocator_Integration(t *testing.T) {
 			Driver:    "etcd",
 			KeyPrefix: "test:allocator:etcd",
 			MaxID:     100,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithEtcdConnector(etcd))
 		require.NoError(t, err)
 		defer allocator.Stop()
@@ -652,7 +712,7 @@ func TestEtcdAllocator_Integration(t *testing.T) {
 			Driver:    "etcd",
 			KeyPrefix: "test:unique:etcd",
 			MaxID:     20,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithEtcdConnector(etcd))
 		require.NoError(t, err)
 		defer alloc1.Stop()
@@ -661,7 +721,7 @@ func TestEtcdAllocator_Integration(t *testing.T) {
 			Driver:    "etcd",
 			KeyPrefix: "test:unique:etcd",
 			MaxID:     20,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithEtcdConnector(etcd))
 		require.NoError(t, err)
 		defer alloc2.Stop()
@@ -679,7 +739,7 @@ func TestEtcdAllocator_Integration(t *testing.T) {
 			Driver:    "etcd",
 			KeyPrefix: "test:keepalive:pre:etcd",
 			MaxID:     10,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithEtcdConnector(etcd))
 		require.NoError(t, err)
 
@@ -693,7 +753,7 @@ func TestEtcdAllocator_Integration(t *testing.T) {
 			Driver:    "etcd",
 			KeyPrefix: "test:allocate:twice:etcd",
 			MaxID:     10,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithEtcdConnector(etcd))
 		require.NoError(t, err)
 		defer allocator.Stop()
@@ -711,7 +771,7 @@ func TestEtcdAllocator_Integration(t *testing.T) {
 			Driver:    "etcd",
 			KeyPrefix: "test:stop:idempotent:etcd",
 			MaxID:     10,
-			TTL:       30,
+			TTL:       30 * time.Second,
 		}, WithEtcdConnector(etcd))
 		require.NoError(t, err)
 
@@ -722,5 +782,37 @@ func TestEtcdAllocator_Integration(t *testing.T) {
 			allocator.Stop()
 			allocator.Stop()
 		})
+	})
+
+	t.Run("lease revoke is reported and Stop is concurrent", func(t *testing.T) {
+		ctx := context.Background()
+		allocator, err := NewAllocator(&AllocatorConfig{
+			Driver:    "etcd",
+			KeyPrefix: "test:lease:failure:etcd",
+			MaxID:     10,
+			TTL:       3 * time.Second,
+		}, WithEtcdConnector(etcd))
+		require.NoError(t, err)
+		_, err = allocator.Allocate(ctx)
+		require.NoError(t, err)
+		ea := allocator.(*etcdAllocator)
+		errCh := allocator.KeepAlive(ctx)
+		_, err = ea.client.Revoke(ctx, ea.leaseID)
+		require.NoError(t, err)
+
+		select {
+		case keepAliveErr := <-errCh:
+			require.True(t, errors.Is(keepAliveErr, ErrLeaseExpired), keepAliveErr)
+		case <-time.After(5 * time.Second):
+			t.Fatal("keep alive did not report revoked lease")
+		}
+
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Go(func() {
+				allocator.Stop()
+			})
+		}
+		wg.Wait()
 	})
 }

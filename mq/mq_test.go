@@ -3,6 +3,7 @@ package mq
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,8 +12,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
 )
+
+func TestNewRejectsUnconnectedConnectors(t *testing.T) {
+	t.Parallel()
+
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{Addr: "127.0.0.1:6379"})
+	require.NoError(t, err)
+	_, err = New(&Config{Driver: DriverRedisStream}, WithRedisConnector(redisConn))
+	require.ErrorIs(t, err, connector.ErrClientNil)
+
+	natsConn, err := connector.NewNATS(&connector.NATSConfig{URL: "nats://127.0.0.1:4222"})
+	require.NoError(t, err)
+	_, err = New(&Config{Driver: DriverNATSJetStream}, WithNATSConnector(natsConn))
+	require.ErrorIs(t, err, connector.ErrClientNil)
+}
 
 // ============================================================
 // Config 测试
@@ -30,6 +46,10 @@ func TestConfig(t *testing.T) {
 
 		require.Equal(t, "S-", cfg.JetStream.StreamPrefix)
 		require.Equal(t, 30*time.Second, cfg.JetStream.AckWait)
+		require.Equal(t, 5, cfg.JetStream.MaxDeliver)
+		require.Equal(t, StreamRetentionLimits, cfg.JetStream.Retention)
+		require.Equal(t, StreamStorageFile, cfg.JetStream.Storage)
+		require.Equal(t, 1, cfg.JetStream.Replicas)
 		require.Equal(t, 30*time.Second, cfg.RedisStream.PendingIdle)
 	})
 
@@ -67,6 +87,12 @@ func TestConfig(t *testing.T) {
 			cfg := &Config{Driver: Driver("unknown")}
 			err := cfg.validate()
 			require.Error(t, err)
+		})
+
+		t.Run("invalid JetStream limits", func(t *testing.T) {
+			cfg := &Config{Driver: DriverNATSJetStream, JetStream: &JetStreamConfig{MaxDeliver: -1}}
+			cfg.setDefaults()
+			require.ErrorIs(t, cfg.validate(), ErrInvalidConfig)
 		})
 	})
 }
@@ -139,6 +165,21 @@ func TestNew(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, mq)
 		_ = mq.Close()
+	})
+
+	t.Run("构造器复制配置后应用默认值", func(t *testing.T) {
+		jsCfg := &JetStreamConfig{AutoCreateStream: true}
+		cfg := &Config{Driver: DriverNATSJetStream, JetStream: jsCfg}
+		q, err := New(cfg, WithNATSConnector(&mockNATSConnector{}))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = q.Close() })
+
+		require.Empty(t, jsCfg.StreamPrefix)
+		require.Zero(t, jsCfg.AckWait)
+		require.Zero(t, jsCfg.MaxDeliver)
+		internal := q.(*mq).transport.(*natsJetStreamTransport).cfg
+		require.Equal(t, "S-", internal.StreamPrefix)
+		require.Equal(t, 5, internal.MaxDeliver)
 	})
 }
 
@@ -403,6 +444,33 @@ func TestMQ_Close(t *testing.T) {
 	})
 }
 
+func TestMQ_DrainConcurrent(t *testing.T) {
+	t.Parallel()
+
+	transport := &mockTransport{}
+	q := newMQ(transport, clog.Discard(), metrics.Discard())
+	_, err := q.Subscribe(context.Background(), "topic", func(Message) error { return nil })
+	require.NoError(t, err)
+
+	const callers = 32
+	var wg sync.WaitGroup
+	errs := make(chan error, callers)
+	wg.Add(callers)
+	for range callers {
+		go func() {
+			defer wg.Done()
+			errs <- q.Drain(context.Background())
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.True(t, transport.closeCalled)
+	require.ErrorIs(t, q.Publish(context.Background(), "topic", nil), ErrClosed)
+}
+
 // ============================================================
 // AutoAck 行为测试
 // ============================================================
@@ -459,6 +527,17 @@ func TestMQ_AutoAckBehavior(t *testing.T) {
 		err := wrapped(testMsg)
 		require.Error(t, err)
 	})
+}
+
+func TestSubscribeStartOptions(t *testing.T) {
+	opts := defaultSubscribeOptions()
+	require.Equal(t, "0", opts.StartID)
+	FromLatest()(&opts)
+	require.Equal(t, "$", opts.StartID)
+	FromID("123-0")(&opts)
+	require.Equal(t, "123-0", opts.StartID)
+	FromBeginning()(&opts)
+	require.Equal(t, "0", opts.StartID)
 }
 
 // ============================================================
@@ -546,7 +625,7 @@ func TestLabelConstants(t *testing.T) {
 // Mock 实现（用于测试）
 // ============================================================
 
-// mockTransport 是 Transport 的 mock 实现
+// mockTransport 是 transport 的 mock 实现
 type mockTransport struct {
 	publishCalled     bool
 	subscribeCalled   bool
@@ -594,6 +673,11 @@ func (m *mockSubscription) Unsubscribe() error {
 	return nil
 }
 
+func (m *mockSubscription) Drain(ctx context.Context) error {
+	m.unsubscribed = true
+	return nil
+}
+
 func (m *mockSubscription) Done() <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
@@ -628,6 +712,11 @@ func (m *mockMessage) Ack() error {
 }
 
 func (m *mockMessage) Nak() error {
+	m.nakCalled = true
+	return nil
+}
+
+func (m *mockMessage) NakWithDelay(delay time.Duration) error {
 	m.nakCalled = true
 	return nil
 }
@@ -704,11 +793,13 @@ func (m *mockMessageNakNotSupported) Nak() error {
 }
 
 // newMQ 创建一个用于测试的 MQ 实例
-func newMQ(transport Transport, logger clog.Logger, meter metrics.Meter) MQ {
+func newMQ(transport transport, logger clog.Logger, meter metrics.Meter) MQ {
 	return &mq{
-		transport: transport,
-		logger:    logger,
-		meter:     meter,
-		driver:    DriverNATSJetStream,
+		transport:     transport,
+		logger:        logger,
+		meter:         meter,
+		driver:        DriverNATSJetStream,
+		subscriptions: make(map[Subscription]struct{}),
+		lifecycleDone: make(chan struct{}),
 	}
 }

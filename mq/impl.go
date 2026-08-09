@@ -3,20 +3,29 @@ package mq
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // mq 是 MQ 接口的实现
 type mq struct {
-	transport Transport
+	transport transport
 	logger    clog.Logger
 	meter     metrics.Meter
 	driver    Driver
 	closed    atomic.Bool
+
+	mu            sync.Mutex
+	subscriptions map[Subscription]struct{}
+	cleanupWG     sync.WaitGroup
+	lifecycleOnce sync.Once
+	lifecycleDone chan struct{}
+	lifecycleErr  error
 }
 
 // Publish 发布消息
@@ -54,15 +63,95 @@ func (m *mq) Subscribe(ctx context.Context, topic string, handler Handler, opts 
 	}
 
 	wrappedHandler := m.wrapHandler(topic, handler, o)
-	return m.transport.Subscribe(ctx, topic, wrappedHandler, o)
+	sub, err := m.transport.Subscribe(ctx, topic, wrappedHandler, o)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	if m.closed.Load() {
+		m.mu.Unlock()
+		_ = sub.Unsubscribe()
+		return nil, ErrClosed
+	}
+	m.subscriptions[sub] = struct{}{}
+	m.cleanupWG.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.cleanupWG.Done()
+		<-sub.Done()
+		m.mu.Lock()
+		delete(m.subscriptions, sub)
+		m.mu.Unlock()
+	}()
+	return sub, nil
 }
 
 // Close 关闭 MQ（幂等）
 func (m *mq) Close() error {
-	if m.closed.Swap(true) {
-		return nil // 已经关闭，幂等
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.shutdown(ctx, false)
+}
+
+func (m *mq) Drain(ctx context.Context) error {
+	if ctx == nil {
+		return xerrors.New("mq drain context is nil")
 	}
-	return m.transport.Close()
+	return m.shutdown(ctx, true)
+}
+
+func (m *mq) shutdown(ctx context.Context, graceful bool) error {
+	m.lifecycleOnce.Do(func() {
+		m.closed.Store(true)
+		go func() {
+			m.lifecycleErr = m.shutdownSubscriptions(ctx, graceful)
+			close(m.lifecycleDone)
+		}()
+	})
+
+	select {
+	case <-m.lifecycleDone:
+		return m.lifecycleErr
+	case <-ctx.Done():
+		return xerrors.Wrap(ctx.Err(), "mq shutdown canceled")
+	}
+}
+
+func (m *mq) shutdownSubscriptions(ctx context.Context, graceful bool) error {
+	m.mu.Lock()
+	subs := make([]Subscription, 0, len(m.subscriptions))
+	for sub := range m.subscriptions {
+		subs = append(subs, sub)
+	}
+	m.mu.Unlock()
+
+	var errs []error
+	for _, sub := range subs {
+		if graceful {
+			if err := sub.Drain(ctx); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if err := sub.Unsubscribe(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if !graceful {
+		for _, sub := range subs {
+			select {
+			case <-sub.Done():
+			case <-ctx.Done():
+				errs = append(errs, xerrors.Wrap(ctx.Err(), "wait for mq subscription"))
+			}
+		}
+	}
+	m.cleanupWG.Wait()
+	if err := m.transport.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	return xerrors.Combine(errs...)
 }
 
 // wrapHandler 包装 Handler，添加统一的指标、日志和自动确认逻辑
@@ -84,6 +173,7 @@ func (m *mq) wrapHandler(topic string, handler Handler, opts subscribeOptions) H
 						clog.String("msg_id", msg.ID()),
 						clog.Error(ackErr),
 					)
+					return ackErr
 				}
 			} else {
 				// Handler 返回错误时调用 Nak 触发重新投递
@@ -94,6 +184,7 @@ func (m *mq) wrapHandler(topic string, handler Handler, opts subscribeOptions) H
 						clog.String("msg_id", msg.ID()),
 						clog.Error(nakErr),
 					)
+					return errors.Join(err, nakErr)
 				}
 			}
 		}

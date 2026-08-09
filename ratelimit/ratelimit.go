@@ -68,6 +68,19 @@ const (
 	ErrorPolicyFailClosed ErrorPolicy = "fail_closed"
 )
 
+func normalizeErrorPolicy(policy ErrorPolicy) ErrorPolicy {
+	switch policy {
+	case "", ErrorPolicyFailOpen:
+		return ErrorPolicyFailOpen
+	case ErrorPolicyFailClosed:
+		return ErrorPolicyFailClosed
+	default:
+		// Middleware constructors cannot return configuration errors. Unknown values
+		// therefore use the documented safe compatibility default.
+		return ErrorPolicyFailOpen
+	}
+}
+
 // Limiter 限流器核心接口
 type Limiter interface {
 	// Allow 尝试获取 1 个令牌（非阻塞）
@@ -92,7 +105,8 @@ type Limiter interface {
 	// Wait 阻塞等待直到获取 1 个令牌
 	Wait(ctx context.Context, key string, limit Limit) error
 
-	// Close 释放资源（如后台清理协程）
+	// Close 释放资源（如后台清理协程）。除 Discard 外，Close 是终态；
+	// 后续 Allow/AllowN/Wait 返回 ErrLimiterClosed。
 	Close() error
 }
 
@@ -163,7 +177,12 @@ func (c *Config) validate() error {
 		return xerrors.New("ratelimit: driver is required")
 	}
 	switch c.Driver {
-	case DriverStandalone, DriverDistributed:
+	case DriverStandalone:
+		if c.Standalone.CleanupInterval < 0 || c.Standalone.IdleTimeout < 0 {
+			return xerrors.New("ratelimit: cleanup_interval and idle_timeout must not be negative")
+		}
+		return nil
+	case DriverDistributed:
 		return nil
 	default:
 		return xerrors.New("ratelimit: unsupported driver: " + string(c.Driver))
@@ -174,10 +193,10 @@ func (c *StandaloneConfig) setDefaults() {
 	if c == nil {
 		return
 	}
-	if c.CleanupInterval <= 0 {
+	if c.CleanupInterval == 0 {
 		c.CleanupInterval = 1 * time.Minute
 	}
-	if c.IdleTimeout <= 0 {
+	if c.IdleTimeout == 0 {
 		c.IdleTimeout = 5 * time.Minute
 	}
 }
@@ -258,6 +277,16 @@ func New(cfg *Config, opts ...Option) (Limiter, error) {
 	if cfg == nil {
 		return nil, ErrConfigNil
 	}
+	config := *cfg
+	if cfg.Standalone != nil {
+		standalone := *cfg.Standalone
+		config.Standalone = &standalone
+	}
+	if cfg.Distributed != nil {
+		distributed := *cfg.Distributed
+		config.Distributed = &distributed
+	}
+	cfg = &config
 
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {

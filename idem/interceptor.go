@@ -2,13 +2,19 @@ package idem
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // UnaryServerInterceptor 创建 gRPC 一元服务端拦截器
@@ -45,10 +51,15 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 			return handler(ctx, req)
 		}
 
-		key := keys[0]
-		if key == "" {
+		rawKey := keys[0]
+		if rawKey == "" {
 			// 幂等键为空，直接调用 handler
 			return handler(ctx, req)
+		}
+		key := scopedIdempotencyKey("grpc", info.FullMethod, rawKey)
+		fingerprint, fingerprintErr := fingerprintGRPCRequest(info.FullMethod, req)
+		if fingerprintErr != nil {
+			return nil, status.Error(codes.InvalidArgument, "unable to fingerprint idempotent request")
 		}
 
 		if i.logger != nil {
@@ -57,10 +68,20 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 				clog.String("method", info.FullMethod))
 		}
 
-		cachedResp, token, locked, err := i.loadResultOrAcquireLock(ctx, key, decodeCachedGRPCResponse)
+		decode := func(cached []byte, logger clog.Logger, key string) (any, error) {
+			payload, err := decodeIdemEnvelope(cached, fingerprint)
+			if err != nil {
+				return nil, err
+			}
+			return decodeCachedGRPCResponse(payload, logger, key)
+		}
+		cachedResp, token, locked, err := i.loadResultOrAcquireLock(ctx, key, decode)
 		if err != nil {
 			if i.logger != nil {
 				i.logger.Error("failed to wait for gRPC idem result", clog.Error(err), clog.String("key", key))
+			}
+			if xerrors.Is(err, ErrKeyConflict) {
+				return nil, status.Error(codes.AlreadyExists, err.Error())
 			}
 			return nil, err
 		}
@@ -103,7 +124,11 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 				}
 				if anyMsg, err := anypb.New(msg); err == nil {
 					if respBytes, err := proto.Marshal(anyMsg); err == nil {
-						if err := i.store.SetResult(ctx, key, respBytes, i.cfg.DefaultTTL, token); err != nil {
+						envelope, envelopeErr := encodeIdemEnvelope(fingerprint, respBytes)
+						if envelopeErr != nil {
+							return nil, envelopeErr
+						}
+						if err := i.store.SetResult(ctx, key, envelope, i.cfg.DefaultTTL, token); err != nil {
 							if i.logger != nil {
 								i.logger.Error("failed to cache gRPC response", clog.Error(err), clog.String("key", key))
 							}
@@ -126,6 +151,20 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 
 		return result, err
 	}
+}
+
+func fingerprintGRPCRequest(fullMethod string, req any) (string, error) {
+	var data []byte
+	var err error
+	if msg, ok := req.(proto.Message); ok {
+		data, err = proto.MarshalOptions{Deterministic: true}.Marshal(msg)
+	} else {
+		data, err = json.Marshal(req)
+	}
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(append([]byte(fullMethod+"\x00"), data...))), nil
 }
 
 func decodeCachedGRPCResponse(cachedResp []byte, _ clog.Logger, _ string) (any, error) {

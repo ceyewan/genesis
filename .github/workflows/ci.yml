@@ -2,9 +2,20 @@ name: CI
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: SemVer tag proposed after this preflight succeeds
+        required: true
+        type: string
+      candidate_sha:
+        description: Full commit SHA to verify before creating the tag
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,57 +25,145 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26"
+  GO_VERSION: "1.26.1"
+  GOLANGCI_LINT_VERSION: "v1.64.8"
+  BUF_VERSION: "v1.66.1"
+  ACTIONLINT_VERSION: "v1.7.7"
 
 jobs:
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test + Testcontainers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: Download modules
         run: go mod download
-      - name: Run tests
-        run: go test -race -count=1 ./...
+      - name: Run ordinary tests with container evidence
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          go test -count=1 -json ./... | tee artifacts/test-normal.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: testcontainers-normal-${{ github.sha }}
+          path: artifacts/test-normal.json
 
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
+  race:
+    name: Race + Testcontainers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: false
-      - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+          cache: true
+      - name: Download modules
+        run: go mod download
+      - name: Run race tests with container evidence
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          go test -race -count=1 -json ./... | tee artifacts/test-race.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: testcontainers-race-${{ github.sha }}
+          path: artifacts/test-race.json
+
+  quality:
+    name: Lint, modernize, Buf, comments
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Install pinned tools
+        run: |
+          go install "github.com/golangci/golangci-lint/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
+          go install "github.com/bufbuild/buf/cmd/buf@${BUF_VERSION}"
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+      - name: Validate workflow syntax
+        run: actionlint
+      - name: Check module drift
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
       - name: Run golangci-lint
         run: golangci-lint run
-
-  modernize:
-    name: Modernize
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
+      - name: Check exported comments
+        run: make exported-comments
       - name: Check go fix suggestions
         run: make modernize-check
+      - name: Lint protobuf definitions
+        run: make buf-lint
 
-  build:
-    name: Build
-    runs-on: ubuntu-latest
+  api-docs:
+    name: Build, API, examples, GoDoc
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Build
+      - name: Build all packages
         run: go build ./...
+      - name: Compile Go examples
+        run: make examples-check
+      - name: Check exported API inventory
+        run: make api-inventory-check
+      - name: Generate GoDoc evidence
+        run: make godoc-artifacts
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: v1-api-godoc-${{ github.sha }}
+          path: |
+            artifacts/godoc
+            docs/v1-api-inventory.md
+            docs/v1-api-decisions.md
+            docs/v1-migration.md
+
+  release-gate:
+    name: Release gate
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [test, race, quality, api-docs]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+      - name: Validate release candidate identity
+        env:
+          CANDIDATE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_tag || github.ref_name }}
+          CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pre_id='(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
+          semver="^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-${pre_id}(\\.${pre_id})*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+          [[ "${CANDIDATE_TAG}" =~ ${semver} ]]
+          test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
+          echo "All release gates passed for ${CANDIDATE_TAG} at ${CANDIDATE_SHA}"

@@ -21,4 +21,7 @@ var (
 
 	// ErrRateLimitExceeded 限流阈值超出
 	ErrRateLimitExceeded = xerrors.New("ratelimit: rate limit exceeded")
+
+	// ErrLimiterClosed 表示限流器已经关闭，Close 是终态。
+	ErrLimiterClosed = xerrors.New("ratelimit: limiter is closed")
 )

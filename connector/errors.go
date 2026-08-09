@@ -1,6 +1,10 @@
 package connector
 
-import "github.com/ceyewan/genesis/xerrors"
+import (
+	"fmt"
+
+	"github.com/ceyewan/genesis/xerrors"
+)
 
 // Sentinel Errors - 连接器专用的哨兵错误
 var (
@@ -16,3 +20,9 @@ var (
 	// ErrClientNil 客户端为空（未初始化或已关闭）
 	ErrClientNil = xerrors.New("connector: client is nil")
 )
+
+// wrapConnectorCause preserves both the Genesis classification sentinel and
+// the dependency error so callers can match either with errors.Is/As.
+func wrapConnectorCause(class, cause error, format string, args ...any) error {
+	return fmt.Errorf("%w: %s: %w", class, fmt.Sprintf(format, args...), cause)
+}

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 
 	"github.com/sony/gobreaker/v2"
@@ -12,12 +13,17 @@ import (
 
 // circuitBreaker 熔断器实现（非导出）
 type circuitBreaker struct {
-	cfg      *Config
-	logger   clog.Logger
-	fallback FallbackFunc
+	cfg               *Config
+	logger            clog.Logger
+	fallback          FallbackFunc
+	failureClassifier FailureClassifier
+	executions        metrics.Counter
+	rejections        metrics.Counter
+	stateGauge        metrics.Gauge
 
 	// 服务级熔断器管理
-	breakers sync.Map // map[string]*gobreaker.CircuitBreaker[interface{}]
+	mu       sync.RWMutex
+	breakers map[string]*gobreaker.CircuitBreaker[any]
 }
 
 // newBreaker 创建熔断器实例（内部函数）
@@ -25,12 +31,25 @@ type circuitBreaker struct {
 func newBreaker(
 	cfg *Config,
 	logger clog.Logger,
+	meter metrics.Meter,
 	fallback FallbackFunc,
+	failureClassifier FailureClassifier,
 ) (Breaker, error) {
+	if meter == nil {
+		meter = metrics.Discard()
+	}
+	executions := breakerCounter(meter, MetricExecutions, "Number of breaker executions")
+	rejections := breakerCounter(meter, MetricRejections, "Number of breaker rejections")
+	stateGauge := breakerGauge(meter, MetricState, "Current breaker state: closed=0, half_open=1, open=2")
 	cb := &circuitBreaker{
-		cfg:      cfg,
-		logger:   logger,
-		fallback: fallback,
+		cfg:               cfg,
+		logger:            logger,
+		fallback:          fallback,
+		failureClassifier: failureClassifier,
+		executions:        executions,
+		rejections:        rejections,
+		stateGauge:        stateGauge,
+		breakers:          make(map[string]*gobreaker.CircuitBreaker[any]),
 	}
 
 	logger.Info("circuit breaker created",
@@ -42,6 +61,24 @@ func newBreaker(
 	return cb, nil
 }
 
+func breakerCounter(meter metrics.Meter, name, description string) metrics.Counter {
+	counter, err := meter.Counter(name, description)
+	if err == nil && counter != nil {
+		return counter
+	}
+	counter, _ = metrics.Discard().Counter(name, description)
+	return counter
+}
+
+func breakerGauge(meter metrics.Meter, name, description string) metrics.Gauge {
+	gauge, err := meter.Gauge(name, description)
+	if err == nil && gauge != nil {
+		return gauge
+	}
+	gauge, _ = metrics.Discard().Gauge(name, description)
+	return gauge
+}
+
 // Execute 执行受熔断保护的函数
 func (cb *circuitBreaker) Execute(ctx context.Context, key string, fn func() (any, error)) (any, error) {
 	if key == "" {
@@ -49,28 +86,33 @@ func (cb *circuitBreaker) Execute(ctx context.Context, key string, fn func() (an
 	}
 
 	// 获取或创建熔断器
-	breaker := cb.getOrCreateBreaker(key)
+	breaker, err := cb.getOrCreateBreaker(key)
+	if err != nil {
+		return nil, err
+	}
 
 	// 执行熔断保护的函数
 	result, err := breaker.Execute(fn)
 
 	rejectionErr, rejected := mapBreakerError(err)
 	if rejected {
+		cb.rejections.Inc(ctx, metrics.L("key", key), metrics.L("reason", rejectionErr.Error()))
 		cb.logger.Info("Circuit breaker rejected request",
 			clog.String("key", key),
 			clog.Error(rejectionErr))
 
 		if cb.fallback != nil {
-			fallbackErr := cb.fallback(ctx, key, rejectionErr)
-			if fallbackErr == nil {
-				return nil, nil
-			}
-			return nil, fallbackErr
+			return cb.fallback(ctx, key, rejectionErr)
 		}
 
 		return nil, rejectionErr
 	}
 
+	resultLabel := "success"
+	if err != nil {
+		resultLabel = "failure"
+	}
+	cb.executions.Inc(ctx, metrics.L("key", key), metrics.L("result", resultLabel))
 	return result, err
 }
 
@@ -80,12 +122,13 @@ func (cb *circuitBreaker) State(key string) (State, error) {
 		return StateClosed, ErrKeyEmpty
 	}
 
-	val, ok := cb.breakers.Load(key)
+	cb.mu.RLock()
+	breaker, ok := cb.breakers[key]
+	cb.mu.RUnlock()
 	if !ok {
 		return StateClosed, nil
 	}
 
-	breaker := val.(*gobreaker.CircuitBreaker[any])
 	state := breaker.State()
 
 	switch state {
@@ -101,10 +144,20 @@ func (cb *circuitBreaker) State(key string) (State, error) {
 }
 
 // getOrCreateBreaker 获取或创建指定键的熔断器
-func (cb *circuitBreaker) getOrCreateBreaker(key string) *gobreaker.CircuitBreaker[any] {
-	val, ok := cb.breakers.Load(key)
+func (cb *circuitBreaker) getOrCreateBreaker(key string) (*gobreaker.CircuitBreaker[any], error) {
+	cb.mu.RLock()
+	breaker, ok := cb.breakers[key]
+	cb.mu.RUnlock()
 	if ok {
-		return val.(*gobreaker.CircuitBreaker[any])
+		return breaker, nil
+	}
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if breaker, ok = cb.breakers[key]; ok {
+		return breaker, nil
+	}
+	if len(cb.breakers) >= cb.cfg.MaxKeys {
+		return nil, ErrKeyLimitExceeded
 	}
 
 	// 创建新的熔断器
@@ -114,16 +167,20 @@ func (cb *circuitBreaker) getOrCreateBreaker(key string) *gobreaker.CircuitBreak
 		Interval:    cb.cfg.Interval,
 		Timeout:     cb.cfg.Timeout,
 		ReadyToTrip: cb.readyToTrip,
+		IsSuccessful: func(err error) bool {
+			if cb.failureClassifier == nil {
+				return err == nil
+			}
+			return err == nil || !cb.failureClassifier(err)
+		},
 		OnStateChange: func(name string, from, to gobreaker.State) {
 			cb.onStateChange(name, from, to)
 		},
 	}
 
-	breaker := gobreaker.NewCircuitBreaker[any](settings)
-
-	// 存储熔断器（可能有并发创建，使用 LoadOrStore）
-	actual, _ := cb.breakers.LoadOrStore(key, breaker)
-	return actual.(*gobreaker.CircuitBreaker[any])
+	breaker = gobreaker.NewCircuitBreaker[any](settings)
+	cb.breakers[key] = breaker
+	return breaker, nil
 }
 
 // readyToTrip 判断是否应该触发熔断
@@ -142,6 +199,7 @@ func (cb *circuitBreaker) readyToTrip(counts gobreaker.Counts) bool {
 
 // onStateChange 状态变更回调
 func (cb *circuitBreaker) onStateChange(name string, from, to gobreaker.State) {
+	cb.stateGauge.Set(context.Background(), float64(to), metrics.L("key", name))
 	if cb.logger != nil {
 		cb.logger.Info("circuit breaker state changed",
 			clog.String("service", name),

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -126,7 +125,7 @@ func TestUnaryServerInterceptor(t *testing.T) {
 
 		resp, err := interceptor(ctx, "request", info, handler)
 		require.NoError(t, err)
-		assert.NotNil(t, resp)
+		require.NotNil(t, resp)
 	})
 
 	t.Run("Rate=1,Burst=1 时第二次请求应该被限流", func(t *testing.T) {
@@ -141,13 +140,13 @@ func TestUnaryServerInterceptor(t *testing.T) {
 		// 第一次请求成功
 		resp, err := interceptor(ctx, "request", info, handler)
 		require.NoError(t, err)
-		assert.NotNil(t, resp)
+		require.NotNil(t, resp)
 
 		// 第二次请求应该被限流
 		resp, err = interceptor(ctx, "request", info, handler)
 		require.Error(t, err)
-		assert.Nil(t, resp)
-		assert.Equal(t, codes.ResourceExhausted, status.Code(err), "应该返回 ResourceExhausted 状态码")
+		require.Nil(t, resp)
+		require.Equal(t, codes.ResourceExhausted, status.Code(err), "应该返回 ResourceExhausted 状态码")
 	})
 
 	t.Run("自定义 KeyFunc 应该生效", func(t *testing.T) {
@@ -170,7 +169,7 @@ func TestUnaryServerInterceptor(t *testing.T) {
 		// 第二次请求被限流（使用相同 key）
 		_, err = interceptor(ctx, "request", info, handler)
 		require.Error(t, err)
-		assert.Equal(t, codes.ResourceExhausted, status.Code(err))
+		require.Equal(t, codes.ResourceExhausted, status.Code(err))
 	})
 }
 
@@ -193,7 +192,7 @@ func TestUnaryServerInterceptor_EdgeCases(t *testing.T) {
 		for range 10 {
 			resp, err := interceptor(ctx, "request", info, handler)
 			require.NoError(t, err)
-			assert.NotNil(t, resp)
+			require.NotNil(t, resp)
 		}
 	})
 
@@ -210,7 +209,7 @@ func TestUnaryServerInterceptor_EdgeCases(t *testing.T) {
 		// 限流器出错时应该放行
 		resp, err := interceptor(ctx, "request", info, handler)
 		require.NoError(t, err, "限流器错误时应该放行")
-		assert.NotNil(t, resp)
+		require.NotNil(t, resp)
 	})
 
 	t.Run("限流器错误时可配置为 fail-closed", func(t *testing.T) {
@@ -227,8 +226,8 @@ func TestUnaryServerInterceptor_EdgeCases(t *testing.T) {
 
 		resp, err := interceptor(ctx, "request", info, handler)
 		require.Error(t, err)
-		assert.Nil(t, resp)
-		assert.Equal(t, codes.Unavailable, status.Code(err))
+		require.Nil(t, resp)
+		require.Equal(t, codes.Unavailable, status.Code(err))
 	})
 
 	t.Run("无效限流规则应该放行", func(t *testing.T) {
@@ -247,7 +246,7 @@ func TestUnaryServerInterceptor_EdgeCases(t *testing.T) {
 		// 无效限流规则应该放行
 		resp, err := interceptor(ctx, "request", info, handler)
 		require.NoError(t, err)
-		assert.NotNil(t, resp)
+		require.NotNil(t, resp)
 	})
 }
 
@@ -291,7 +290,7 @@ func TestUnaryClientInterceptor(t *testing.T) {
 		// 第二次请求应该被限流
 		err = interceptor(ctx, "/test/Method2", "request", "reply", nil, invoker)
 		require.Error(t, err)
-		assert.Equal(t, codes.ResourceExhausted, status.Code(err))
+		require.Equal(t, codes.ResourceExhausted, status.Code(err))
 	})
 
 	t.Run("自定义 KeyFunc 应该生效", func(t *testing.T) {
@@ -313,7 +312,7 @@ func TestUnaryClientInterceptor(t *testing.T) {
 		// 第二次请求被限流
 		err = interceptor(ctx, "/test/Method3", "request", "reply", nil, invoker)
 		require.Error(t, err)
-		assert.Equal(t, codes.ResourceExhausted, status.Code(err))
+		require.Equal(t, codes.ResourceExhausted, status.Code(err))
 	})
 
 	t.Run("不同方法使用不同 key", func(t *testing.T) {
@@ -377,7 +376,7 @@ func TestUnaryClientInterceptor_EdgeCases(t *testing.T) {
 		ctx := context.Background()
 		err := interceptor(ctx, "/test/Method", "request", "reply", nil, invoker)
 		require.Error(t, err)
-		assert.Equal(t, codes.Unavailable, status.Code(err))
+		require.Equal(t, codes.Unavailable, status.Code(err))
 	})
 }
 
@@ -402,7 +401,7 @@ func TestStreamServerInterceptor(t *testing.T) {
 
 		err := interceptor(nil, stream, info, handler)
 		require.Error(t, err)
-		assert.Equal(t, codes.ResourceExhausted, status.Code(err))
+		require.Equal(t, codes.ResourceExhausted, status.Code(err))
 	})
 
 	t.Run("流建立时被允许", func(t *testing.T) {
@@ -423,7 +422,7 @@ func TestStreamServerInterceptor(t *testing.T) {
 
 		err := interceptor(nil, stream, info, handler)
 		require.NoError(t, err)
-		assert.True(t, handlerCalled, "允许时应该调用 handler")
+		require.True(t, handlerCalled, "允许时应该调用 handler")
 	})
 
 	t.Run("Per-Stream 限流：只检查一次", func(t *testing.T) {
@@ -464,7 +463,7 @@ func TestStreamServerInterceptor(t *testing.T) {
 
 		err := interceptor(nil, stream, info, handler)
 		require.NoError(t, err)
-		assert.True(t, handlerCalled, "无效限流规则应该放行")
+		require.True(t, handlerCalled, "无效限流规则应该放行")
 	})
 
 	t.Run("nil limiter 应该使用 Discard", func(t *testing.T) {
@@ -484,7 +483,7 @@ func TestStreamServerInterceptor(t *testing.T) {
 
 		err := interceptor(nil, stream, info, handler)
 		require.NoError(t, err)
-		assert.True(t, handlerCalled, "nil limiter 应该放行")
+		require.True(t, handlerCalled, "nil limiter 应该放行")
 	})
 }
 
@@ -508,8 +507,8 @@ func TestStreamClientInterceptor(t *testing.T) {
 
 		_, err := interceptor(context.Background(), &grpc.StreamDesc{ClientStreams: true}, nil, "/test/StreamMethod", streamer)
 		require.Error(t, err)
-		assert.Equal(t, codes.ResourceExhausted, status.Code(err))
-		assert.False(t, streamerCalled, "限流时不应该调用 streamer")
+		require.Equal(t, codes.ResourceExhausted, status.Code(err))
+		require.False(t, streamerCalled, "限流时不应该调用 streamer")
 	})
 
 	t.Run("流建立时被允许", func(t *testing.T) {
@@ -528,8 +527,8 @@ func TestStreamClientInterceptor(t *testing.T) {
 
 		clientStream, err := interceptor(context.Background(), &grpc.StreamDesc{ClientStreams: true}, nil, "/test/StreamMethod", streamer)
 		require.NoError(t, err)
-		assert.NotNil(t, clientStream)
-		assert.True(t, streamerCalled, "允许时应该调用 streamer")
+		require.NotNil(t, clientStream)
+		require.True(t, streamerCalled, "允许时应该调用 streamer")
 	})
 
 	t.Run("nil limiter 应该使用 Discard", func(t *testing.T) {
@@ -546,7 +545,7 @@ func TestStreamClientInterceptor(t *testing.T) {
 
 		_, err := interceptor(context.Background(), &grpc.StreamDesc{ClientStreams: true}, nil, "/test/StreamMethod", streamer)
 		require.NoError(t, err)
-		assert.True(t, streamerCalled, "nil limiter 应该放行")
+		require.True(t, streamerCalled, "nil limiter 应该放行")
 	})
 
 	t.Run("无效限流规则应该放行", func(t *testing.T) {
@@ -564,7 +563,7 @@ func TestStreamClientInterceptor(t *testing.T) {
 
 		_, err := interceptor(context.Background(), &grpc.StreamDesc{ClientStreams: true}, nil, "/test/StreamMethod", streamer)
 		require.NoError(t, err)
-		assert.True(t, streamerCalled, "无效限流规则应该放行")
+		require.True(t, streamerCalled, "无效限流规则应该放行")
 	})
 }
 
@@ -576,9 +575,9 @@ func TestGRPCLimiterConfig(t *testing.T) {
 	t.Run("newGRPCLimiterConfig 默认值", func(t *testing.T) {
 		cfg := newGRPCLimiterConfig(nil, nil, nil, nil)
 
-		assert.NotNil(t, cfg.limiter, "nil limiter 应该被替换为 Discard")
-		assert.NotNil(t, cfg.keyFunc, "nil keyFunc 应该被替换为默认函数")
-		assert.NotNil(t, cfg.limitFunc, "nil limitFunc 应该被替换为默认函数")
+		require.NotNil(t, cfg.limiter, "nil limiter 应该被替换为 Discard")
+		require.NotNil(t, cfg.keyFunc, "nil keyFunc 应该被替换为默认函数")
+		require.NotNil(t, cfg.limitFunc, "nil limitFunc 应该被替换为默认函数")
 	})
 
 	t.Run("check 方法 - 无效限流规则放行", func(t *testing.T) {
@@ -589,8 +588,8 @@ func TestGRPCLimiterConfig(t *testing.T) {
 
 		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
 		require.NoError(t, err)
-		assert.False(t, allowed)
-		assert.True(t, passThrough, "无效限流规则应该放行")
+		require.False(t, allowed)
+		require.True(t, passThrough, "无效限流规则应该放行")
 	})
 
 	t.Run("check 方法 - 限流器错误放行", func(t *testing.T) {
@@ -601,8 +600,8 @@ func TestGRPCLimiterConfig(t *testing.T) {
 
 		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
 		require.NoError(t, err)
-		assert.False(t, allowed)
-		assert.True(t, passThrough, "限流器错误应该放行")
+		require.False(t, allowed)
+		require.True(t, passThrough, "限流器错误应该放行")
 	})
 
 	t.Run("check 方法 - 限流器错误 fail-closed", func(t *testing.T) {
@@ -613,8 +612,8 @@ func TestGRPCLimiterConfig(t *testing.T) {
 
 		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
 		require.Error(t, err)
-		assert.False(t, allowed)
-		assert.False(t, passThrough)
+		require.False(t, allowed)
+		require.False(t, passThrough)
 	})
 
 	t.Run("check 方法 - 请求被允许", func(t *testing.T) {
@@ -625,8 +624,8 @@ func TestGRPCLimiterConfig(t *testing.T) {
 
 		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
 		require.NoError(t, err)
-		assert.True(t, allowed)
-		assert.False(t, passThrough, "允许请求不应该放行")
+		require.True(t, allowed)
+		require.False(t, passThrough, "允许请求不应该放行")
 	})
 
 	t.Run("check 方法 - 请求被拒绝", func(t *testing.T) {
@@ -637,8 +636,8 @@ func TestGRPCLimiterConfig(t *testing.T) {
 
 		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
 		require.NoError(t, err)
-		assert.False(t, allowed)
-		assert.False(t, passThrough, "拒绝请求不应该放行")
+		require.False(t, allowed)
+		require.False(t, passThrough, "拒绝请求不应该放行")
 	})
 }
 
@@ -650,6 +649,6 @@ func TestDefaultGRPCKeyFunc(t *testing.T) {
 	t.Run("应该返回 fullMethod", func(t *testing.T) {
 		method := "/test.service/Method"
 		key := defaultGRPCKeyFunc(context.Background(), method)
-		assert.Equal(t, method, key)
+		require.Equal(t, method, key)
 	})
 }

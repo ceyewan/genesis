@@ -42,9 +42,13 @@ func Wrapf(err error, format string, args ...any) error {
 //
 // 当前的 code 模型非常轻量，只包含一个字符串错误码，不承担更复杂的错误元数据职责。
 // WithCode(nil, code) 会返回 nil。
+// WithCode(err, "") 会直接返回原错误，不创建新的错误包装。
 func WithCode(err error, code string) error {
 	if err == nil {
 		return nil
+	}
+	if code == "" {
+		return err
 	}
 	return &CodedError{Code: code, Cause: err}
 }
@@ -88,6 +92,9 @@ func Must[T any](v T, err error) T {
 }
 
 // MustOK 如果 ok 为 false，则 panic。
+//
+// 它适合消费已有的 (T, bool) 返回值 helper。对于普通运行时分支，
+// 直接显式处理 ok 往往更清晰。
 func MustOK[T any](v T, ok bool) T {
 	if !ok {
 		panic("assertion failed")
@@ -159,11 +166,17 @@ func Combine(errs ...error) error {
 	}
 }
 
-// 标准库函数再导出，便于组件统一从 xerrors 使用 errors 能力。
-var (
-	New    = errors.New
-	Is     = errors.Is
-	As     = errors.As
-	Unwrap = errors.Unwrap
-	Join   = errors.Join
-)
+// New delegates to errors.New.
+func New(text string) error { return errors.New(text) }
+
+// Is delegates to errors.Is.
+func Is(err, target error) bool { return errors.Is(err, target) }
+
+// As delegates to errors.As.
+func As(err error, target any) bool { return errors.As(err, target) }
+
+// Unwrap delegates to errors.Unwrap.
+func Unwrap(err error) error { return errors.Unwrap(err) }
+
+// Join delegates to errors.Join.
+func Join(errs ...error) error { return errors.Join(errs...) }

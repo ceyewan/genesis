@@ -182,9 +182,9 @@ func fallbackExample(ctx context.Context, logger clog.Logger, addr string) {
 		MinimumRequests: 5,
 	},
 		breaker.WithLogger(logger),
-		breaker.WithFallback(func(ctx context.Context, serviceName string, err error) error {
-			fmt.Printf("  ⚡ 熔断器打开，执行降级逻辑（返回缓存数据）\n")
-			return nil // 返回 nil 表示降级成功
+		breaker.WithFallback(func(ctx context.Context, serviceName string, err error) (any, error) {
+			fmt.Printf("  ⚡ 熔断器打开，执行拒绝处理逻辑\n")
+			return nil, err
 		}),
 	)
 	if err != nil {

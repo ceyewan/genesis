@@ -3,7 +3,6 @@ package idgen
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
@@ -30,7 +29,7 @@ type redisSequencer struct {
 //	seq, _ := idgen.NewSequencer(&idgen.SequencerConfig{
 //	    KeyPrefix: "im:seq",
 //	    Step:      1,
-//	    TTL:       3600, // 1 hour (秒)
+//	    TTL:       time.Hour,
 //	}, idgen.WithRedisConnector(redisConn))
 //
 //	// IM 场景使用
@@ -41,8 +40,9 @@ func NewSequencer(cfg *SequencerConfig, opts ...Option) (Sequencer, error) {
 		return nil, xerrors.WithCode(ErrInvalidInput, "config_nil")
 	}
 
-	cfg.setDefaults()
-	if err := cfg.validate(); err != nil {
+	config := *cfg
+	config.setDefaults()
+	if err := config.validate(); err != nil {
 		return nil, err
 	}
 
@@ -59,12 +59,15 @@ func NewSequencer(cfg *SequencerConfig, opts ...Option) (Sequencer, error) {
 	seqCounter, _ := meter.Counter(MetricSequenceGenerated, "序列号生成总数")
 
 	// 目前仅支持 Redis
-	switch cfg.Driver {
+	switch config.Driver {
 	case "redis":
 		if opt.RedisConnector == nil {
 			return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required")
 		}
-		return newRedisSequencer(cfg, opt.RedisConnector, opt.Logger, seqCounter)
+		if opt.RedisConnector.GetClient() == nil {
+			return nil, xerrors.Wrap(connector.ErrClientNil, "idgen: redis connector is not connected")
+		}
+		return newRedisSequencer(&config, opt.RedisConnector, opt.Logger, seqCounter)
 	default:
 		return nil, xerrors.WithCode(ErrInvalidInput, "unsupported_driver")
 	}
@@ -96,30 +99,30 @@ func (r *redisSequencer) Next(ctx context.Context, key string) (int64, error) {
 	redisKey := r.buildKey(key)
 	client := r.redis.GetClient()
 
-	// Lua 脚本：原子执行 IncrBy + MaxValue Check + Reset + Expire
+	// Lua 脚本：原子执行 IncrBy + MaxValue Check + rollback + Expire。
+	// 达到上限时回滚本次增量，绝不重置或回绕。
 	script := `
 		local key = KEYS[1]
 		local step = tonumber(ARGV[1])
 		local max = tonumber(ARGV[2])
-		local ttl = tonumber(ARGV[3])
+		local ttl_ms = tonumber(ARGV[3])
 
 		local v = redis.call("INCRBY", key, step)
 		local current = tonumber(v)
 
 		if max > 0 and current > max then
-			-- 超过最大值，重置为步长
-			redis.call("SET", key, step)
-			current = step
+			redis.call("DECRBY", key, step)
+			return {0, current}
 		end
 
-		if ttl > 0 then
-			redis.call("EXPIRE", key, ttl)
+		if ttl_ms > 0 then
+			redis.call("PEXPIRE", key, ttl_ms)
 		end
 
-		return current
+		return {1, current}
 	`
 
-	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, r.cfg.MaxValue, r.cfg.TTL).Result()
+	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, r.cfg.MaxValue, r.cfg.TTL.Milliseconds()).Slice()
 	if err != nil {
 		if r.logger != nil {
 			r.logger.Error("failed to generate sequence",
@@ -131,9 +134,16 @@ func (r *redisSequencer) Next(ctx context.Context, key string) (int64, error) {
 		return 0, xerrors.Wrap(err, "redis_eval_failed")
 	}
 
-	seq, ok := result.(int64)
-	if !ok {
+	if len(result) != 2 {
 		return 0, xerrors.New("unexpected result type from redis")
+	}
+	ok, okType := result[0].(int64)
+	seq, seqType := result[1].(int64)
+	if !okType || !seqType {
+		return 0, xerrors.New("unexpected result type from redis")
+	}
+	if ok != 1 {
+		return 0, xerrors.WithCode(ErrSequenceExhausted, "max_value_exceeded")
 	}
 
 	if r.logger != nil {
@@ -158,32 +168,31 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 	redisKey := r.buildKey(key)
 	client := r.redis.GetClient()
 
-	// Lua 脚本：原子执行 Batch IncrBy + MaxValue Check + Reset + Expire
+	// Lua 脚本：原子执行 Batch IncrBy + MaxValue Check + rollback + Expire。
 	script := `
 		local key = KEYS[1]
 		local step = tonumber(ARGV[1])
 		local count = tonumber(ARGV[2])
 		local max = tonumber(ARGV[3])
-		local ttl = tonumber(ARGV[4])
+		local ttl_ms = tonumber(ARGV[4])
 
 		local total_inc = step * count
 		local v = redis.call("INCRBY", key, total_inc)
 		local end_seq = tonumber(v)
 
 		if max > 0 and end_seq > max then
-			-- 超过最大值，重置为 total_inc (相当于从 0 开始重新计数)
-			redis.call("SET", key, total_inc)
-			end_seq = total_inc
+			redis.call("DECRBY", key, total_inc)
+			return {0, end_seq}
 		end
 
-		if ttl > 0 then
-			redis.call("EXPIRE", key, ttl)
+		if ttl_ms > 0 then
+			redis.call("PEXPIRE", key, ttl_ms)
 		end
 
-		return end_seq
+		return {1, end_seq}
 	`
 
-	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, count, r.cfg.MaxValue, r.cfg.TTL).Result()
+	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, count, r.cfg.MaxValue, r.cfg.TTL.Milliseconds()).Slice()
 	if err != nil {
 		if r.logger != nil {
 			r.logger.Error("failed to batch generate sequence",
@@ -195,9 +204,16 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 		return nil, xerrors.Wrap(err, "redis_eval_failed")
 	}
 
-	endSeq, ok := result.(int64)
-	if !ok {
+	if len(result) != 2 {
 		return nil, xerrors.New("unexpected result type from redis")
+	}
+	ok, okType := result[0].(int64)
+	endSeq, seqType := result[1].(int64)
+	if !okType || !seqType {
+		return nil, xerrors.New("unexpected result type from redis")
+	}
+	if ok != 1 {
+		return nil, xerrors.WithCode(ErrSequenceExhausted, "max_value_exceeded")
 	}
 
 	// 生成序列号数组
@@ -227,10 +243,13 @@ func (r *redisSequencer) Set(ctx context.Context, key string, value int64) error
 	if value < 0 {
 		return xerrors.WithCode(ErrInvalidInput, "negative_value")
 	}
+	if r.cfg.MaxValue > 0 && value > r.cfg.MaxValue {
+		return xerrors.WithCode(ErrSequenceExhausted, "value_exceeds_max")
+	}
 
 	redisKey := r.buildKey(key)
 	client := r.redis.GetClient()
-	expiration := time.Duration(r.cfg.TTL) * time.Second
+	expiration := r.cfg.TTL
 
 	if err := client.Set(ctx, redisKey, value, expiration).Err(); err != nil {
 		if r.logger != nil {
@@ -260,10 +279,13 @@ func (r *redisSequencer) SetIfNotExists(ctx context.Context, key string, value i
 	if value < 0 {
 		return false, xerrors.WithCode(ErrInvalidInput, "negative_value")
 	}
+	if r.cfg.MaxValue > 0 && value > r.cfg.MaxValue {
+		return false, xerrors.WithCode(ErrSequenceExhausted, "value_exceeds_max")
+	}
 
 	redisKey := r.buildKey(key)
 	client := r.redis.GetClient()
-	expiration := time.Duration(r.cfg.TTL) * time.Second
+	expiration := r.cfg.TTL
 
 	// 使用 SETNX (Set if Not eXists) 命令
 	result, err := client.SetNX(ctx, redisKey, value, expiration).Result()

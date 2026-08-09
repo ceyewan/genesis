@@ -26,6 +26,9 @@ func newMulti(local Local, remote KV, cfg *MultiConfig) (Multi, error) {
 }
 
 func (c *multiCache) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
+	if ttl < 0 {
+		return ErrInvalidTTL
+	}
 	if err := c.remote.Set(ctx, key, value, ttl); err != nil {
 		return err
 	}
@@ -77,6 +80,9 @@ func (c *multiCache) Has(ctx context.Context, key string) (bool, error) {
 }
 
 func (c *multiCache) Expire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	if ttl < 0 {
+		return false, ErrInvalidTTL
+	}
 	ok, err := c.remote.Expire(ctx, key, ttl)
 	if err != nil {
 		return false, err

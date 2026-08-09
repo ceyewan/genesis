@@ -8,20 +8,20 @@
 // 语义约定：
 //   - Get 等读取操作未命中时返回 ErrMiss。
 //   - Has 不返回 ErrMiss，而是通过 bool 表达存在性。
-//   - Set 和 Expire 在 ttl<=0 时使用组件配置中的 DefaultTTL。
+//   - Set 和 Expire 在 ttl=0 时使用组件配置中的 DefaultTTL；负值返回 ErrInvalidTTL。
 //   - Local 与 Multi 仅提供 KV 能力；Hash、Sorted Set、Batch 仅由 Distributed 提供。
 //   - RawClient 用于 Pipeline、Lua 脚本等高级场景，不保证跨后端兼容。
 //
 // 示例：
 //
 //	ctx := context.Background()
-//	dist, _ := cache.NewDistributed(&cache.DistributedConfig{
-//		Driver:    cache.DriverRedis,
-//		KeyPrefix: "myapp:",
-//	})
-//	defer dist.Close()
+//	local, err := cache.NewLocal(&cache.LocalConfig{MaxEntries: 1000})
+//	if err != nil {
+//		return err
+//	}
+//	defer local.Close()
 //
-//	if err := dist.Set(ctx, "user:1001", map[string]any{"name": "alice"}, time.Hour); err != nil {
+//	if err := local.Set(ctx, "user:1001", map[string]any{"name": "alice"}, time.Hour); err != nil {
 //		return err
 //	}
 package cache
@@ -30,15 +30,16 @@ import (
 	"context"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
 // KV 定义缓存组件的稳定 KV 能力。
 //
 // 这是 Local、Distributed 和 Multi 共享的最小公共语义。调用方可以依赖如下约定：
-//   - Set 在 ttl>0 时使用显式 TTL，在 ttl<=0 时使用组件的 DefaultTTL。
+//   - Set 在 ttl>0 时使用显式 TTL，在 ttl=0 时使用组件的 DefaultTTL，负值非法。
 //   - Get 未命中时返回 ErrMiss。
 //   - Delete 删除不存在的 key 不视为错误。
 //   - Expire 返回值中的 bool 表示 key 是否存在。
@@ -51,7 +52,7 @@ type KV interface {
 	Delete(ctx context.Context, key string) error
 	// Has 判断 key 是否存在。
 	Has(ctx context.Context, key string) (bool, error)
-	// Expire 更新 key 的 TTL；ttl<=0 时使用组件配置的 DefaultTTL；bool=false 表示 key 不存在。
+	// Expire 更新 key 的 TTL；ttl=0 时使用组件配置的 DefaultTTL，负值返回 ErrInvalidTTL；bool=false 表示 key 不存在。
 	Expire(ctx context.Context, key string, ttl time.Duration) (bool, error)
 	// Close 释放缓存实例拥有的资源。
 	Close() error
@@ -89,7 +90,7 @@ type Distributed interface {
 	// MSet 批量设置多个 key-value。
 	MSet(ctx context.Context, items map[string]any, ttl time.Duration) error
 	// RawClient 返回底层客户端，用于 Pipeline、Lua 脚本等高级场景。
-	RawClient() any
+	RawClient() *redis.Client
 }
 
 // Local 定义本地缓存能力。
@@ -118,6 +119,8 @@ func NewDistributed(cfg *DistributedConfig, opts ...Option) (Distributed, error)
 	if cfg == nil {
 		return nil, xerrors.New("cache: distributed config is nil")
 	}
+	config := *cfg
+	cfg = &config
 
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {
@@ -131,7 +134,7 @@ func NewDistributed(cfg *DistributedConfig, opts ...Option) (Distributed, error)
 
 	switch cfg.Driver {
 	case DriverRedis:
-		return newRedis(opt.RedisConn, cfg, opt.Logger, opt.Meter)
+		return newRedis(opt.RedisConn, cfg, opt.Serializer, opt.Logger)
 	default:
 		return nil, xerrors.New("cache: unsupported distributed driver: " + string(cfg.Driver))
 	}
@@ -144,6 +147,8 @@ func NewLocal(cfg *LocalConfig, opts ...Option) (Local, error) {
 	if cfg == nil {
 		return nil, xerrors.New("cache: local config is nil")
 	}
+	config := *cfg
+	cfg = &config
 
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {
@@ -151,7 +156,7 @@ func NewLocal(cfg *LocalConfig, opts ...Option) (Local, error) {
 	}
 
 	opt := buildOptions(opts...)
-	return newLocal(cfg, opt.Logger, opt.Meter)
+	return newLocal(cfg, opt.Serializer, opt.Logger)
 }
 
 // NewMulti 根据配置创建多级缓存实例。
@@ -168,8 +173,14 @@ func NewMulti(local Local, remote Distributed, cfg *MultiConfig) (Multi, error) 
 
 	if cfg == nil {
 		cfg = &MultiConfig{}
+	} else {
+		config := *cfg
+		cfg = &config
 	}
 	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 	return newMulti(local, remote, cfg)
 }
 
@@ -182,9 +193,5 @@ func buildOptions(opts ...Option) options {
 	if opt.Logger == nil {
 		opt.Logger = clog.Discard()
 	}
-	if opt.Meter == nil {
-		opt.Meter = metrics.Discard()
-	}
-
 	return opt
 }

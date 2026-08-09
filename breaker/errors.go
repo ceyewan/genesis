@@ -15,4 +15,7 @@ var (
 
 	// ErrTooManyRequests 表示半开状态下的探测请求数已达到上限。
 	ErrTooManyRequests = xerrors.New("breaker: too many requests while circuit breaker is half-open")
+
+	// ErrKeyLimitExceeded 表示新增 key 会超过 Config.MaxKeys。
+	ErrKeyLimitExceeded = xerrors.New("breaker: key limit exceeded")
 )

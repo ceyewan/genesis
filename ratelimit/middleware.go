@@ -52,9 +52,7 @@ func GinMiddleware(limiter Limiter, opts *GinMiddlewareOptions) gin.HandlerFunc 
 	errorPolicy := ErrorPolicyFailOpen
 	var logger clog.Logger
 	if opts != nil {
-		if opts.ErrorPolicy != "" {
-			errorPolicy = opts.ErrorPolicy
-		}
+		errorPolicy = normalizeErrorPolicy(opts.ErrorPolicy)
 		logger = opts.Logger
 	}
 

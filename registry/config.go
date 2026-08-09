@@ -16,6 +16,10 @@ type Config struct {
 
 	// RetryInterval 重连/重试间隔，默认 1s
 	RetryInterval time.Duration `yaml:"retry_interval" json:"retry_interval"`
+
+	// LeaseFailureBuffer 是 LeaseFailures 通道缓冲，默认 64，必须大于 0。
+	// 缓冲满时新事件会被记录并丢弃，永不阻塞 registry 后台生命周期。
+	LeaseFailureBuffer int `yaml:"lease_failure_buffer" json:"lease_failure_buffer"`
 }
 
 // Validate 验证配置有效性
@@ -31,6 +35,9 @@ func (c *Config) validate() error {
 	}
 	if c.RetryInterval < 0 {
 		return xerrors.New("registry: invalid retry_interval, must be non-negative")
+	}
+	if c.LeaseFailureBuffer < 0 {
+		return xerrors.New("registry: invalid lease_failure_buffer, must be non-negative")
 	}
 	return nil
 }

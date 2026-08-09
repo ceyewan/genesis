@@ -1,5 +1,7 @@
 package registry
 
+import "fmt"
+
 // ServiceInstance 描述一个服务实例。
 //
 // Endpoints 不是通用 URL 列表，而是 gRPC 地址列表，只接受 `grpc://host:port` 或 `host:port`。
@@ -16,6 +18,20 @@ type ServiceEvent struct {
 	Type    EventType        // 事件类型 (PUT/DELETE)
 	Service *ServiceInstance // 服务实例信息
 }
+
+// LeaseFailure 表示某个已注册实例的 keepalive 已终止且不是调用方主动注销。
+// 收到该事件后，应用应停止对外宣称实例可用并决定退出或显式重新注册。
+type LeaseFailure struct {
+	ServiceID   string
+	ServiceName string
+	Err         error
+}
+
+func (e LeaseFailure) Error() string {
+	return fmt.Sprintf("registry lease failure for %s/%s: %v", e.ServiceName, e.ServiceID, e.Err)
+}
+
+func (e LeaseFailure) Unwrap() error { return e.Err }
 
 // EventType 表示服务事件类型。
 type EventType string

@@ -31,7 +31,7 @@ type DistributedConfig struct {
 	// Serializer 序列化器类型："json" | "msgpack"。
 	Serializer string `json:"serializer" yaml:"serializer"`
 
-	// DefaultTTL 默认 TTL，当 Set 或 Expire 传入 ttl<=0 时使用。默认 24 小时。
+	// DefaultTTL 默认 TTL，当 Set 或 Expire 传入 ttl=0 时使用。负值非法。默认 24 小时。
 	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
 }
 
@@ -46,7 +46,7 @@ type LocalConfig struct {
 	// Serializer 序列化器类型："json" | "msgpack"。
 	Serializer string `json:"serializer" yaml:"serializer"`
 
-	// DefaultTTL 默认 TTL，当 Set 或 Expire 传入 ttl<=0 时使用。默认 1 小时。
+	// DefaultTTL 默认 TTL，当 Set 或 Expire 传入 ttl=0 时使用。负值非法。默认 1 小时。
 	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
 }
 
@@ -73,7 +73,7 @@ func (c *DistributedConfig) setDefaults() {
 	if c.Serializer == "" {
 		c.Serializer = "json"
 	}
-	if c.DefaultTTL <= 0 {
+	if c.DefaultTTL == 0 {
 		c.DefaultTTL = 24 * time.Hour
 	}
 }
@@ -84,6 +84,9 @@ func (c *DistributedConfig) validate() error {
 	}
 	switch c.Driver {
 	case DriverRedis:
+		if c.DefaultTTL < 0 {
+			return ErrInvalidTTL
+		}
 		return nil
 	default:
 		return xerrors.New("cache: unsupported distributed driver: " + string(c.Driver))
@@ -97,13 +100,13 @@ func (c *LocalConfig) setDefaults() {
 	if c.Driver == "" {
 		c.Driver = DriverOtter
 	}
-	if c.MaxEntries <= 0 {
+	if c.MaxEntries == 0 {
 		c.MaxEntries = 10000
 	}
 	if c.Serializer == "" {
 		c.Serializer = "json"
 	}
-	if c.DefaultTTL <= 0 {
+	if c.DefaultTTL == 0 {
 		c.DefaultTTL = time.Hour
 	}
 }
@@ -114,6 +117,12 @@ func (c *LocalConfig) validate() error {
 	}
 	switch c.Driver {
 	case DriverOtter:
+		if c.MaxEntries < 0 {
+			return xerrors.New("cache: max_entries must be positive")
+		}
+		if c.DefaultTTL < 0 {
+			return ErrInvalidTTL
+		}
 		return nil
 	default:
 		return xerrors.New("cache: unsupported local driver: " + string(c.Driver))
@@ -124,7 +133,7 @@ func (c *MultiConfig) setDefaults() {
 	if c == nil {
 		return
 	}
-	if c.BackfillTTL <= 0 {
+	if c.BackfillTTL == 0 {
 		c.BackfillTTL = time.Minute
 	}
 	// FailOpenOnLocalError 默认值为 true（通过指针 nil 表示）
@@ -132,4 +141,11 @@ func (c *MultiConfig) setDefaults() {
 		defaultFailOpen := true
 		c.FailOpenOnLocalError = &defaultFailOpen
 	}
+}
+
+func (c *MultiConfig) validate() error {
+	if c.LocalTTL < 0 || c.BackfillTTL < 0 {
+		return ErrInvalidTTL
+	}
+	return nil
 }

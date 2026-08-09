@@ -16,6 +16,10 @@ type idem struct {
 	logger clog.Logger
 }
 
+type closableStore interface {
+	Close() error
+}
+
 const processedMarker = "1"
 
 // newIdempotency 创建幂等性组件实例（内部函数）
@@ -25,6 +29,13 @@ func newIdempotency(cfg *Config, store Store, logger clog.Logger) Idempotency {
 		store:  store,
 		logger: logger,
 	}
+}
+
+func (i *idem) Close() error {
+	if store, ok := i.store.(closableStore); ok {
+		return store.Close()
+	}
+	return nil
 }
 
 // Execute 执行幂等操作
@@ -117,7 +128,7 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 		}
 		return false, nil
 	}
-	if err != ErrResultNotFound {
+	if !xerrors.Is(err, ErrResultNotFound) {
 		if i.logger != nil {
 			i.logger.Error("failed to get consume marker", clog.Error(err), clog.String("key", key))
 		}
@@ -198,6 +209,9 @@ func (i *idem) loadResultOrAcquireLock(ctx context.Context, key string, decode c
 		if err == nil {
 			return result, "", false, nil
 		}
+		if xerrors.Is(err, ErrKeyConflict) {
+			return nil, "", false, err
+		}
 
 		if deleteErr := i.deleteCorruptedResult(ctx, key); deleteErr != nil {
 			return nil, "", false, deleteErr
@@ -226,7 +240,7 @@ func (i *idem) waitForResultOrLock(ctx context.Context, key string) ([]byte, Loc
 		if err == nil {
 			return cached, "", false, nil
 		}
-		if err != ErrResultNotFound {
+		if !xerrors.Is(err, ErrResultNotFound) {
 			return nil, "", false, err
 		}
 
@@ -269,12 +283,16 @@ func (i *idem) startLockRefresh(key string, token LockToken, onFailure context.C
 		return func() {}, nil
 	}
 
-	interval := max(i.cfg.LockTTL/2, 500*time.Millisecond)
+	// Renew well before expiration, including for sub-second locks. Redis TTLs
+	// have millisecond precision, so one millisecond is the practical floor.
+	interval := max(i.cfg.LockTTL/3, time.Millisecond)
 
 	stopCtx, stop := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
+	done := make(chan struct{})
 	ticker := time.NewTicker(interval)
 	go func() {
+		defer close(done)
 		defer close(errCh)
 		defer ticker.Stop()
 		for {
@@ -294,7 +312,10 @@ func (i *idem) startLockRefresh(key string, token LockToken, onFailure context.C
 		}
 	}()
 
-	return stop, errCh
+	return func() {
+		stop()
+		<-done
+	}, errCh
 }
 
 func decodeJSONResult(cached []byte, logger clog.Logger, key string) (any, error) {

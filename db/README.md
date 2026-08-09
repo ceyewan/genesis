@@ -72,6 +72,7 @@ type DB interface {
 | `WithPostgreSQLConnector(c)` | 注入 PostgreSQL 连接器（Driver="postgresql" 时必须） |
 | `WithSQLiteConnector(c)` | 注入 SQLite 连接器（Driver="sqlite" 时必须） |
 | `WithSilentMode()` | 禁用 SQL 日志，适用于测试环境 |
+| `WithSlowThreshold(d)` | 设置慢 SQL 阈值；默认 `200ms`，负值非法 |
 
 ## 推荐使用方式
 
@@ -80,13 +81,22 @@ type DB interface {
 `connector` 拥有连接生命周期，`db` 只借用，无需调用 `db.Close()`：
 
 ```go
-mysqlConn, _ := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
+mysqlConn, err := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
+if err != nil {
+    return err
+}
 defer mysqlConn.Close()
+if err := mysqlConn.Connect(ctx); err != nil {
+    return err
+}
 
-database, _ := db.New(&db.Config{Driver: "mysql"},
+database, err := db.New(&db.Config{Driver: "mysql"},
     db.WithMySQLConnector(mysqlConn),
     db.WithLogger(logger),
 )
+if err != nil {
+    return err
+}
 // database.Close() 是 no-op，可以不调用
 ```
 
@@ -103,7 +113,7 @@ err := database.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
 
 ### SQL 日志
 
-默认输出全部 SQL，慢查询（>200ms）自动标注为 `slow sql`，SQL 错误标注为 `sql error`。测试环境可用 `WithSilentMode()` 关闭。
+默认输出全部 SQL，慢查询（默认 >200ms）自动标注为 `slow sql`，SQL 错误标注为 `sql error`。使用 `WithSlowThreshold` 可以调整阈值，测试环境可用 `WithSilentMode()` 关闭。
 
 ## 错误
 

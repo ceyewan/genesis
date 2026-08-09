@@ -20,6 +20,18 @@ type InterceptorOption func(*interceptorOptions)
 type options struct {
 	logger    clog.Logger
 	redisConn connector.RedisConnector
+	store     Store
+}
+
+// WithStore injects a custom persistence implementation. It takes precedence
+// over the configured built-in driver and makes the exported Store interface
+// usable by external packages.
+func WithStore(store Store) Option {
+	return func(o *options) {
+		if store != nil {
+			o.store = store
+		}
+	}
 }
 
 // middlewareOptions Gin 中间件选项配置（内部使用，小写）

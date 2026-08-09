@@ -9,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/clog"
@@ -46,8 +45,8 @@ func TestNew(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			auth, err := New(tt.cfg)
 			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
-				assert.Nil(t, auth)
+				require.ErrorIs(t, err, tt.wantErr)
+				require.Nil(t, auth)
 				return
 			}
 
@@ -70,19 +69,19 @@ func TestAuthenticator_GenerateTokenPair(t *testing.T) {
 	pair, err := auth.GenerateTokenPair(ctx, claims)
 	require.NoError(t, err)
 	require.NotNil(t, pair)
-	assert.NotEmpty(t, pair.AccessToken)
-	assert.NotEmpty(t, pair.RefreshToken)
-	assert.NotEqual(t, pair.AccessToken, pair.RefreshToken)
-	assert.Equal(t, "Bearer", pair.AuthorizationScheme)
-	assert.True(t, pair.AccessTokenExpiresAt.Before(pair.RefreshTokenExpiresAt))
+	require.NotEmpty(t, pair.AccessToken)
+	require.NotEmpty(t, pair.RefreshToken)
+	require.NotEqual(t, pair.AccessToken, pair.RefreshToken)
+	require.Equal(t, "Bearer", pair.AuthorizationScheme)
+	require.True(t, pair.AccessTokenExpiresAt.Before(pair.RefreshTokenExpiresAt))
 }
 
 func TestAuthenticator_GenerateTokenPair_NilClaims(t *testing.T) {
 	auth := createTestAuthenticator(t)
 
 	pair, err := auth.GenerateTokenPair(context.Background(), nil)
-	assert.ErrorIs(t, err, ErrInvalidClaims)
-	assert.Nil(t, pair)
+	require.ErrorIs(t, err, ErrInvalidClaims)
+	require.Nil(t, pair)
 }
 
 func TestAuthenticator_GenerateTokenPair_NoMutation(t *testing.T) {
@@ -97,9 +96,9 @@ func TestAuthenticator_GenerateTokenPair_NoMutation(t *testing.T) {
 
 	_, err := auth.GenerateTokenPair(ctx, claims)
 	require.NoError(t, err)
-	assert.Empty(t, claims.TokenType)
-	assert.Nil(t, claims.ExpiresAt)
-	assert.Nil(t, claims.IssuedAt)
+	require.Empty(t, claims.TokenType)
+	require.Nil(t, claims.ExpiresAt)
+	require.Nil(t, claims.IssuedAt)
 }
 
 func TestAuthenticator_ValidateAccessToken(t *testing.T) {
@@ -109,10 +108,10 @@ func TestAuthenticator_ValidateAccessToken(t *testing.T) {
 	pair := createTokenPair(t, auth, ctx)
 	validatedClaims, err := auth.ValidateAccessToken(ctx, pair.AccessToken)
 	require.NoError(t, err)
-	assert.Equal(t, "user-123", validatedClaims.Subject)
-	assert.Equal(t, "alice", validatedClaims.Username)
-	assert.Equal(t, []string{"admin"}, validatedClaims.Roles)
-	assert.Equal(t, TokenTypeAccess, validatedClaims.TokenType)
+	require.Equal(t, "user-123", validatedClaims.Subject)
+	require.Equal(t, "alice", validatedClaims.Username)
+	require.Equal(t, []string{"admin"}, validatedClaims.Roles)
+	require.Equal(t, TokenTypeAccess, validatedClaims.TokenType)
 }
 
 func TestAuthenticator_ValidateRefreshToken(t *testing.T) {
@@ -122,9 +121,9 @@ func TestAuthenticator_ValidateRefreshToken(t *testing.T) {
 	pair := createTokenPair(t, auth, ctx)
 	validatedClaims, err := auth.ValidateRefreshToken(ctx, pair.RefreshToken)
 	require.NoError(t, err)
-	assert.Equal(t, "user-123", validatedClaims.Subject)
-	assert.Equal(t, "alice", validatedClaims.Username)
-	assert.Equal(t, TokenTypeRefresh, validatedClaims.TokenType)
+	require.Equal(t, "user-123", validatedClaims.Subject)
+	require.Equal(t, "alice", validatedClaims.Username)
+	require.Equal(t, TokenTypeRefresh, validatedClaims.TokenType)
 }
 
 func TestAuthenticator_ValidateAccessToken_RejectRefreshToken(t *testing.T) {
@@ -133,8 +132,8 @@ func TestAuthenticator_ValidateAccessToken_RejectRefreshToken(t *testing.T) {
 
 	pair := createTokenPair(t, auth, ctx)
 	claims, err := auth.ValidateAccessToken(ctx, pair.RefreshToken)
-	assert.ErrorIs(t, err, ErrInvalidToken)
-	assert.Nil(t, claims)
+	require.ErrorIs(t, err, ErrInvalidToken)
+	require.Nil(t, claims)
 }
 
 func TestAuthenticator_ValidateRefreshToken_RejectAccessToken(t *testing.T) {
@@ -143,8 +142,8 @@ func TestAuthenticator_ValidateRefreshToken_RejectAccessToken(t *testing.T) {
 
 	pair := createTokenPair(t, auth, ctx)
 	claims, err := auth.ValidateRefreshToken(ctx, pair.AccessToken)
-	assert.ErrorIs(t, err, ErrInvalidToken)
-	assert.Nil(t, claims)
+	require.ErrorIs(t, err, ErrInvalidToken)
+	require.Nil(t, claims)
 }
 
 func TestAuthenticator_ValidateTypedToken_InvalidToken(t *testing.T) {
@@ -164,7 +163,7 @@ func TestAuthenticator_ValidateTypedToken_InvalidToken(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := auth.ValidateAccessToken(ctx, tt.token)
-			assert.ErrorIs(t, err, tt.wantErr)
+			require.ErrorIs(t, err, tt.wantErr)
 		})
 	}
 }
@@ -185,7 +184,7 @@ func TestAuthenticator_ValidateAccessToken_InvalidSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = authA.ValidateAccessToken(context.Background(), pair.AccessToken)
-	assert.ErrorIs(t, err, ErrInvalidSignature)
+	require.ErrorIs(t, err, ErrInvalidSignature)
 }
 
 func TestAuthenticator_ValidateAccessToken_ExpiredToken(t *testing.T) {
@@ -200,7 +199,7 @@ func TestAuthenticator_ValidateAccessToken_ExpiredToken(t *testing.T) {
 	})
 
 	_, err := auth.ValidateAccessToken(context.Background(), token)
-	assert.ErrorIs(t, err, ErrExpiredToken)
+	require.ErrorIs(t, err, ErrExpiredToken)
 }
 
 func TestAuthenticator_RefreshToken(t *testing.T) {
@@ -211,28 +210,28 @@ func TestAuthenticator_RefreshToken(t *testing.T) {
 	newPair, err := auth.RefreshToken(ctx, oldPair.RefreshToken)
 	require.NoError(t, err)
 	require.NotNil(t, newPair)
-	assert.NotEmpty(t, newPair.AccessToken)
-	assert.NotEmpty(t, newPair.RefreshToken)
-	assert.NotEqual(t, oldPair.AccessToken, newPair.AccessToken)
-	assert.NotEqual(t, oldPair.RefreshToken, newPair.RefreshToken)
+	require.NotEmpty(t, newPair.AccessToken)
+	require.NotEmpty(t, newPair.RefreshToken)
+	require.NotEqual(t, oldPair.AccessToken, newPair.AccessToken)
+	require.NotEqual(t, oldPair.RefreshToken, newPair.RefreshToken)
 
 	accessClaims, err := auth.ValidateAccessToken(ctx, newPair.AccessToken)
 	require.NoError(t, err)
-	assert.Equal(t, "user-123", accessClaims.Subject)
-	assert.Equal(t, TokenTypeAccess, accessClaims.TokenType)
+	require.Equal(t, "user-123", accessClaims.Subject)
+	require.Equal(t, TokenTypeAccess, accessClaims.TokenType)
 
 	refreshClaims, err := auth.ValidateRefreshToken(ctx, newPair.RefreshToken)
 	require.NoError(t, err)
-	assert.Equal(t, "user-123", refreshClaims.Subject)
-	assert.Equal(t, TokenTypeRefresh, refreshClaims.TokenType)
+	require.Equal(t, "user-123", refreshClaims.Subject)
+	require.Equal(t, TokenTypeRefresh, refreshClaims.TokenType)
 }
 
 func TestAuthenticator_RefreshToken_InvalidToken(t *testing.T) {
 	auth := createTestAuthenticator(t)
 
 	pair, err := auth.RefreshToken(context.Background(), "invalid-token")
-	assert.ErrorIs(t, err, ErrInvalidToken)
-	assert.Nil(t, pair)
+	require.ErrorIs(t, err, ErrInvalidToken)
+	require.Nil(t, pair)
 }
 
 func TestAuthenticator_RefreshToken_ExpiredRefreshToken(t *testing.T) {
@@ -247,8 +246,8 @@ func TestAuthenticator_RefreshToken_ExpiredRefreshToken(t *testing.T) {
 	})
 
 	pair, err := auth.RefreshToken(context.Background(), token)
-	assert.ErrorIs(t, err, ErrExpiredToken)
-	assert.Nil(t, pair)
+	require.ErrorIs(t, err, ErrExpiredToken)
+	require.Nil(t, pair)
 }
 
 func TestAuthenticator_RefreshToken_InvalidIssuerOrAudience(t *testing.T) {
@@ -275,8 +274,23 @@ func TestAuthenticator_RefreshToken_InvalidIssuerOrAudience(t *testing.T) {
 	require.NoError(t, err)
 
 	newPair, err := authRefreshWrong.RefreshToken(ctx, pair.RefreshToken)
-	assert.ErrorIs(t, err, ErrInvalidToken)
-	assert.Nil(t, newPair)
+	require.ErrorIs(t, err, ErrInvalidToken)
+	require.Nil(t, newPair)
+}
+
+func TestNewCopiesConfig(t *testing.T) {
+	cfg := &Config{
+		SecretKey: "01234567890123456789012345678901",
+		Audience:  []string{"frontend"},
+	}
+	authenticator, err := New(cfg, WithLogger(clog.Discard()), WithMeter(metrics.Discard()))
+	require.NoError(t, err)
+	require.Empty(t, cfg.SigningMethod)
+	require.Zero(t, cfg.AccessTokenTTL)
+
+	cfg.Audience[0] = "mutated"
+	internal := authenticator.(*jwtAuth)
+	require.Equal(t, []string{"frontend"}, internal.config.Audience)
 }
 
 func TestExtractToken_Header(t *testing.T) {
@@ -286,7 +300,7 @@ func TestExtractToken_Header(t *testing.T) {
 
 	token, err := auth.ExtractToken(req)
 	require.NoError(t, err)
-	assert.Equal(t, "test-token-123", token)
+	require.Equal(t, "test-token-123", token)
 }
 
 func TestExtractToken_HeaderCaseInsensitive(t *testing.T) {
@@ -296,7 +310,7 @@ func TestExtractToken_HeaderCaseInsensitive(t *testing.T) {
 
 	token, err := auth.ExtractToken(req)
 	require.NoError(t, err)
-	assert.Equal(t, "test-token-123", token)
+	require.Equal(t, "test-token-123", token)
 }
 
 func TestExtractToken_Query(t *testing.T) {
@@ -304,8 +318,8 @@ func TestExtractToken_Query(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test?token=test-token-456", nil)
 
 	token, err := auth.ExtractToken(req)
-	require.NoError(t, err)
-	assert.Equal(t, "test-token-456", token)
+	require.ErrorIs(t, err, ErrMissingToken)
+	require.Empty(t, token)
 }
 
 func TestExtractToken_Cookie(t *testing.T) {
@@ -314,8 +328,8 @@ func TestExtractToken_Cookie(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "jwt", Value: "test-token-789"})
 
 	token, err := auth.ExtractToken(req)
-	require.NoError(t, err)
-	assert.Equal(t, "test-token-789", token)
+	require.ErrorIs(t, err, ErrMissingToken)
+	require.Empty(t, token)
 }
 
 func TestExtractToken_HeaderPriority(t *testing.T) {
@@ -326,7 +340,7 @@ func TestExtractToken_HeaderPriority(t *testing.T) {
 
 	token, err := auth.ExtractToken(req)
 	require.NoError(t, err)
-	assert.Equal(t, "header-token", token)
+	require.Equal(t, "header-token", token)
 }
 
 func TestExtractToken_QueryFallback(t *testing.T) {
@@ -335,8 +349,8 @@ func TestExtractToken_QueryFallback(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "jwt", Value: "cookie-token"})
 
 	token, err := auth.ExtractToken(req)
-	require.NoError(t, err)
-	assert.Equal(t, "query-token", token)
+	require.ErrorIs(t, err, ErrMissingToken)
+	require.Empty(t, token)
 }
 
 func TestExtractToken_CookieFallback(t *testing.T) {
@@ -345,8 +359,8 @@ func TestExtractToken_CookieFallback(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "jwt", Value: "cookie-token"})
 
 	token, err := auth.ExtractToken(req)
-	require.NoError(t, err)
-	assert.Equal(t, "cookie-token", token)
+	require.ErrorIs(t, err, ErrMissingToken)
+	require.Empty(t, token)
 }
 
 func TestExtractToken_NoToken(t *testing.T) {
@@ -354,8 +368,8 @@ func TestExtractToken_NoToken(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test", nil)
 
 	token, err := auth.ExtractToken(req)
-	assert.ErrorIs(t, err, ErrMissingToken)
-	assert.Empty(t, token)
+	require.ErrorIs(t, err, ErrMissingToken)
+	require.Empty(t, token)
 }
 
 func TestExtractToken_InvalidHeaderFormat(t *testing.T) {
@@ -364,8 +378,8 @@ func TestExtractToken_InvalidHeaderFormat(t *testing.T) {
 	req.Header.Set("Authorization", "InvalidFormat test-token")
 
 	token, err := auth.ExtractToken(req)
-	assert.ErrorIs(t, err, ErrMissingToken)
-	assert.Empty(t, token)
+	require.ErrorIs(t, err, ErrMissingToken)
+	require.Empty(t, token)
 }
 
 func TestExtractToken_SingleSource_Header(t *testing.T) {
@@ -381,7 +395,7 @@ func TestExtractToken_SingleSource_Header(t *testing.T) {
 
 	token, err := auth.(*jwtAuth).ExtractToken(req)
 	require.NoError(t, err)
-	assert.Equal(t, "header-token", token)
+	require.Equal(t, "header-token", token)
 }
 
 func TestExtractToken_SingleSource_Query(t *testing.T) {
@@ -397,7 +411,7 @@ func TestExtractToken_SingleSource_Query(t *testing.T) {
 
 	token, err := auth.(*jwtAuth).ExtractToken(req)
 	require.NoError(t, err)
-	assert.Equal(t, "query-token", token)
+	require.Equal(t, "query-token", token)
 }
 
 func TestGinMiddleware(t *testing.T) {
@@ -420,8 +434,8 @@ func TestGinMiddleware(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, 200, w.Code)
-	assert.Contains(t, w.Body.String(), "user-123")
+	require.Equal(t, 200, w.Code)
+	require.Contains(t, w.Body.String(), "user-123")
 }
 
 func TestGinMiddleware_RejectRefreshToken(t *testing.T) {
@@ -439,8 +453,8 @@ func TestGinMiddleware_RejectRefreshToken(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, 401, w.Code)
-	assert.JSONEq(t, `{"error":"unauthorized"}`, w.Body.String())
+	require.Equal(t, 401, w.Code)
+	require.JSONEq(t, `{"error":"unauthorized"}`, w.Body.String())
 }
 
 func TestGinMiddleware_NoToken(t *testing.T) {
@@ -456,8 +470,8 @@ func TestGinMiddleware_NoToken(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, 401, w.Code)
-	assert.JSONEq(t, `{"error":"unauthorized"}`, w.Body.String())
+	require.Equal(t, 401, w.Code)
+	require.JSONEq(t, `{"error":"unauthorized"}`, w.Body.String())
 }
 
 func TestGinMiddleware_InvalidToken(t *testing.T) {
@@ -474,8 +488,8 @@ func TestGinMiddleware_InvalidToken(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, 401, w.Code)
-	assert.JSONEq(t, `{"error":"unauthorized"}`, w.Body.String())
+	require.Equal(t, 401, w.Code)
+	require.JSONEq(t, `{"error":"unauthorized"}`, w.Body.String())
 }
 
 func TestRequireRoles(t *testing.T) {
@@ -499,7 +513,7 @@ func TestRequireRoles(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, 200, w.Code)
+		require.Equal(t, 200, w.Code)
 	})
 
 	t.Run("missing role returns forbidden", func(t *testing.T) {
@@ -507,8 +521,8 @@ func TestRequireRoles(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, 403, w.Code)
-		assert.JSONEq(t, `{"error":"forbidden"}`, w.Body.String())
+		require.Equal(t, 403, w.Code)
+		require.JSONEq(t, `{"error":"forbidden"}`, w.Body.String())
 	})
 }
 
@@ -522,16 +536,16 @@ func TestRequireRoles_NoClaims(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, 401, w.Code)
-	assert.JSONEq(t, `{"error":"unauthorized"}`, w.Body.String())
+	require.Equal(t, 401, w.Code)
+	require.JSONEq(t, `{"error":"unauthorized"}`, w.Body.String())
 }
 
 func TestGetClaims_TypeMismatch(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Set(ClaimsKey, "not-claims")
 	claims, ok := GetClaims(c)
-	assert.False(t, ok)
-	assert.Nil(t, claims)
+	require.False(t, ok)
+	require.Nil(t, claims)
 }
 
 func BenchmarkGenerateTokenPair(b *testing.B) {

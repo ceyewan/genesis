@@ -75,7 +75,7 @@ type Logger interface {
 
 第一，`Fatal` 不退出进程。它只记录 FATAL 级别日志，把是否退出、退出码是多少、是否先做清理等决策交给应用层。日志组件如果直接 `os.Exit(1)`，会把控制流副作用塞进“记录日志”这个动作里，既不利于测试，也不利于复用。
 
-第二，`Close` 是必要的，而不是装饰性的。对 `stdout` 和 `stderr` 来说它是 no-op，但当 `Output` 指向文件路径时，logger 的确持有底层文件句柄。Genesis 的资源所有权原则是“谁创建，谁释放”，`clog` 不能例外。
+第二，`Close` 是必要的，而不是装饰性的。对 `stdout` 和 `stderr` 来说它是 no-op，但当 `Output` 指向文件路径时，根 logger 的确持有底层文件句柄。Genesis 的资源所有权原则是“谁创建，谁释放”，`clog` 不能例外。`With` / `WithNamespace` 派生出来的子 logger 只是借用同一套 handler，不拥有关闭权，因此它们的 `Close` 必须是 no-op。
 
 配置模型同样保持克制：
 
@@ -88,7 +88,13 @@ type Logger interface {
 | `AddSource` | 是否输出调用位置 |
 | `SourceRoot` | 是否裁剪调用文件路径，方便输出相对路径 |
 
-在此基础上又提供了两个默认配置：
+`New(nil)` 和 `New(&Config{})` 使用同一套零值默认配置：
+
+- `Level=info`
+- `Format=console`
+- `Output=stdout`
+
+如果需要偏开发或偏生产的显式默认值，则使用下面两个 helper：
 
 - `NewDevDefaultConfig`：偏开发体验，console、彩色、带源码位置
 - `NewProdDefaultConfig`：偏生产落地，json、stdout、带源码位置
@@ -158,7 +164,7 @@ user-service.api.order
 `clog` 的记录链路可以概括为：
 
 ```text
-New -> 构造 options -> 构造 handler -> 记录日志时组装 attrs -> 提取 Context 字段 -> 追加 namespace -> 写出
+New -> 构造 options -> 构造 handler -> Enabled 检查 -> 组装 attrs -> 提取 Context 字段 -> 追加 namespace -> 写出
 ```
 
 这里最核心的动作有三个：
@@ -218,7 +224,7 @@ Genesis 不想靠“默认用 stdout，所以大多数人感觉不到问题”�
 
 ### 6.4 为什么不宣称“零分配”
 
-`Field` 直接复用 `slog.Attr`，这的确减少了字段适配成本；`Enabled` 先做级别检查，也能避免一些无意义的后续工作。但从整个写出链路看，日志编码、buffer 使用、console 彩色包装都仍然存在分配和字符串处理。
+`Field` 直接复用 `slog.Attr`，这的确减少了字段适配成本；实现里也会先做 `Enabled` 检查，避免被过滤日志继续做 Context 提取、属性组装、`Record` 创建和最终编码写出。但从整个写出链路看，真正落盘或输出的日志仍然会经历编码、buffer 使用和 console 彩色包装。
 
 因此更准确的说法是：`clog` 在字段模型上尽量低成本，而不是“整条日志链路零分配”。这种表述听起来没那么夸张，但它更诚实，也更利于技术文档长期维护。
 

@@ -22,7 +22,8 @@ type Registry interface {
 
 	// --- 服务发现 ---
 
-	// GetService 获取服务实例列表。
+	// GetService 获取服务实例列表。服务不存在时返回非 nil 空切片和 nil error；
+	// ErrServiceNotFound 仅用于注销不存在的注册，不用于普通空查询。
 	GetService(ctx context.Context, serviceName string) ([]*ServiceInstance, error)
 
 	// Watch 监听服务实例变化。
@@ -30,6 +31,11 @@ type Registry interface {
 	// 返回的通道会发送 PUT / DELETE 事件。发生 Etcd compaction 时，registry 会回到最新快照，
 	// 基于快照与本地已知状态做 diff，并补发必要事件。
 	Watch(ctx context.Context, serviceName string) (<-chan ServiceEvent, error)
+
+	// LeaseFailures 返回非主动注销导致的 lease/keepalive 终止事件。
+	// 事件发送不会阻塞后台生命周期；Config.LeaseFailureBuffer 满时新事件会被丢弃并记录。
+	// 调用方应持续消费；成功 Shutdown 后通道关闭。
+	LeaseFailures() <-chan LeaseFailure
 
 	// --- gRPC 集成 ---
 
@@ -40,9 +46,12 @@ type Registry interface {
 	GetConnection(ctx context.Context, serviceName string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
 
 	// --- 资源管理 ---
+	// Shutdown 使用调用方 context 停止后台任务并清理资源。
+	// 如果 ctx 没有 deadline，组件会使用 5 秒安全上限。
+	Shutdown(ctx context.Context) error
 
 	// Close 停止后台任务并清理资源。
 	//
-	// Close 会停止 keepalive / watch，并尽力撤销当前 registry 创建的 lease。撤销失败会返回错误。
+	// Close 等价于 Shutdown(context.Background())，保留 5 秒默认上限。
 	Close() error
 }

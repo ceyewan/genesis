@@ -213,19 +213,23 @@ func mustDemo() {
 	value := xerrors.Must(parseInteger("42"))
 	fmt.Printf("Parsed value: %d\n", value)
 
-	// 使用 MustOK 进行类型断言
-	var i any = 100
-	num := xerrors.MustOK(i.(int), true)
-	fmt.Printf("Type asserted value: %d\n", num)
+	// 使用 MustOK 消费 (T, bool) helper 返回值
+	port := xerrors.MustOK(loadBootstrapPort())
+	fmt.Printf("Bootstrap port: %d\n", port)
 
 	fmt.Println("\n注意: Must 仅应在初始化阶段使用")
-	fmt.Println("      在运行时业务逻辑中使用 Must 会导致服务 panic")
+	fmt.Println("      MustOK 也应只用于初始化 helper 的 (T, bool) 返回值")
+	fmt.Println("      在运行时业务逻辑中使用 Must / MustOK 会导致服务 panic")
 }
 
 func parseInteger(s string) (int, error) {
 	var v int
 	_, err := fmt.Sscanf(s, "%d", &v)
 	return v, err
+}
+
+func loadBootstrapPort() (int, bool) {
+	return 8080, true
 }
 
 // apiSceneDemo 演示实际 API 场景的错误处理

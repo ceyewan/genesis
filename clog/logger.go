@@ -31,7 +31,7 @@
 //
 // 带 Context 的日志：
 //
-//	ctx := context.WithValue(context.Background(), "trace-id", "abc123")
+//	ctx := context.WithValue(context.Background(), "trace_id", "abc123")
 //	logger.InfoContext(ctx, "Request processed")
 package clog
 
@@ -67,7 +67,9 @@ type Logger interface {
 	// WithNamespace 创建一个扩展命名空间的子 Logger
 	WithNamespace(parts ...string) Logger
 
-	// SetLevel 动态调整日志级别
+	// SetLevel 动态调整日志级别。
+	//
+	// 当 level 不是预定义级别时返回错误。
 	SetLevel(level Level) error
 
 	// Flush 强制同步所有缓冲区的日志
@@ -75,7 +77,10 @@ type Logger interface {
 
 	// Close 释放 Logger 持有的资源。
 	//
-	// 当 Output 配置为文件路径时，调用方应在不再使用 Logger 后执行 Close。
-	// 对 stdout、stderr 和 Discard Logger，Close 是 no-op。
+	// 只有 New 创建的根 Logger 拥有底层资源；With / WithNamespace 派生出的
+	// 子 Logger 的 Close 是 no-op。
+	//
+	// 当 Output 配置为文件路径时，调用方应在不再使用根 Logger 后执行 Close。
+	// 对 stdout、stderr、Discard Logger 和派生子 Logger，Close 是 no-op。
 	Close() error
 }

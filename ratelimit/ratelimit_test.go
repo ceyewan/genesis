@@ -8,7 +8,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 )
+
+func TestNewDistributedRejectsUnconnectedConnector(t *testing.T) {
+	t.Parallel()
+
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{Addr: "127.0.0.1:6379"})
+	require.NoError(t, err)
+	_, err = New(&Config{Driver: DriverDistributed}, WithRedisConnector(redisConn))
+	require.ErrorIs(t, err, connector.ErrClientNil)
+}
 
 // ============================================================
 // Discard 模式测试
@@ -73,6 +83,17 @@ func TestNew_ConfigStandalone(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, limiter)
 	defer limiter.Close()
+}
+
+func TestNewRejectsNegativeStandaloneDurations(t *testing.T) {
+	for _, standalone := range []*StandaloneConfig{
+		{CleanupInterval: -time.Second},
+		{IdleTimeout: -time.Second},
+	} {
+		limiter, err := New(&Config{Driver: DriverStandalone, Standalone: standalone})
+		require.Error(t, err)
+		require.Nil(t, limiter)
+	}
 }
 
 func TestNew_ConfigDistributed(t *testing.T) {

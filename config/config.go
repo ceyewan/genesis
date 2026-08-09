@@ -39,16 +39,14 @@ func (c *Config) validate() error {
 func New(cfg *Config, opts ...Option) (Loader, error) {
 	if cfg == nil {
 		cfg = &Config{}
+	} else {
+		cfgCopy := *cfg
+		cfgCopy.Paths = append([]string(nil), cfg.Paths...)
+		cfg = &cfgCopy
 	}
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-
-	cfgCopy := *cfg
-	if cfg.Paths != nil {
-		cfgCopy.Paths = append([]string(nil), cfg.Paths...)
-	}
-
-	return newLoader(&cfgCopy, opts...)
+	return newLoader(cfg, opts...)
 }

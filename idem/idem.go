@@ -21,8 +21,10 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/xerrors"
 
+	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
 )
 
@@ -37,6 +39,10 @@ import (
 // 2. GinMiddleware: Gin 框架中间件，自动处理 HTTP 请求幂等性
 // 3. UnaryServerInterceptor: gRPC 一元拦截器，处理单次 RPC 调用幂等性
 type Idempotency interface {
+	// Close 停止组件拥有的后台任务。可并发重复调用。
+	// Redis 后端不拥有连接，因此 Close 不会关闭注入的 Redis connector。
+	Close() error
+
 	// Execute 执行幂等操作
 	//
 	// 工作流程：
@@ -69,10 +75,10 @@ type Idempotency interface {
 	// GinMiddleware 创建 Gin 框架中间件
 	//
 	// 使用示例：
-	//   middleware := idem.GinMiddleware().(func(*gin.Context))
+	//   middleware := idem.GinMiddleware()
 	//   router.POST("/orders", middleware, handler)
 	//   // 或者直接使用（Gin 会自动处理）：
-	//   router.Use(idem.GinMiddleware().(func(*gin.Context)))
+	//   router.Use(idem.GinMiddleware())
 	//
 	// 工作原理：
 	//   1. 从 HTTP 请求头 X-Idempotency-Key 提取幂等性键
@@ -82,14 +88,8 @@ type Idempotency interface {
 	// 参数：
 	//   - opts: 中间件选项，可自定义请求头名称等
 	//
-	// 返回：
-	//   - func(*gin.Context) 类型的中间件函数
-	//
-	// 注意：
-	//   返回类型为 interface{} 是为了避免强依赖 gin 包，
-	//   实际返回的是 func(*gin.Context) 类型。
-	//   传给 gin 的 router 时需要显式类型断言为 gin.HandlerFunc。
-	GinMiddleware(opts ...MiddlewareOption) any
+	// 返回 Gin 原生的 HandlerFunc，可直接传给 router.Use/POST 等方法。
+	GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc
 
 	// UnaryServerInterceptor 创建 gRPC 一元服务端拦截器
 	//
@@ -144,6 +144,8 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 	if cfg == nil {
 		return nil, ErrConfigNil
 	}
+	config := *cfg
+	cfg = &config
 
 	cfg.setDefaults()
 	if err := cfg.validate(); err != nil {
@@ -161,11 +163,17 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 	if logger != nil {
 		logger = logger.With(clog.String("component", "idem"))
 	}
+	if opt.store != nil {
+		return newIdempotency(cfg, opt.store, logger), nil
+	}
 
 	switch cfg.Driver {
 	case DriverRedis:
 		if opt.redisConn == nil {
 			return nil, xerrors.New("idem: redis connector is required, use WithRedisConnector")
+		}
+		if opt.redisConn.GetClient() == nil {
+			return nil, xerrors.Wrap(connector.ErrClientNil, "idem: redis connector is not connected")
 		}
 		if logger != nil {
 			logger.Info("creating idem component",

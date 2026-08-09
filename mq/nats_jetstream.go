@@ -2,10 +2,13 @@ package mq
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -102,14 +105,29 @@ func (t *natsJetStreamTransport) Subscribe(ctx context.Context, topic string, ha
 	consumerCfg := jetstream.ConsumerConfig{
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: topic,
+		MaxDeliver:    t.cfg.MaxDeliver,
+	}
+	switch opts.StartID {
+	case "", "0":
+		consumerCfg.DeliverPolicy = jetstream.DeliverAllPolicy
+	case "$":
+		consumerCfg.DeliverPolicy = jetstream.DeliverNewPolicy
+	default:
+		parts := strings.Split(opts.StartID, ":")
+		sequence, parseErr := strconv.ParseUint(parts[len(parts)-1], 10, 64)
+		if parseErr != nil || sequence == 0 {
+			return nil, xerrors.Wrapf(ErrInvalidConfig, "invalid JetStream start ID: %s", opts.StartID)
+		}
+		consumerCfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+		consumerCfg.OptStartSeq = sequence
 	}
 
 	// 设置 Durable 名称
 	// 同一 Durable 的多个消费者实例会竞争消费（负载均衡）
 	if opts.QueueGroup != "" {
-		consumerCfg.Durable = sanitizeName(opts.QueueGroup)
+		consumerCfg.Durable = durableConsumerName(opts.QueueGroup, topic)
 	} else if opts.DurableName != "" {
-		consumerCfg.Durable = sanitizeName(opts.DurableName)
+		consumerCfg.Durable = durableConsumerName(opts.DurableName, topic)
 	}
 
 	// 设置 AckWait（等待 Ack 的超时时间）
@@ -129,20 +147,22 @@ func (t *natsJetStreamTransport) Subscribe(ctx context.Context, topic string, ha
 	}
 
 	// 启动消费
+	subCtx, cancel := context.WithCancel(ctx)
 	cons, err := consumer.Consume(func(msg jetstream.Msg) {
 		m := &jetStreamMessage{
 			msg:     msg,
-			ctx:     ctx,
+			ctx:     subCtx,
 			headers: headersFromNATS(msg.Headers()),
 		}
 		// 错误已在上层 wrapHandler 中处理
 		_ = handler(m)
 	})
 	if err != nil {
+		cancel()
 		return nil, xerrors.Wrap(err, "start consuming failed")
 	}
 
-	return newJetStreamSubscription(cons, ctx), nil
+	return newJetStreamSubscription(cons, subCtx, cancel), nil
 }
 
 // Close 关闭 Transport
@@ -198,13 +218,36 @@ func (t *natsJetStreamTransport) ensureStream(ctx context.Context, topic string)
 
 	// Stream 不存在，创建新 Stream
 	_, err = t.js.CreateStream(ctx, jetstream.StreamConfig{
-		Name:     streamName,
-		Subjects: []string{topic},
+		Name:      streamName,
+		Subjects:  []string{topic},
+		Retention: natsRetention(t.cfg.Retention),
+		Storage:   natsStorage(t.cfg.Storage),
+		MaxAge:    t.cfg.MaxAge,
+		MaxBytes:  t.cfg.MaxBytes,
+		Replicas:  t.cfg.Replicas,
 	})
 	if err != nil && !strings.Contains(err.Error(), "already exists") {
 		return err
 	}
 	return nil
+}
+
+func natsRetention(retention StreamRetention) jetstream.RetentionPolicy {
+	switch retention {
+	case StreamRetentionInterest:
+		return jetstream.InterestPolicy
+	case StreamRetentionWorkQueue:
+		return jetstream.WorkQueuePolicy
+	default:
+		return jetstream.LimitsPolicy
+	}
+}
+
+func natsStorage(storage StreamStorage) jetstream.StorageType {
+	if storage == StreamStorageMemory {
+		return jetstream.MemoryStorage
+	}
+	return jetstream.FileStorage
 }
 
 // matchesWildcard 检查通配符 subject 是否匹配 topic
@@ -238,6 +281,15 @@ func sanitizeName(name string) string {
 	return invalidChars.ReplaceAllString(name, "_")
 }
 
+// durableConsumerName scopes a logical queue/durable identity to its topic.
+// JetStream durable names are stream-scoped, while Genesis streams may contain
+// multiple topics. Without the suffix, subscribing the same logical identity to
+// a second topic updates the first consumer's FilterSubject.
+func durableConsumerName(name, topic string) string {
+	hash := sha256.Sum256([]byte(topic))
+	return fmt.Sprintf("%s-%x", sanitizeName(name), hash[:8])
+}
+
 // ==================== Message 实现 ====================
 
 // jetStreamMessage JetStream 消息实现
@@ -245,6 +297,8 @@ type jetStreamMessage struct {
 	msg     jetstream.Msg
 	ctx     context.Context
 	headers Headers
+	ackMu   sync.Mutex
+	acked   bool
 }
 
 func (m *jetStreamMessage) Context() context.Context {
@@ -267,11 +321,27 @@ func (m *jetStreamMessage) Headers() Headers {
 }
 
 func (m *jetStreamMessage) Ack() error {
-	return m.msg.Ack()
+	m.ackMu.Lock()
+	defer m.ackMu.Unlock()
+	if m.acked {
+		return nil
+	}
+	if err := m.msg.Ack(); err != nil {
+		return err
+	}
+	m.acked = true
+	return nil
 }
 
 func (m *jetStreamMessage) Nak() error {
 	return m.msg.Nak()
+}
+
+func (m *jetStreamMessage) NakWithDelay(delay time.Duration) error {
+	if delay < 0 {
+		return xerrors.Wrap(ErrInvalidConfig, "nak delay must not be negative")
+	}
+	return m.msg.NakWithDelay(delay)
 }
 
 func (m *jetStreamMessage) ID() string {
@@ -286,15 +356,16 @@ func (m *jetStreamMessage) ID() string {
 
 // jetStreamSubscription JetStream 订阅实现
 type jetStreamSubscription struct {
-	cons   jetstream.ConsumeContext
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	once   sync.Once
+	cons      jetstream.ConsumeContext
+	ctx       context.Context
+	cancel    context.CancelFunc
+	done      chan struct{}
+	doneOnce  sync.Once
+	stopOnce  sync.Once
+	drainOnce sync.Once
 }
 
-func newJetStreamSubscription(cons jetstream.ConsumeContext, parentCtx context.Context) *jetStreamSubscription {
-	ctx, cancel := context.WithCancel(parentCtx)
+func newJetStreamSubscription(cons jetstream.ConsumeContext, ctx context.Context, cancel context.CancelFunc) *jetStreamSubscription {
 	s := &jetStreamSubscription{
 		cons:   cons,
 		ctx:    ctx,
@@ -303,18 +374,39 @@ func newJetStreamSubscription(cons jetstream.ConsumeContext, parentCtx context.C
 	}
 
 	go func() {
-		<-ctx.Done()
-		s.cons.Stop()
+		select {
+		case <-ctx.Done():
+			s.cons.Stop()
+		case <-s.cons.Closed():
+		}
 		<-s.cons.Closed()
-		s.once.Do(func() { close(s.done) })
+		s.cancel()
+		s.doneOnce.Do(func() { close(s.done) })
 	}()
 
 	return s
 }
 
 func (s *jetStreamSubscription) Unsubscribe() error {
-	s.cancel()
+	s.stopOnce.Do(func() {
+		s.cancel()
+		s.cons.Stop()
+	})
 	return nil
+}
+
+func (s *jetStreamSubscription) Drain(ctx context.Context) error {
+	if ctx == nil {
+		return xerrors.New("mq subscription drain context is nil")
+	}
+	s.drainOnce.Do(s.cons.Drain)
+	select {
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		_ = s.Unsubscribe()
+		return xerrors.Wrap(ctx.Err(), "drain jetstream subscription")
+	}
 }
 
 func (s *jetStreamSubscription) Done() <-chan struct{} {

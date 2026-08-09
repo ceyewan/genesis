@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 func TestMemoryExecuteCache(t *testing.T) {
@@ -136,5 +138,22 @@ func TestMemoryExecuteConcurrent(t *testing.T) {
 	}
 	if results[0] == nil || results[1] == nil {
 		t.Fatalf("results should not be nil")
+	}
+}
+
+func TestMemoryStoreRejectsStaleOwnerResult(t *testing.T) {
+	store := newMemoryStore("stale:")
+	t.Cleanup(func() { _ = store.(closableStore).Close() })
+	ctx := context.Background()
+	token, locked, err := store.Lock(ctx, "key", 10*time.Millisecond)
+	if err != nil || !locked {
+		t.Fatalf("Lock() = %v, %v", locked, err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := store.SetResult(ctx, "key", []byte("stale"), time.Minute, token); !xerrors.Is(err, ErrLockLost) {
+		t.Fatalf("SetResult() = %v, want ErrLockLost", err)
+	}
+	if _, err := store.GetResult(ctx, "key"); !xerrors.Is(err, ErrResultNotFound) {
+		t.Fatalf("GetResult() = %v, want ErrResultNotFound", err)
 	}
 }

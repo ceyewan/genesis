@@ -33,6 +33,24 @@ func (s *successInvoker) invoke(ctx context.Context, method string, req, reply a
 	return nil
 }
 
+func TestShouldCountGRPCFailurePreservesContextErrorChains(t *testing.T) {
+	t.Parallel()
+
+	requireNotCounted := func(t *testing.T, err error) {
+		t.Helper()
+		if shouldCountGRPCFailure(err) {
+			t.Fatalf("wrapped caller cancellation must not count as a breaker failure: %v", err)
+		}
+	}
+
+	t.Run("canceled", func(t *testing.T) {
+		requireNotCounted(t, errors.Join(errors.New("request aborted"), context.Canceled))
+	})
+	t.Run("deadline exceeded", func(t *testing.T) {
+		requireNotCounted(t, errors.Join(errors.New("request timed out"), context.DeadlineExceeded))
+	})
+}
+
 // ============================================================
 // Unary Client Interceptor 测试
 // ============================================================
@@ -121,8 +139,10 @@ func TestUnaryClientInterceptor_CircuitOpen(t *testing.T) {
 
 	// 触发足够多的失败来打开熔断器
 	t.Run("触发熔断器打开", func(t *testing.T) {
-		for range 10 {
-			_ = interceptor(context.Background(), "/test/Service", "req", "reply", nil, invoker.invoke)
+		for range 2 {
+			if err := interceptor(context.Background(), "/test/Service", "req", "reply", nil, invoker.invoke); !errors.Is(err, testErr) {
+				t.Fatalf("interceptor error = %v, want %v", err, testErr)
+			}
 		}
 
 		// 检查状态
@@ -132,7 +152,7 @@ func TestUnaryClientInterceptor_CircuitOpen(t *testing.T) {
 		}
 
 		if state != StateOpen {
-			t.Logf("State is: %v (expected Open, but may differ)", state)
+			t.Fatalf("State = %v, want open", state)
 		}
 	})
 }
@@ -170,7 +190,7 @@ func TestUnaryClientInterceptor_WithCustomKeyFunc(t *testing.T) {
 			t.Errorf("State should not return error, got: %v", err)
 		}
 		if state != StateClosed {
-			t.Logf("State for /test/Method1: %v", state)
+			t.Fatalf("State for /test/Method1 = %v, want closed", state)
 		}
 	})
 
@@ -192,7 +212,7 @@ func TestUnaryClientInterceptor_WithCustomKeyFunc(t *testing.T) {
 			t.Errorf("State should not return error, got: %v", err)
 		}
 		if state != StateClosed {
-			t.Logf("State for custom key: %v", state)
+			t.Fatalf("State for custom key = %v, want closed", state)
 		}
 	})
 }
@@ -201,10 +221,10 @@ func TestUnaryClientInterceptor_WithFallback(t *testing.T) {
 	logger, _ := clog.New(&clog.Config{Level: "error"})
 
 	fallbackCalled := false
-	fallback := func(ctx context.Context, serviceName string, err error) error {
+	fallback := func(ctx context.Context, serviceName string, err error) (any, error) {
 		fallbackCalled = true
 		// 返回降级响应
-		return status.Error(codes.ResourceExhausted, "circuit breaker open - fallback response")
+		return nil, status.Error(codes.ResourceExhausted, "circuit breaker open - fallback response")
 	}
 
 	cfg := &Config{
@@ -228,21 +248,18 @@ func TestUnaryClientInterceptor_WithFallback(t *testing.T) {
 	invoker := &errorInvoker{err: testErr}
 
 	t.Run("触发熔断并验证降级", func(t *testing.T) {
-		// 触发足够多的失败
-		for range 10 {
-			_ = interceptor(context.Background(), "/test/Method", "req", "reply", nil, invoker.invoke)
+		for range 2 {
+			if callErr := interceptor(context.Background(), "/test/Method", "req", "reply", nil, invoker.invoke); !errors.Is(callErr, testErr) {
+				t.Fatalf("interceptor error = %v, want %v", callErr, testErr)
+			}
 		}
 
-		// 等待熔断器状态更新
-		time.Sleep(100 * time.Millisecond)
-
-		// 再次调用，可能触发降级
 		err = interceptor(context.Background(), "/test/Method", "req", "reply", nil, invoker.invoke)
-
-		if fallbackCalled {
-			t.Log("Fallback was called as expected")
-		} else {
-			t.Log("Fallback may not have been called yet (breaker state may still be closed)")
+		if !fallbackCalled {
+			t.Fatal("fallback was not called for an open breaker")
+		}
+		if status.Code(err) != codes.ResourceExhausted {
+			t.Fatalf("fallback error code = %v, want ResourceExhausted", status.Code(err))
 		}
 	})
 }
@@ -285,7 +302,9 @@ func TestUnaryClientInterceptor_MultipleServices(t *testing.T) {
 			if err != nil {
 				t.Errorf("State for %s: %v", key, err)
 			}
-			t.Logf("Service %s state: %v", key, state)
+			if state != StateClosed {
+				t.Fatalf("Service %s state = %v, want closed", key, state)
+			}
 		}
 	})
 }
@@ -316,8 +335,14 @@ func TestUnaryClientInterceptor_HalfOpenState(t *testing.T) {
 
 	t.Run("半开状态后成功调用应该恢复熔断器", func(t *testing.T) {
 		// 1. 触发熔断器打开
-		for range 10 {
-			_ = interceptor(context.Background(), "/test/Method", "req", "reply", nil, invoker.invoke)
+		for range 2 {
+			if callErr := interceptor(context.Background(), "/test/Method", "req", "reply", nil, invoker.invoke); !errors.Is(callErr, testErr) {
+				t.Fatalf("interceptor error = %v, want %v", callErr, testErr)
+			}
+		}
+		state, stateErr := brk.State(serviceKey)
+		if stateErr != nil || state != StateOpen {
+			t.Fatalf("State before probe = %v, err = %v, want open", state, stateErr)
 		}
 
 		// 等待 Timeout 过去，熔断器进入半开状态
@@ -326,15 +351,17 @@ func TestUnaryClientInterceptor_HalfOpenState(t *testing.T) {
 		// 2. 发送一个成功的探测请求
 		err = interceptor(context.Background(), "/test/Method", "req", "reply", nil, successInvoker.invoke)
 		if err != nil {
-			t.Logf("Probe request error: %v", err)
+			t.Fatalf("Probe request error: %v", err)
 		}
 
 		// 3. 检查状态是否恢复到 Closed
-		state, err := brk.State(serviceKey)
+		state, err = brk.State(serviceKey)
 		if err != nil {
 			t.Errorf("State should not return error, got: %v", err)
 		}
-		t.Logf("State after probe: %v (expected Closed if probe succeeded)", state)
+		if state != StateClosed {
+			t.Fatalf("State after probe = %v, want closed", state)
+		}
 	})
 }
 
@@ -368,13 +395,21 @@ func TestInterceptorOption_WithKeyFunc(t *testing.T) {
 		)
 
 		invoker := &successInvoker{}
-		_ = interceptor(context.Background(), "/test/Method", "req", "reply", nil, invoker.invoke)
+		if err := interceptor(context.Background(), "/test/Method", "req", "reply", nil, invoker.invoke); err != nil {
+			t.Fatal(err)
+		}
 
 		// 应该使用第二个 key
-		state, err := brk.State("second-key")
-		if err != nil {
-			t.Errorf("State for second-key should exist, got error: %v", err)
+		internal := brk.(*circuitBreaker)
+		internal.mu.RLock()
+		_, secondOK := internal.breakers["second-key"]
+		_, firstOK := internal.breakers["first-key"]
+		internal.mu.RUnlock()
+		if !secondOK {
+			t.Fatal("last WithKeyFunc value was not used")
 		}
-		t.Logf("State with second key: %v", state)
+		if firstOK {
+			t.Fatal("earlier WithKeyFunc value was unexpectedly used")
+		}
 	})
 }
