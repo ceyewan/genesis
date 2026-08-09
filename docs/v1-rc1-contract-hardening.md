@@ -73,19 +73,22 @@ container jobs, bounded job timeouts, and unchanged release-gate semantics.
 
 ## Defect classification
 
-### RC1-BACKLOG-001: cache nil-config errors are not classifiable
+### RC1-BACKLOG-001: cache nil-config errors were not classifiable
+
+Status: resolved on `main` for the planned `v1.0.0-rc.2`; the immutable
+`v1.0.0-rc.1` artifact is unchanged.
 
 - Package: `cache`
-- Current behavior: `NewLocal(nil)` and `NewDistributed(nil)` return non-nil
+- RC1 behavior: `NewLocal(nil)` and `NewDistributed(nil)` return non-nil
   errors, but the package exposes no configuration sentinel that matches those
   errors through `errors.Is`.
 - Contract basis: the constructor table in `v1-api-decisions.md` says rejected
   nil configurations produce a classifiable configuration error.
 - Resonance impact: not blocking. Resonance supplies a non-nil
   `DistributedConfig` and does not depend on nil-config classification.
-- Priority: address only through an independently approved `v1.0.0-rc.2`
-  production-fix decision. This hardening work does not modify production code
-  and does not add a failing test to protected `main`.
+- Resolution: `cache.ErrInvalidConfig` classifies nil configurations from both
+  constructors through `errors.Is`. The consumer-contract test now protects
+  this behavior for the next release candidate.
 
 No stage-two-blocking Genesis production defect was found.
 
