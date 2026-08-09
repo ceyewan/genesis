@@ -13,12 +13,14 @@ import (
 
 	natsgo "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
 	tcetcd "github.com/testcontainers/testcontainers-go/modules/etcd"
 	"github.com/testcontainers/testcontainers-go/modules/kafka"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
 	"github.com/testcontainers/testcontainers-go/modules/nats"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/modules/redis"
+	"github.com/testcontainers/testcontainers-go/wait"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"gorm.io/gorm"
 
@@ -175,6 +177,9 @@ func setupMySQLContainer(t *testing.T) (*mysql.MySQLContainer, *MySQLConfig) {
 		mysql.WithDatabase("genesis_db"),
 		mysql.WithUsername("genesis_user"),
 		mysql.WithPassword("genesis_password"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("port: 3306  MySQL Community Server").WithStartupTimeout(2*time.Minute),
+		),
 	)
 	require.NoError(t, err, "Failed to start MySQL container")
 

@@ -474,6 +474,12 @@ func TestSequencerConfig_Unit(t *testing.T) {
 		_, err := NewSequencer(&SequencerConfig{TTL: -time.Second})
 		require.Error(t, err)
 	})
+
+	t.Run("negative step returns error", func(t *testing.T) {
+		_, err := NewSequencer(&SequencerConfig{Step: -1})
+		require.ErrorIs(t, err, ErrInvalidInput)
+		require.ErrorContains(t, err, "step_must_be_positive")
+	})
 }
 
 // ========================================

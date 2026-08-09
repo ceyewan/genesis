@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mysql"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"gorm.io/gorm"
 
 	"github.com/ceyewan/genesis/connector"
@@ -26,6 +28,9 @@ func NewMySQLContainerConfig(t *testing.T) *connector.MySQLConfig {
 		mysql.WithDatabase("genesis_db"),
 		mysql.WithUsername("genesis_user"),
 		mysql.WithPassword("genesis_password"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("port: 3306  MySQL Community Server").WithStartupTimeout(2*time.Minute),
+		),
 	)
 	require.NoError(t, err, "failed to start MySQL container")
 
