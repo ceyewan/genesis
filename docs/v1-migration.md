@@ -2,6 +2,12 @@
 
 Genesis v1 tightens failure and lifecycle contracts. Most changes are source compatible, but the items below require caller review.
 
+The currently published preview of this contract is `v1.0.0-rc.1` at
+`ec5ad2c31fb4adce2bd42529e3d7fbfe92b23aa7`. The RC is immutable: later test
+or documentation commits do not alter that module artifact. Production fixes
+require a separately approved and published RC, which consumers must select
+explicitly.
+
 ## Required source changes
 
 ### UUID errors
