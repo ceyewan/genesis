@@ -1,6 +1,6 @@
 # Genesis v1.0.0-rc.1 verification evidence
 
-This record describes the local-only candidate verification performed on 2026-08-09. Local commits are authorized. The exact commit containing this record is written to the stage goal after commit creation. No remote push, tag, release, deployment, or hosted-CI run is claimed here.
+This record describes the local and GitHub-hosted candidate verification performed on 2026-08-09. The candidate is published through draft PR [#58](https://github.com/ceyewan/genesis/pull/58). No tag, GitHub Release, or deployment has been created.
 
 ## Environment
 
@@ -55,7 +55,10 @@ The full ordinary and race suites include regression coverage for the audit find
 - Every importable package has a compile-checked Go Example and generated `go doc -all` evidence.
 - `.github/workflows/ci.yml` gates PRs, pushes to `main`, and SemVer tags with separate ordinary/race Testcontainers jobs, exact Go patch and runner versions, commit-pinned Actions, job timeouts, actionlint/module drift checks, build/examples/API/GoDoc checks, exact artifact-count validation, and a release gate depending on every job.
 - A manual pre-tag workflow dispatch takes an exact candidate SHA and proposed SemVer tag, runs the same jobs against that SHA, and must succeed before the tag is created. The tag path revalidates the same identity after creation.
-- The workflow file was parsed locally and its constituent commands passed locally. This is not represented as a hosted GitHub Actions result because pushing is outside the stage authorization.
+- Hosted run [31288087305](https://github.com/ceyewan/genesis/actions/runs/31288087305) passed all four required jobs against candidate `76cb23ca6d31fcd6bc4a1d1e59e38de095e2da3e`: ordinary Testcontainers, race Testcontainers, static/API/GoDoc, and build/examples. The release gate was correctly skipped because this was a pull-request run.
+- `main` branch protection requires those four checks on an up-to-date branch, applies to administrators, requires pull requests and resolved conversations, and disallows force pushes and deletion.
+- Controlled negative PR [#59](https://github.com/ceyewan/genesis/pull/59) introduced generated API-inventory drift. Hosted run [31288303160](https://github.com/ceyewan/genesis/actions/runs/31288303160) failed specifically at `Check exported API inventory`, and GitHub reported the PR merge state as `BLOCKED`. The PR was then closed and its remote branch deleted.
+- The commit containing this updated evidence must receive the same complete hosted PR run before it replaces the preceding candidate. After merge, the protected `main` commit must pass its push run and an exact-SHA manual pre-tag dispatch with proposed tag `v1.0.0-rc.1` before tag creation.
 
 ## Accepted v1 boundaries
 
@@ -66,4 +69,4 @@ The full ordinary and race suites include regression coverage for the audit find
 - Dlock exposes ownership loss but does not issue fencing tokens; irreversible downstream writes still require CAS/version fencing.
 - Trace supports system TLS and static OTLP headers, but custom certificate-pool construction remains application/deployment configuration outside Genesis v1.
 
-No unresolved **local** P0/P1 API, correctness, migration, or repository-workflow defect identified by the stage audits remains in this candidate. CI-G1 is still externally incomplete until this exact commit receives a successful GitHub-hosted pre-tag run, `main` is protected by required checks/ruleset, and both a passing candidate and a controlled failing change prove that release readiness is enforced. Until those remote facts exist, this record does not claim that stage one or `v1.0.0-rc.1` release approval is complete.
+No unresolved P0/P1 API, correctness, migration, or repository-workflow defect identified by the stage audits remains in this candidate. Required-check enforcement and both positive and negative hosted behavior are proven. Stage one remains pending only until this evidence update passes hosted CI, PR #58 is merged through the protected branch, the resulting exact `main` SHA passes both its push run and pre-tag dispatch, and the external stage goal records that final SHA. Tag and release creation remain separate, explicit actions.
