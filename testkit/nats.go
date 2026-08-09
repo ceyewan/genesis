@@ -7,7 +7,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
 	natscontainer "github.com/testcontainers/testcontainers-go/modules/nats"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/ceyewan/genesis/connector"
 )
@@ -28,7 +30,11 @@ func NewNATSContainer(t *testing.T) (*natscontainer.NATSContainer, *connector.NA
 
 	ctx := context.Background()
 
-	container, err := natscontainer.Run(ctx, "nats:2.10-alpine")
+	container, err := natscontainer.Run(ctx, "nats:2.10-alpine",
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("Server is ready").WithStartupTimeout(30*time.Second),
+		),
+	)
 	require.NoError(t, err, "failed to start NATS container")
 
 	host, err := container.Host(ctx)
@@ -60,8 +66,19 @@ func NewNATSContainerConnector(t *testing.T) connector.NATSConnector {
 	conn, err := connector.NewNATS(cfg, connector.WithLogger(NewLogger()))
 	require.NoError(t, err, "failed to create nats connector")
 
-	err = conn.Connect(context.Background())
-	require.NoError(t, err, "failed to connect to nats")
+	connectCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for {
+		err = conn.Connect(connectCtx)
+		if err == nil {
+			break
+		}
+		select {
+		case <-connectCtx.Done():
+			require.NoError(t, err, "failed to connect to ready nats container before deadline")
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 
 	t.Cleanup(func() {
 		_ = conn.Close()
