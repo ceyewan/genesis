@@ -12,11 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-//go:fix inline
-func boolPtr(b bool) *bool {
-	return new(b)
-}
-
 // mockLocalForMulti 用于测试 Multi 的本地缓存 mock
 type mockLocalForMulti struct {
 	data       map[string]any

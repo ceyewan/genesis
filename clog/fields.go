@@ -198,7 +198,7 @@ func getStackTrace(skip int) string {
 			break
 		}
 
-		builder.WriteString(fmt.Sprintf("%s:%d %s \n ", frame.File, frame.Line, frame.Function))
+		fmt.Fprintf(&builder, "%s:%d %s \n ", frame.File, frame.Line, frame.Function)
 		if !more {
 			break
 		}

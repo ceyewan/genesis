@@ -70,7 +70,7 @@ func TestExecute_ReturnTypeStable(t *testing.T) {
 func TestExecute_RecoversFromCorruptedCachedResult(t *testing.T) {
 	t.Parallel()
 
-	store := newMemoryStore("test:idem:corrupt:").(Store)
+	store := newMemoryStore("test:idem:corrupt:")
 	idemComp := newIdempotency(&Config{
 		Driver:     DriverMemory,
 		Prefix:     "test:idem:corrupt:",

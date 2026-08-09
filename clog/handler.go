@@ -332,25 +332,25 @@ func (h *coloredTextHandler) colorizeOutput(output string, level slog.Level) str
 
 	// 1. 时间戳 (深灰色，低调)
 	if timeStr != "" {
-		sb.WriteString(fmt.Sprintf("%s%s%s ", ansiGray, timeStr, ansiReset))
+		fmt.Fprintf(&sb, "%s%s%s ", ansiGray, timeStr, ansiReset)
 	}
 
 	// 2. 级别 (带颜色，固定宽度对齐)
 	levelColor := h.getLevelColor(level)
 	paddedLevel := fmt.Sprintf("%-5s", levelStr)
-	sb.WriteString(fmt.Sprintf("%s%s%s%s ", ansiBold, levelColor, paddedLevel, ansiReset))
+	fmt.Fprintf(&sb, "%s%s%s%s ", ansiBold, levelColor, paddedLevel, ansiReset)
 
 	// 3. 分隔符 (竖线，增加层次感)
-	sb.WriteString(fmt.Sprintf("%s|%s ", ansiGray, ansiReset))
+	fmt.Fprintf(&sb, "%s|%s ", ansiGray, ansiReset)
 
 	// 4. 调用处 (可选：放在消息前)
 	if callerStr != "" {
-		sb.WriteString(fmt.Sprintf("%s%s%s ", ansiGray, callerStr, ansiReset))
-		sb.WriteString(fmt.Sprintf("%s>%s ", ansiCyan, ansiReset)) // 一个小箭头
+		fmt.Fprintf(&sb, "%s%s%s ", ansiGray, callerStr, ansiReset)
+		fmt.Fprintf(&sb, "%s>%s ", ansiCyan, ansiReset) // 一个小箭头
 	}
 
 	// 5. 消息主体 (最重要！白色高亮)
-	sb.WriteString(fmt.Sprintf("%s%s%s ", ansiWhite, msgStr, ansiReset))
+	fmt.Fprintf(&sb, "%s%s%s ", ansiWhite, msgStr, ansiReset)
 
 	// 6. 业务属性 (放在最后，Key 青色，Value 默认色)
 	if len(attrs) > 0 {
@@ -363,9 +363,9 @@ func (h *coloredTextHandler) colorizeOutput(output string, level slog.Level) str
 			k, v := parts[0], parts[1]
 
 			// 格式: Key(青色)=Value(默认)
-			sb.WriteString(fmt.Sprintf("%s%s%s%s=%s%s",
+			fmt.Fprintf(&sb, "%s%s%s%s=%s%s",
 				ansiCyan, k, ansiReset,
-				ansiGray, ansiReset, v))
+				ansiGray, ansiReset, v)
 		}
 	}
 

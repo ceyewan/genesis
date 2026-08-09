@@ -666,7 +666,6 @@ func TestConnectorInterface(t *testing.T) {
 
 		// Verify interface compliance
 		var _ Connector = conn
-		var _ RedisConnector = conn
 
 		// Test basic interface methods
 		require.Equal(t, "default", conn.Name())
@@ -689,7 +688,6 @@ func TestConnectorInterface(t *testing.T) {
 		defer conn.Close()
 
 		var _ Connector = conn
-		var _ MySQLConnector = conn
 		var _ TypedConnector[*gorm.DB] = conn
 
 		require.Equal(t, "default", conn.Name())
@@ -705,7 +703,6 @@ func TestConnectorInterface(t *testing.T) {
 		defer conn.Close()
 
 		var _ Connector = conn
-		var _ EtcdConnector = conn
 
 		require.Equal(t, "default", conn.Name())
 		require.Nil(t, conn.GetClient()) // Not connected yet
@@ -719,7 +716,6 @@ func TestConnectorInterface(t *testing.T) {
 		require.NoError(t, err)
 
 		var _ Connector = conn
-		var _ NATSConnector = conn
 
 		require.Equal(t, "default", conn.Name())
 		require.Nil(t, conn.GetClient()) // Not connected yet
@@ -733,7 +729,6 @@ func TestConnectorInterface(t *testing.T) {
 		require.NoError(t, err)
 
 		var _ Connector = conn
-		var _ KafkaConnector = conn
 
 		require.Equal(t, "default", conn.Name())
 		require.Nil(t, conn.GetClient()) // Not connected yet
@@ -748,7 +743,6 @@ func TestConnectorInterface(t *testing.T) {
 		defer conn.Close()
 
 		var _ Connector = conn
-		var _ SQLiteConnector = conn
 		var _ TypedConnector[*gorm.DB] = conn
 
 		require.Equal(t, "default", conn.Name())
