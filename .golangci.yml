@@ -1,38 +1,55 @@
+version: "2"
+
 run:
   timeout: 5m
   modules-download-mode: readonly
 
 linters:
-  disable-all: true
+  default: none
   enable:
-    - errcheck      # 检查未处理的错误
-    - govet         # Go 官方静态分析工具
-    - ineffassign   # 检查无效赋值
-    - staticcheck   # 强大的静态分析工具（含 gosimple、unused 等）
-    - typecheck     # 类型检查
-    - gofumpt       # 检查代码格式（比 gofmt 更严格）
-    - goimports     # 检查 import 格式
-    - misspell      # 检查拼写错误
-    - unconvert     # 检查不必要的类型转换
-    - unparam       # 检查未使用的函数参数
-    - nilerr        # 检查 err != nil 时返回 nil 的错误逻辑
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - unconvert
+    - unparam
+    - nilerr
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - docs
+      - deploy
+      - third_party$
+      - builtin$
+      - (^|/)examples/
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unparam
 
-linters-settings:
-  gofumpt:
-    extra-rules: true
-  goimports:
-    local-prefixes: github.com/ceyewan/genesis
-  staticcheck:
-    checks:
-      - all
-      - "-SA1019" # 暂时允许使用 deprecated API
-
-issues:
-  exclude-dirs:
-    - docs
-    - deploy
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck   # 测试代码中允许忽略错误返回值
-        - unparam    # 测试辅助函数参数可能看起来未使用
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      extra-rules: true
+    goimports:
+      local-prefixes:
+        - github.com/ceyewan/genesis
+  exclusions:
+    generated: lax
+    paths:
+      - docs
+      - deploy
+      - third_party$
+      - builtin$
+      - (^|/)examples/
