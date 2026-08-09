@@ -513,7 +513,11 @@ func setupNATSContainer(t *testing.T) (*nats.NATSContainer, *NATSConfig) {
 	requireDocker(t)
 	ctx := context.Background()
 
-	container, err := nats.Run(ctx, "nats:2.10-alpine")
+	container, err := nats.Run(ctx, "nats:2.10-alpine",
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("Server is ready").WithStartupTimeout(30*time.Second),
+		),
+	)
 	require.NoError(t, err, "Failed to start NATS container")
 
 	host, err := container.Host(ctx)
