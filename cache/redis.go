@@ -31,6 +31,10 @@ func newRedis(conn connector.RedisConnector, cfg *DistributedConfig, injected se
 	if cfg == nil {
 		return nil, xerrors.New("cache: distributed config is nil")
 	}
+	client := conn.GetClient()
+	if client == nil {
+		return nil, xerrors.Wrap(connector.ErrClientNil, "cache: redis connector is not connected")
+	}
 
 	s := injected
 	if s == nil {
@@ -46,7 +50,7 @@ func newRedis(conn connector.RedisConnector, cfg *DistributedConfig, injected se
 	}
 
 	return &redisCache{
-		client:     conn.GetClient(),
+		client:     client,
 		serializer: s,
 		prefix:     cfg.KeyPrefix,
 		defaultTTL: cfg.DefaultTTL,
@@ -69,11 +73,14 @@ func (c *redisCache) unmarshal(data []byte, dest any) error {
 // --- 键值（Key-Value） ---
 
 func (c *redisCache) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
+	if ttl < 0 {
+		return ErrInvalidTTL
+	}
 	data, err := c.marshal(value)
 	if err != nil {
 		return err
 	}
-	if ttl <= 0 {
+	if ttl == 0 {
 		ttl = c.defaultTTL
 	}
 	if err := c.client.Set(ctx, c.getKey(key), data, ttl).Err(); err != nil {
@@ -108,7 +115,10 @@ func (c *redisCache) Has(ctx context.Context, key string) (bool, error) {
 }
 
 func (c *redisCache) Expire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
-	if ttl <= 0 {
+	if ttl < 0 {
+		return false, ErrInvalidTTL
+	}
+	if ttl == 0 {
 		ttl = c.defaultTTL
 	}
 	ok, err := c.client.Expire(ctx, c.getKey(key), ttl).Result()
@@ -293,11 +303,14 @@ func (c *redisCache) MGet(ctx context.Context, keys []string, destSlice any) err
 }
 
 func (c *redisCache) MSet(ctx context.Context, items map[string]any, ttl time.Duration) error {
+	if ttl < 0 {
+		return ErrInvalidTTL
+	}
 	if len(items) == 0 {
 		return nil
 	}
 
-	if ttl <= 0 {
+	if ttl == 0 {
 		ttl = c.defaultTTL
 	}
 

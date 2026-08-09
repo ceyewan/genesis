@@ -8,6 +8,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -21,12 +22,68 @@ func TestNewDistributed_Unit(t *testing.T) {
 		}
 	})
 
+	t.Run("unconnected connector", func(t *testing.T) {
+		redisConn, err := connector.NewRedis(&connector.RedisConfig{Addr: "127.0.0.1:6379"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = NewDistributed(&DistributedConfig{Driver: DriverRedis}, WithRedisConnector(redisConn))
+		if !xerrors.Is(err, connector.ErrClientNil) {
+			t.Fatalf("expected ErrClientNil, got %v", err)
+		}
+	})
+
 	t.Run("valid local config", func(t *testing.T) {
 		local, err := NewLocal(&LocalConfig{Driver: DriverOtter, MaxEntries: 32}, WithLogger(logger))
 		if err != nil {
 			t.Fatalf("failed to create local cache: %v", err)
 		}
 		defer local.Close()
+	})
+}
+
+func TestNegativeDurationsAreRejected(t *testing.T) {
+	t.Run("distributed default TTL", func(t *testing.T) {
+		_, err := NewDistributed(&DistributedConfig{DefaultTTL: -time.Second})
+		if !xerrors.Is(err, ErrInvalidTTL) {
+			t.Fatalf("expected ErrInvalidTTL, got %v", err)
+		}
+	})
+
+	t.Run("local default TTL", func(t *testing.T) {
+		_, err := NewLocal(&LocalConfig{DefaultTTL: -time.Second})
+		if !xerrors.Is(err, ErrInvalidTTL) {
+			t.Fatalf("expected ErrInvalidTTL, got %v", err)
+		}
+	})
+
+	t.Run("multi TTLs", func(t *testing.T) {
+		local, err := NewLocal(&LocalConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer local.Close()
+
+		for _, cfg := range []*MultiConfig{
+			{LocalTTL: -time.Second},
+			{BackfillTTL: -time.Second},
+		} {
+			_, err = NewMulti(local, newMockDistributed(), cfg)
+			if !xerrors.Is(err, ErrInvalidTTL) {
+				t.Fatalf("expected ErrInvalidTTL for %+v, got %v", cfg, err)
+			}
+		}
+	})
+
+	t.Run("operation TTL", func(t *testing.T) {
+		local, err := NewLocal(&LocalConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer local.Close()
+		if err := local.Set(context.Background(), "key", "value", -time.Second); !xerrors.Is(err, ErrInvalidTTL) {
+			t.Fatalf("expected ErrInvalidTTL, got %v", err)
+		}
 	})
 }
 

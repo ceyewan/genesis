@@ -14,11 +14,16 @@
 ### NATS JetStream
 
 ```go
-natsConn, _ := connector.NewNATS(&connector.NATSConfig{
+natsConn, err := connector.NewNATS(&connector.NATSConfig{
     URL: "nats://localhost:4222",
 })
-_ = natsConn.Connect(ctx)
+if err != nil {
+    return err
+}
 defer natsConn.Close()
+if err := natsConn.Connect(ctx); err != nil {
+    return err
+}
 
 q, err := mq.New(&mq.Config{
     Driver: mq.DriverNATSJetStream,
@@ -39,8 +44,10 @@ if err != nil {
 }
 defer sub.Unsubscribe()
 
-_ = q.Publish(ctx, "orders.created", []byte(`{"id": 123}`),
-    mq.WithHeader("trace-id", "abc123"))
+if err := q.Publish(ctx, "orders.created", []byte(`{"id": 123}`),
+    mq.WithHeader("trace-id", "abc123")); err != nil {
+    return err
+}
 ```
 
 JetStream 下 `Publish` 只有在 broker 返回 `PubAck` 后才返回 nil；它不是“只写入客户端 socket 即成功”。退出时可用 `q.Drain(ctx)` 停止新投递并等待已交付 Handler 完成。`Close()` 使用 5 秒上限强制停止，适合作为兜底清理。
@@ -48,11 +55,16 @@ JetStream 下 `Publish` 只有在 broker 返回 `PubAck` 后才返回 nil；它�
 ### Redis Stream
 
 ```go
-redisConn, _ := connector.NewRedis(&connector.RedisConfig{
+redisConn, err := connector.NewRedis(&connector.RedisConfig{
     Addr: "localhost:6379",
 })
-_ = redisConn.Connect(ctx)
+if err != nil {
+    return err
+}
 defer redisConn.Close()
+if err := redisConn.Connect(ctx); err != nil {
+    return err
+}
 
 q, err := mq.New(&mq.Config{
     Driver: mq.DriverRedisStream,
@@ -65,10 +77,13 @@ if err != nil {
 }
 defer q.Close()
 
-sub, _ := q.Subscribe(ctx, "events", handler,
+sub, err := q.Subscribe(ctx, "events", handler,
     mq.WithQueueGroup("event-processors"),
     mq.WithDurable("worker-1"),
     mq.WithBatchSize(50))
+if err != nil {
+    return err
+}
 defer sub.Unsubscribe()
 ```
 
@@ -92,6 +107,9 @@ defer sub.Unsubscribe()
 | `WithDurable(name)` | 消费者实例名 | JetStream: 按 topic 隔离的 durable consumer 逻辑名（QueueGroup 为空时）；Redis: consumer name |
 | `WithBatchSize(n)` | 单次拉取大小，默认 10 | Redis 有效；JetStream 当前无效（push 模式） |
 | `WithMaxInflight(n)` | 最大在途消息数 | JetStream 对应 `MaxAckPending`；Redis 无对应 |
+| `FromBeginning()` | 新建 consumer 从保留消息起点消费（默认） | 两者 |
+| `FromLatest()` | 新建 consumer 只消费订阅后到达的消息 | 两者 |
+| `FromID(id)` | 从显式后端位置开始；JetStream 使用 Genesis sequence ID | 两者，ID 格式不同 |
 
 ## 中间件
 

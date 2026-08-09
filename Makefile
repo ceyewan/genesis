@@ -80,6 +80,8 @@ godoc-artifacts:
 		name=$$(echo "$$pkg" | tr '/.' '__'); \
 		go doc -all "$$pkg" > "artifacts/godoc/$$name.txt" || exit 1; \
 	done
+	@count=$$(find artifacts/godoc -type f -name '*.txt' | wc -l | tr -d ' '); \
+	test "$$count" = "18" || { echo "expected 18 GoDoc artifacts, got $$count"; exit 1; }
 
 examples-check:
 	@go test ./examples/...

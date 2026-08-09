@@ -1,7 +1,17 @@
 package breaker_test
 
-import "github.com/ceyewan/genesis/breaker"
+import (
+	"context"
+
+	"github.com/ceyewan/genesis/breaker"
+)
 
 func Example() {
-	_, _ = breaker.New(&breaker.Config{})
+	b, err := breaker.New(&breaker.Config{})
+	if err != nil {
+		return
+	}
+	_, _ = b.Execute(context.Background(), "payments", func() (any, error) {
+		return "ok", nil
+	})
 }

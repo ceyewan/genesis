@@ -1,8 +1,16 @@
 package ratelimit_test
 
-import "github.com/ceyewan/genesis/ratelimit"
+import (
+	"context"
+
+	"github.com/ceyewan/genesis/ratelimit"
+)
 
 func Example() {
-	limiter := ratelimit.Discard()
+	limiter, err := ratelimit.New(&ratelimit.Config{Driver: ratelimit.DriverStandalone})
+	if err != nil {
+		return
+	}
 	defer limiter.Close()
+	_, _ = limiter.Allow(context.Background(), "user:42", ratelimit.Limit{Rate: 10, Burst: 20})
 }

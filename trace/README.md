@@ -55,11 +55,14 @@ defer shutdown(context.Background())
 
 ```go
 // 1. 启动时初始化（安装全局 TracerProvider）
-shutdown, _ := trace.Init(&trace.Config{ServiceName: "my-service", Endpoint: "localhost:4317"})
+shutdown, err := trace.Init(&trace.Config{ServiceName: "my-service", Endpoint: "localhost:4317"})
+if err != nil { return err }
 defer shutdown(ctx)
 
 // 2. 创建 logger（依赖全局 TracerProvider 已就位）
-logger, _ := clog.New(&clog.Config{Level: "info", Format: "json"}, clog.WithTraceContext())
+logger, err := clog.New(&clog.Config{Level: "info", Format: "json"}, clog.WithTraceContext())
+if err != nil { return err }
+defer logger.Close()
 
 // 3. 注册中间件（为每个请求创建 Span，写入 ctx）
 r := gin.New()
@@ -118,7 +121,7 @@ defer consumeSpan.End()
 
 - `Init()` 通常应在应用启动时调用一次
 - 返回的 `shutdown` 函数由调用方负责执行；关闭后若全局状态仍指向该实例，会回退到安全默认值
-- `Init` 和 `Discard` 返回的 shutdown 可并发重复调用，并遵守 context deadline
+- `Init` 和 `InstallLocalProvider` 返回的 shutdown 可并发重复调用，并遵守 context deadline
 - `InstallLocalProvider()` 虽然不导出 trace 数据，但仍然会修改全局 tracing 状态
 
 ## 推荐实践

@@ -65,6 +65,16 @@ func TestNew_InvalidDriver(t *testing.T) {
 	}
 }
 
+func TestNewRejectsNegativeDurations(t *testing.T) {
+	for _, cfg := range []*Config{
+		{Driver: DriverRedis, DefaultTTL: -time.Second},
+		{Driver: DriverRedis, RetryInterval: -time.Second},
+	} {
+		_, err := New(cfg)
+		require.ErrorIs(t, err, ErrInvalidTTL)
+	}
+}
+
 func TestNew_MissingConnector(t *testing.T) {
 	cfg := &Config{
 		Driver: DriverRedis,

@@ -35,10 +35,10 @@ func (c *Config) setDefaults() {
 	if c == nil {
 		return
 	}
-	if c.DefaultTTL <= 0 {
+	if c.DefaultTTL == 0 {
 		c.DefaultTTL = 10 * time.Second
 	}
-	if c.RetryInterval <= 0 {
+	if c.RetryInterval == 0 {
 		c.RetryInterval = 100 * time.Millisecond
 	}
 }
@@ -49,6 +49,9 @@ func (c *Config) validate() error {
 	}
 	if c.Driver == "" {
 		return xerrors.New("dlock: driver is required")
+	}
+	if c.DefaultTTL < 0 || c.RetryInterval < 0 {
+		return xerrors.Wrap(ErrInvalidTTL, "default_ttl and retry_interval must not be negative")
 	}
 	switch c.Driver {
 	case DriverRedis, DriverEtcd:

@@ -1,11 +1,18 @@
 package trace_test
 
-import "github.com/ceyewan/genesis/trace"
+import (
+	"context"
+	"time"
+
+	"github.com/ceyewan/genesis/trace"
+)
 
 func Example() {
 	shutdown, err := trace.InstallLocalProvider("worker")
 	if err != nil {
 		return
 	}
-	_ = shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = shutdown(ctx)
 }

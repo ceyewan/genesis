@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 // UnaryServerInterceptor 创建 gRPC 一元服务端拦截器
@@ -79,7 +80,7 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 			if i.logger != nil {
 				i.logger.Error("failed to wait for gRPC idem result", clog.Error(err), clog.String("key", key))
 			}
-			if err == ErrKeyConflict {
+			if xerrors.Is(err, ErrKeyConflict) {
 				return nil, status.Error(codes.AlreadyExists, err.Error())
 			}
 			return nil, err

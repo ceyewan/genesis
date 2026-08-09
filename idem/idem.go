@@ -21,8 +21,10 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/xerrors"
 
+	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
 )
 
@@ -73,10 +75,10 @@ type Idempotency interface {
 	// GinMiddleware 创建 Gin 框架中间件
 	//
 	// 使用示例：
-	//   middleware := idem.GinMiddleware().(func(*gin.Context))
+	//   middleware := idem.GinMiddleware()
 	//   router.POST("/orders", middleware, handler)
 	//   // 或者直接使用（Gin 会自动处理）：
-	//   router.Use(idem.GinMiddleware().(func(*gin.Context)))
+	//   router.Use(idem.GinMiddleware())
 	//
 	// 工作原理：
 	//   1. 从 HTTP 请求头 X-Idempotency-Key 提取幂等性键
@@ -86,14 +88,8 @@ type Idempotency interface {
 	// 参数：
 	//   - opts: 中间件选项，可自定义请求头名称等
 	//
-	// 返回：
-	//   - func(*gin.Context) 类型的中间件函数
-	//
-	// 注意：
-	//   返回类型为 interface{} 是为了避免强依赖 gin 包，
-	//   实际返回的是 func(*gin.Context) 类型。
-	//   传给 gin 的 router 时需要显式类型断言为 gin.HandlerFunc。
-	GinMiddleware(opts ...MiddlewareOption) any
+	// 返回 Gin 原生的 HandlerFunc，可直接传给 router.Use/POST 等方法。
+	GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc
 
 	// UnaryServerInterceptor 创建 gRPC 一元服务端拦截器
 	//
@@ -175,6 +171,9 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 	case DriverRedis:
 		if opt.redisConn == nil {
 			return nil, xerrors.New("idem: redis connector is required, use WithRedisConnector")
+		}
+		if opt.redisConn.GetClient() == nil {
+			return nil, xerrors.Wrap(connector.ErrClientNil, "idem: redis connector is not connected")
 		}
 		if logger != nil {
 			logger.Info("creating idem component",

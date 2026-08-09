@@ -62,11 +62,14 @@ func newLocal(cfg *LocalConfig, injected serializer.Serializer, logger clog.Logg
 }
 
 func (c *localCache) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
+	if ttl < 0 {
+		return ErrInvalidTTL
+	}
 	data, err := c.serializer.Marshal(value)
 	if err != nil {
 		return err
 	}
-	if ttl <= 0 {
+	if ttl == 0 {
 		ttl = c.defaultTTL
 	}
 	// 单次 Set 同时写入数据与 TTL，避免两步操作之间的竞态。
@@ -93,11 +96,14 @@ func (c *localCache) Has(ctx context.Context, key string) (bool, error) {
 }
 
 func (c *localCache) Expire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	if ttl < 0 {
+		return false, ErrInvalidTTL
+	}
 	existing, ok := c.cache.GetIfPresent(key)
 	if !ok {
 		return false, nil
 	}
-	if ttl <= 0 {
+	if ttl == 0 {
 		ttl = c.defaultTTL
 	}
 	c.cache.Set(key, localEntry{data: existing.data, ttl: ttl})

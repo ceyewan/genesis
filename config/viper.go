@@ -100,8 +100,6 @@ func (l *loader) Load(ctx context.Context) error {
 	if err := l.loadEnvironmentConfig(next); err != nil {
 		return err
 	}
-	l.materializeEnvironment(next)
-
 	if err := l.validateViper(next); err != nil {
 		return err
 	}
@@ -113,29 +111,6 @@ func (l *loader) Load(ctx context.Context) error {
 	l.captureCurrentValues()
 
 	return nil
-}
-
-// materializeEnvironment makes AutomaticEnv values visible to Unmarshal.
-// Viper resolves AutomaticEnv from Get, but does not add those keys to
-// AllSettings, which is the source used by Unmarshal. Both the literal and
-// dotted forms are recorded because GENESIS_SERVICE_NAME may address a root
-// `service_name` field while GENESIS_APP_NAME commonly addresses `app.name`.
-func (l *loader) materializeEnvironment(v *viper.Viper) {
-	prefix := strings.ToUpper(l.cfg.EnvPrefix) + "_"
-	for _, kv := range os.Environ() {
-		name, value, ok := strings.Cut(kv, "=")
-		if !ok || !strings.HasPrefix(strings.ToUpper(name), prefix) {
-			continue
-		}
-		key := strings.ToLower(name[len(prefix):])
-		if key == "" {
-			continue
-		}
-		v.Set(key, value)
-		if dotted := strings.ReplaceAll(key, "_", "."); dotted != key {
-			v.Set(dotted, value)
-		}
-	}
 }
 
 // loadDotEnv 尝试从项目目录加载 .env 文件。
@@ -211,16 +186,90 @@ func (l *loader) Get(key string) any {
 
 // Unmarshal 将整个配置反序列化到结构体
 func (l *loader) Unmarshal(v any) error {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.materializeEnvironmentForTarget("", v)
 	return l.v.Unmarshal(v)
 }
 
 // UnmarshalKey 将特定配置 key 反序列化到结构体
 func (l *loader) UnmarshalKey(key string, v any) error {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.materializeEnvironmentForTarget(key, v)
 	return l.v.UnmarshalKey(key, v)
+}
+
+// materializeEnvironmentForTarget binds environment values using the target
+// schema. An underscore is valid inside a field name, so an environment name
+// cannot be safely converted to a dotted path without knowing that schema.
+func (l *loader) materializeEnvironmentForTarget(root string, target any) {
+	t := reflect.TypeOf(target)
+	if t == nil {
+		return
+	}
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return
+	}
+	l.materializeStructEnvironment(root, t)
+}
+
+func (l *loader) materializeStructEnvironment(root string, t reflect.Type) {
+	for field := range t.Fields() {
+		if field.PkgPath != "" {
+			continue
+		}
+		name, skip, squash := configFieldName(field)
+		if skip {
+			continue
+		}
+		path := root
+		if !squash {
+			if path != "" {
+				path += "."
+			}
+			path += name
+		}
+		fieldType := field.Type
+		for fieldType.Kind() == reflect.Pointer {
+			fieldType = fieldType.Elem()
+		}
+		if fieldType.Kind() == reflect.Struct && fieldType.PkgPath() != "time" {
+			l.materializeStructEnvironment(path, fieldType)
+			continue
+		}
+		envName := strings.ToUpper(l.cfg.EnvPrefix + "_" + strings.NewReplacer(".", "_", "-", "_").Replace(path))
+		if value, ok := os.LookupEnv(envName); ok {
+			l.v.Set(path, value)
+		}
+	}
+}
+
+func configFieldName(field reflect.StructField) (name string, skip, squash bool) {
+	name = field.Tag.Get("mapstructure")
+	if name == "" {
+		name = field.Tag.Get("yaml")
+	}
+	if name == "" {
+		name = field.Tag.Get("json")
+	}
+	parts := strings.Split(name, ",")
+	name = parts[0]
+	if name == "-" {
+		return "", true, false
+	}
+	for _, option := range parts[1:] {
+		if option == "squash" {
+			squash = true
+		}
+	}
+	if name == "" {
+		name = strings.ToLower(field.Name)
+	}
+	return name, false, squash
 }
 
 // Watch 订阅特定配置 key 的变更。
@@ -514,8 +563,6 @@ func (l *loader) reloadAndNotify(event fsnotify.Event) {
 		)
 		return
 	}
-	l.materializeEnvironment(next)
-
 	if err := l.validateViper(next); err != nil {
 		l.logger.Warn("配置热更新失败：配置校验失败",
 			clog.String("event", event.Op.String()),

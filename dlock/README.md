@@ -4,7 +4,7 @@
 
 ## 组件定位
 
-- 提供 `Lock` / `TryLock` / `Unlock` / `Close` 四个核心方法
+- 提供 `Lock` / `TryLock` / `Unlock` / `Lost` / `Close` 五个核心方法
 - 支持 Redis token 校验解锁和 Etcd lease/mutex 两种实现
 - 在锁持有期间自动续期，减少长任务执行时的锁过期风险
 - `Close()` 会停止续期，并尽力释放当前 `Locker` 已持有的锁
@@ -15,11 +15,16 @@
 ## 快速开始
 
 ```go
+ctx := context.Background()
 redisConn, err := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
 if err != nil {
     return err
 }
 defer redisConn.Close()
+
+if err := redisConn.Connect(ctx); err != nil {
+    return err
+}
 
 locker, err := dlock.New(&dlock.Config{
     Driver:        dlock.DriverRedis,
@@ -32,11 +37,17 @@ if err != nil {
 }
 defer locker.Close()
 
-ctx := context.Background()
 if err := locker.Lock(ctx, "inventory:42"); err != nil {
     return err
 }
 defer locker.Unlock(ctx, "inventory:42")
+
+lost := locker.Lost("inventory:42")
+go func() {
+    if err, ok := <-lost; ok {
+        cancelCriticalSection(err)
+    }
+}()
 
 // critical section
 ```
@@ -48,11 +59,12 @@ type Locker interface {
     Lock(ctx context.Context, key string, opts ...LockOption) error
     TryLock(ctx context.Context, key string, opts ...LockOption) (bool, error)
     Unlock(ctx context.Context, key string) error
+    Lost(key string) <-chan error
     Close() error
 }
 ```
 
-`Lock` 适合“拿不到锁就不能继续”的场景，内部按 `RetryInterval` 重试；`TryLock` 适合任务竞选这类“拿不到就跳过”的场景；`Unlock` 只允许持有者释放；`Close` 用于结束当前 `Locker` 生命周期，停止续期并清理它持有的锁。
+`Lock` 适合“拿不到锁就不能继续”的场景，内部按 `RetryInterval` 重试；`TryLock` 适合任务竞选这类“拿不到就跳过”的场景；`Unlock` 只允许持有者释放；`Lost` 用于在关键区间监听异步所有权丢失；`Close` 用于结束当前 `Locker` 生命周期，停止续期并清理它持有的锁。
 
 ## TTL 语义
 

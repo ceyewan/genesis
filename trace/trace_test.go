@@ -118,6 +118,7 @@ func TestInitValidatesConfig(t *testing.T) {
 		{name: "invalid sampler low", cfg: &Config{ServiceName: "svc", Endpoint: "localhost:4317", Sampler: -0.1}},
 		{name: "invalid sampler high", cfg: &Config{ServiceName: "svc", Endpoint: "localhost:4317", Sampler: 1.1}},
 		{name: "invalid batcher", cfg: &Config{ServiceName: "svc", Endpoint: "localhost:4317", Sampler: 1, Batcher: "weird"}},
+		{name: "negative exporter timeout", cfg: &Config{ServiceName: "svc", Endpoint: "localhost:4317", Sampler: 1, ExporterTimeout: -time.Second}},
 	}
 
 	for _, tt := range tests {

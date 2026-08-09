@@ -64,6 +64,9 @@ func NewSequencer(cfg *SequencerConfig, opts ...Option) (Sequencer, error) {
 		if opt.RedisConnector == nil {
 			return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required")
 		}
+		if opt.RedisConnector.GetClient() == nil {
+			return nil, xerrors.Wrap(connector.ErrClientNil, "idgen: redis connector is not connected")
+		}
 		return newRedisSequencer(&config, opt.RedisConnector, opt.Logger, seqCounter)
 	default:
 		return nil, xerrors.WithCode(ErrInvalidInput, "unsupported_driver")

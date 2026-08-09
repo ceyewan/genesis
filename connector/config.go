@@ -55,6 +55,9 @@ func (c *MySQLConfig) setDefaults() {
 // validate 验证配置
 func (c *MySQLConfig) validate() error {
 	c.setDefaults()
+	if c.ConnMaxLifetime < 0 || c.ConnectTimeout < 0 {
+		return xerrors.Wrap(ErrConfig, "mysql durations must not be negative")
+	}
 	// 如果提供了 DSN，则跳过其他字段的校验
 	if c.DSN != "" {
 		return nil
@@ -120,6 +123,9 @@ func (c *RedisConfig) setDefaults() {
 // validate 验证配置
 func (c *RedisConfig) validate() error {
 	c.setDefaults()
+	if c.DialTimeout < 0 || c.ReadTimeout < 0 || c.WriteTimeout < 0 {
+		return xerrors.Wrap(ErrConfig, "redis durations must not be negative")
+	}
 	if c.Addr == "" {
 		return xerrors.Wrap(ErrConfig, "redis addr is required")
 	}
@@ -164,6 +170,9 @@ func (c *EtcdConfig) setDefaults() {
 // validate 验证配置
 func (c *EtcdConfig) validate() error {
 	c.setDefaults()
+	if c.DialTimeout < 0 || c.KeepAliveTime < 0 || c.KeepAliveTimeout < 0 {
+		return xerrors.Wrap(ErrConfig, "etcd durations must not be negative")
+	}
 	if len(c.Endpoints) == 0 {
 		return xerrors.Wrap(ErrConfig, "etcd endpoints are required")
 	}
@@ -210,6 +219,9 @@ func (c *NATSConfig) setDefaults() {
 // validate 验证配置
 func (c *NATSConfig) validate() error {
 	c.setDefaults()
+	if c.ConnectTimeout < 0 || c.ReconnectWait < 0 || c.PingInterval < 0 {
+		return xerrors.Wrap(ErrConfig, "nats durations must not be negative")
+	}
 	if c.URL == "" {
 		return xerrors.Wrap(ErrConfig, "nats url is required")
 	}
@@ -254,6 +266,9 @@ func (c *KafkaConfig) setDefaults() {
 // validate 验证配置
 func (c *KafkaConfig) validate() error {
 	c.setDefaults()
+	if c.ConnectTimeout < 0 || c.RequestTimeout < 0 {
+		return xerrors.Wrap(ErrConfig, "kafka durations must not be negative")
+	}
 	if len(c.Seed) == 0 {
 		return xerrors.Wrap(ErrConfig, "kafka seed brokers are required")
 	}
@@ -338,6 +353,9 @@ func (c *PostgreSQLConfig) setDefaults() {
 // validate 验证配置
 func (c *PostgreSQLConfig) validate() error {
 	c.setDefaults()
+	if c.ConnMaxLifetime < 0 || c.ConnectTimeout < 0 {
+		return xerrors.Wrap(ErrConfig, "postgresql durations must not be negative")
+	}
 	// 如果提供了 DSN，则跳过其他字段的校验
 	if c.DSN != "" {
 		return nil

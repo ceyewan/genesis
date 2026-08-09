@@ -712,6 +712,29 @@ func TestLoaderEnvOnlyUnmarshal(t *testing.T) {
 	}
 }
 
+func TestLoaderEnvOnlyUnmarshalPreservesUnderscoresInNestedField(t *testing.T) {
+	t.Setenv("REAUDIT_DATABASE_MAX_OPEN_CONNS", "42")
+
+	loader, err := New(&Config{Paths: []string{t.TempDir()}, EnvPrefix: "REAUDIT"})
+	require.NoError(t, err)
+	require.NoError(t, loader.Load(context.Background()))
+	require.Equal(t, "42", loader.Get("database.max_open_conns"))
+
+	var got struct {
+		Database struct {
+			MaxOpenConns int `mapstructure:"max_open_conns"`
+		} `mapstructure:"database"`
+	}
+	require.NoError(t, loader.Unmarshal(&got))
+	require.Equal(t, 42, got.Database.MaxOpenConns)
+
+	var database struct {
+		MaxOpenConns int `mapstructure:"max_open_conns"`
+	}
+	require.NoError(t, loader.UnmarshalKey("database", &database))
+	require.Equal(t, 42, database.MaxOpenConns)
+}
+
 func TestLoaderFailedLoadKeepsLastGoodSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

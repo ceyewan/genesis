@@ -78,11 +78,17 @@ func NewAllocator(cfg *AllocatorConfig, opts ...Option) (Allocator, error) {
 		if opt.RedisConnector == nil {
 			return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required")
 		}
+		if opt.RedisConnector.GetClient() == nil {
+			return nil, xerrors.Wrap(connector.ErrClientNil, "idgen: redis connector is not connected")
+		}
 		return newRedisAllocator(&config, opt.RedisConnector, opt.Logger)
 
 	case DriverEtcd:
 		if opt.EtcdConnector == nil {
 			return nil, xerrors.WithCode(ErrConnectorNil, "etcd_connector_required")
+		}
+		if opt.EtcdConnector.GetClient() == nil {
+			return nil, xerrors.Wrap(connector.ErrClientNil, "idgen: etcd connector is not connected")
 		}
 		return newEtcdAllocator(&config, opt.EtcdConnector, opt.Logger)
 

@@ -131,9 +131,7 @@ func startHTTPServer(logger clog.Logger, idem idem.Idempotency) (*http.Server, s
 	router := gin.New()
 
 	// 使用幂等性中间件
-	// 注意：GinMiddleware() 返回 interface{}，但实际类型是 func(*gin.Context)
-	// 可以直接传给 router，也可以显式转换为 func(*gin.Context)
-	router.POST("/orders", idem.GinMiddleware().(func(*gin.Context)), func(c *gin.Context) {
+	router.POST("/orders", idem.GinMiddleware(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"order_id": "order-123",
 			"status":   "created",
@@ -233,10 +231,10 @@ func demonstrateGRPCUnary(addr string) {
 	ctx2 := metadata.AppendToOutgoingContext(ctx, "x-idem-key", "grpc-order-001")
 	resp2, err := client.CreateOrder(ctx2, &pb.CreateOrderRequest{
 		IdempotencyKey: "grpc-order-001",
-		OrderId:        "order-002",
-		CustomerId:     "cust-002",
-		Amount:         199.99,
-		Description:    "Different Order",
+		OrderId:        "order-001",
+		CustomerId:     "cust-001",
+		Amount:         99.99,
+		Description:    "Test Order",
 	})
 	if err != nil {
 		fmt.Printf("  ✗ 调用失败: %v\n", err)

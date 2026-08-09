@@ -9,7 +9,7 @@ Genesis `metrics` 是 Genesis 的 L0 基础组件，核心职责是提供统一�
 - 当前实现采用全局模式：`New()` 在创建 `Meter` 的同时，也会安装全局 `MeterProvider`
 - 除通用 Counter / Gauge / Histogram 外，组件内置了 Gin 和 gRPC 服务端 RED 指标封装
 - 当配置了正数 `Port` 且 `Path` 非空时，组件会在同一进程内暴露 Prometheus HTTP 端点
-- `Shutdown()` 负责关闭 HTTP 服务和底层 provider，调用方应按“谁创建，谁关闭”原则调用一次
+- `Shutdown()` 负责关闭 HTTP 服务和底层 provider，可并发重复调用；每个调用者仍受自己的 context 约束
 
 ---
 
@@ -66,7 +66,7 @@ type Meter interface {
 
 第一，`New()` 当前采用**全局模式**。它不只是返回一个 `Meter`，还会安装 OpenTelemetry 全局 `MeterProvider`。这样做的好处是仓库里依赖全局 provider 的埋点库能立即共享同一套状态，代价是重复调用 `New()` 会覆盖之前安装的全局 provider。
 
-第二，`Shutdown()` 负责关闭 `metrics` 持有的所有资源，包括 Prometheus HTTP 服务和底层 `MeterProvider`。它不是幂等承诺接口，调用方应当按“谁创建，谁关闭”的原则使用它。
+第二，`Shutdown()` 负责关闭 `metrics` 持有的所有资源，包括 Prometheus HTTP 服务和底层 `MeterProvider`。它可并发重复调用，内部清理只启动一次，每个调用者独立遵守自己的 context；调用方仍应遵循“谁创建，谁关闭”。
 
 ---
 
@@ -126,7 +126,7 @@ type Meter interface {
 `metrics.New()` 的主链路可以概括为：
 
 ```text
-校验 Config -> 创建 resource -> 创建 Prometheus exporter -> 创建 MeterProvider -> 安装全局 provider -> 可选启动 HTTP 服务 -> 可选启动 runtime metrics
+校验 Config -> 创建 resource -> 创建 Prometheus exporter -> 创建 MeterProvider -> 可选启动 HTTP 服务 -> 可选启动 runtime metrics -> 安装全局 provider
 ```
 
 这里最重要的实现约束是两个。

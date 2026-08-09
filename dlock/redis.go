@@ -248,7 +248,7 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 	go l.watchdog(entry, redisKey)
 
 	if l.logger != nil {
-		l.logger.InfoContext(ctx, "lock acquired", clog.String("key", key), clog.String("token", token))
+		l.logger.InfoContext(ctx, "lock acquired", clog.String("key", key))
 	}
 	return entry, nil
 }

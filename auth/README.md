@@ -160,18 +160,15 @@ type TokenPair struct {
 | `Audience` | 空 | 可选受众约束 |
 | `AccessTokenTTL` | `15m` | access token 有效期 |
 | `RefreshTokenTTL` | `7d` | refresh token 有效期 |
-| `TokenLookup` | 空 | access token 提取方式，留空使用默认多源查找 |
+| `TokenLookup` | `header:Authorization` | access token 提取方式；可显式改为单一 query 或 cookie 来源 |
 | `TokenHeadName` | `Bearer` | Authorization header 前缀 |
 
 ### Access Token 提取方式
 
 `GinMiddleware()` 内部只负责提取和校验 **access token**。
 
-当 `TokenLookup` 留空时，提取顺序为：
-
-1. `Authorization: Bearer <token>`
-2. `?token=<token>`
-3. `jwt=<token>` cookie
+当 `TokenLookup` 留空时，只读取 `Authorization: Bearer <token>`。默认不从
+query 或 cookie 读取 token，避免 token 意外进入 URL、日志或浏览器 cookie 发送路径。
 
 如果希望只从固定来源提取，可配置：
 

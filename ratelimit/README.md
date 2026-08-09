@@ -64,6 +64,9 @@ if err != nil {
 	panic(err)
 }
 defer redisConn.Close()
+if err := redisConn.Connect(ctx); err != nil {
+	panic(err)
+}
 
 limiter, err := ratelimit.New(&ratelimit.Config{
 	Driver: ratelimit.DriverDistributed,
@@ -74,6 +77,7 @@ limiter, err := ratelimit.New(&ratelimit.Config{
 if err != nil {
 	panic(err)
 }
+defer limiter.Close()
 
 allowed, err := limiter.Allow(ctx, "user:123", ratelimit.Limit{
 	Rate:  100,

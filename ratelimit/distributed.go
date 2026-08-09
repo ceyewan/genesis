@@ -86,6 +86,10 @@ func newDistributed(
 	if redisConn == nil {
 		return nil, ErrConnectorNil
 	}
+	client := redisConn.GetClient()
+	if client == nil {
+		return nil, xerrors.Wrap(connector.ErrClientNil, "ratelimit: redis connector is not connected")
+	}
 
 	if cfg == nil {
 		cfg = &DistributedConfig{}
@@ -94,7 +98,7 @@ func newDistributed(
 	prefix := cfg.Prefix
 
 	l := &distributedLimiter{
-		client: redisConn.GetClient(),
+		client: client,
 		prefix: prefix,
 		logger: logger,
 		script: redis.NewScript(luaScript),

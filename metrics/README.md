@@ -29,7 +29,10 @@ if err != nil {
 }
 defer meter.Shutdown(ctx)
 
-counter, _ := meter.Counter("http_requests_total", "HTTP 请求总数")
+counter, err := meter.Counter("http_requests_total", "HTTP 请求总数")
+if err != nil {
+    return err
+}
 counter.Inc(ctx, metrics.L("method", "GET"), metrics.L("status", "200"))
 ```
 
@@ -41,7 +44,7 @@ counter.Inc(ctx, metrics.L("method", "GET"), metrics.L("status", "200"))
 - `Version`、`InstanceID`、`Environment` 对应统一资源字段 `service.version`、`service.instance.id`、`deployment.environment`
 - `Port > 0` 且 `Path` 非空时，组件会启动 Prometheus HTTP 端点
 - `ListenAddress` 控制监听网卡；开发环境建议 `127.0.0.1`，生产环境按部署网络显式配置
-- 只要 `Port <= 0` 或 `Path` 为空，就不会启动 HTTP 服务，只保留进程内指标能力
+- 只要 `Port == 0` 或 `Path` 为空，就不会启动 HTTP 服务，只保留进程内指标能力；负端口返回配置错误
 
 当前若 metrics HTTP 端口监听失败，`New()` 会直接返回错误，而不是在后台异步失败。
 

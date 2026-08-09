@@ -179,6 +179,9 @@ func validateConfig(cfg *Config) error {
 	if cfg.Sampler < 0 || cfg.Sampler > 1 {
 		return xerrors.New("sampler must be between 0 and 1")
 	}
+	if cfg.ExporterTimeout < 0 {
+		return xerrors.New("exporter_timeout must not be negative")
+	}
 	if cfg.Batcher != "" && cfg.Batcher != BatcherBatch && cfg.Batcher != BatcherImmediate {
 		return xerrors.New("batcher must be \"batch\" or \"immediate\"")
 	}

@@ -8,7 +8,7 @@
 // 语义约定：
 //   - Get 等读取操作未命中时返回 ErrMiss。
 //   - Has 不返回 ErrMiss，而是通过 bool 表达存在性。
-//   - Set 和 Expire 在 ttl<=0 时使用组件配置中的 DefaultTTL。
+//   - Set 和 Expire 在 ttl=0 时使用组件配置中的 DefaultTTL；负值返回 ErrInvalidTTL。
 //   - Local 与 Multi 仅提供 KV 能力；Hash、Sorted Set、Batch 仅由 Distributed 提供。
 //   - RawClient 用于 Pipeline、Lua 脚本等高级场景，不保证跨后端兼容。
 //
@@ -39,7 +39,7 @@ import (
 // KV 定义缓存组件的稳定 KV 能力。
 //
 // 这是 Local、Distributed 和 Multi 共享的最小公共语义。调用方可以依赖如下约定：
-//   - Set 在 ttl>0 时使用显式 TTL，在 ttl<=0 时使用组件的 DefaultTTL。
+//   - Set 在 ttl>0 时使用显式 TTL，在 ttl=0 时使用组件的 DefaultTTL，负值非法。
 //   - Get 未命中时返回 ErrMiss。
 //   - Delete 删除不存在的 key 不视为错误。
 //   - Expire 返回值中的 bool 表示 key 是否存在。
@@ -52,7 +52,7 @@ type KV interface {
 	Delete(ctx context.Context, key string) error
 	// Has 判断 key 是否存在。
 	Has(ctx context.Context, key string) (bool, error)
-	// Expire 更新 key 的 TTL；ttl<=0 时使用组件配置的 DefaultTTL；bool=false 表示 key 不存在。
+	// Expire 更新 key 的 TTL；ttl=0 时使用组件配置的 DefaultTTL，负值返回 ErrInvalidTTL；bool=false 表示 key 不存在。
 	Expire(ctx context.Context, key string, ttl time.Duration) (bool, error)
 	// Close 释放缓存实例拥有的资源。
 	Close() error
@@ -178,6 +178,9 @@ func NewMulti(local Local, remote Distributed, cfg *MultiConfig) (Multi, error) 
 		cfg = &config
 	}
 	cfg.setDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 	return newMulti(local, remote, cfg)
 }
 

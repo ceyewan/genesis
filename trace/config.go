@@ -43,7 +43,7 @@ type Config struct {
 }
 
 func (c *Config) setDefaults() {
-	if c.ExporterTimeout <= 0 {
+	if c.ExporterTimeout == 0 {
 		c.ExporterTimeout = 5 * time.Second
 	}
 }

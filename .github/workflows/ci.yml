@@ -6,6 +6,16 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: SemVer tag proposed after this preflight succeeds
+        required: true
+        type: string
+      candidate_sha:
+        description: Full commit SHA to verify before creating the tag
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -15,17 +25,21 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26"
+  GO_VERSION: "1.26.1"
   GOLANGCI_LINT_VERSION: "v1.64.8"
   BUF_VERSION: "v1.66.1"
+  ACTIONLINT_VERSION: "v1.7.7"
 
 jobs:
   test:
     name: Test + Testcontainers
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: actions/setup-go@v5.5.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -37,7 +51,7 @@ jobs:
           set -o pipefail
           mkdir -p artifacts
           go test -count=1 -json ./... | tee artifacts/test-normal.json
-      - uses: actions/upload-artifact@v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: testcontainers-normal-${{ github.sha }}
@@ -45,10 +59,13 @@ jobs:
 
   race:
     name: Race + Testcontainers
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: actions/setup-go@v5.5.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -60,7 +77,7 @@ jobs:
           set -o pipefail
           mkdir -p artifacts
           go test -race -count=1 -json ./... | tee artifacts/test-race.json
-      - uses: actions/upload-artifact@v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: testcontainers-race-${{ github.sha }}
@@ -68,10 +85,13 @@ jobs:
 
   quality:
     name: Lint, modernize, Buf, comments
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: actions/setup-go@v5.5.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -79,6 +99,13 @@ jobs:
         run: |
           go install github.com/golangci/golangci-lint/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}
           go install github.com/bufbuild/buf/cmd/buf@${BUF_VERSION}
+          go install github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}
+      - name: Validate workflow syntax
+        run: actionlint
+      - name: Check module drift
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
       - name: Run golangci-lint
         run: golangci-lint run
       - name: Check exported comments
@@ -90,10 +117,13 @@ jobs:
 
   api-docs:
     name: Build, API, examples, GoDoc
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: actions/setup-go@v5.5.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -105,7 +135,7 @@ jobs:
         run: make api-inventory-check
       - name: Generate GoDoc evidence
         run: make godoc-artifacts
-      - uses: actions/upload-artifact@v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: v1-api-godoc-${{ github.sha }}
           path: |
@@ -116,9 +146,24 @@ jobs:
 
   release-gate:
     name: Release gate
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: [test, race, quality, api-docs]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: Confirm all v1 gates passed
-        run: echo "All release gates passed for ${GITHUB_REF_NAME}"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+      - name: Validate release candidate identity
+        env:
+          CANDIDATE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_tag || github.ref_name }}
+          CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pre_id='(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
+          semver="^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-${pre_id}(\\.${pre_id})*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+          [[ "${CANDIDATE_TAG}" =~ ${semver} ]]
+          test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
+          echo "All release gates passed for ${CANDIDATE_TAG} at ${CANDIDATE_SHA}"

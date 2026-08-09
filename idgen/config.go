@@ -143,10 +143,10 @@ func (c *AllocatorConfig) setDefaults() {
 	if c.KeyPrefix == "" {
 		c.KeyPrefix = "genesis:idgen:worker"
 	}
-	if c.MaxID <= 0 {
+	if c.MaxID == 0 {
 		c.MaxID = 32
 	}
-	if c.TTL <= 0 {
+	if c.TTL == 0 {
 		c.TTL = 30 * time.Second
 	}
 }

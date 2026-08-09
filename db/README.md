@@ -81,13 +81,22 @@ type DB interface {
 `connector` 拥有连接生命周期，`db` 只借用，无需调用 `db.Close()`：
 
 ```go
-mysqlConn, _ := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
+mysqlConn, err := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
+if err != nil {
+    return err
+}
 defer mysqlConn.Close()
+if err := mysqlConn.Connect(ctx); err != nil {
+    return err
+}
 
-database, _ := db.New(&db.Config{Driver: "mysql"},
+database, err := db.New(&db.Config{Driver: "mysql"},
     db.WithMySQLConnector(mysqlConn),
     db.WithLogger(logger),
 )
+if err != nil {
+    return err
+}
 // database.Close() 是 no-op，可以不调用
 ```
 

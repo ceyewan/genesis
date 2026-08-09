@@ -114,11 +114,17 @@ func newTransport(cfg *Config, o *options) (transport, error) {
 		if o.natsConnector == nil {
 			return nil, xerrors.New("NATS connector required, use WithNATSConnector")
 		}
+		if o.natsConnector.GetClient() == nil {
+			return nil, xerrors.Wrap(connector.ErrClientNil, "mq: NATS connector is not connected")
+		}
 		return newNATSJetStreamTransport(o.natsConnector, cfg.JetStream, o.logger)
 
 	case DriverRedisStream:
 		if o.redisConnector == nil {
 			return nil, xerrors.New("Redis connector required, use WithRedisConnector")
+		}
+		if o.redisConnector.GetClient() == nil {
+			return nil, xerrors.Wrap(connector.ErrClientNil, "mq: Redis connector is not connected")
 		}
 		return newRedisStreamTransport(o.redisConnector, cfg.RedisStream, o.logger), nil
 

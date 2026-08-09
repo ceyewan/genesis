@@ -75,7 +75,6 @@ func New(cfg *Config) (Meter, error) {
 		sdkmetric.WithReader(prometheusExporter),
 		sdkmetric.WithResource(res),
 	)
-	otel.SetMeterProvider(mp)
 
 	var httpServer *http.Server
 	var httpDone chan struct{}
@@ -112,6 +111,11 @@ func New(cfg *Config) (Meter, error) {
 			logger.Error("runtime metrics start failed", clog.Error(err))
 		}
 	}
+
+	// Publish process-global state only after every fallible constructor step
+	// has succeeded. A failed listener must not replace the previous provider
+	// with a provider that has already been shut down.
+	otel.SetMeterProvider(mp)
 
 	otelMeter := mp.Meter("genesis")
 	return &meterImpl{

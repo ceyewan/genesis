@@ -43,6 +43,19 @@ if err != nil {
 defer loader.Close()
 ```
 
+Environment-only unmarshalling now resolves names against the destination schema. Fields such as
+`database.max_open_conns` therefore use `PREFIX_DATABASE_MAX_OPEN_CONNS` without treating the
+underscore inside `max_open_conns` as another nesting boundary.
+
+### Gin idempotency middleware type
+
+`idem.Idempotency.GinMiddleware` now returns `gin.HandlerFunc` instead of `any`. Remove pre-v1
+type assertions and pass it directly to Gin:
+
+```go
+router.Use(component.GinMiddleware())
+```
+
 ### Graceful MQ and registry shutdown
 
 Use `mq.Drain(ctx)` when active handlers should finish. Use `mq.Close()` for bounded immediate shutdown. Use `registry.Shutdown(ctx)` when the application owns a shutdown deadline; `Close()` remains a five-second compatibility wrapper. Close every `*grpc.ClientConn` returned by `registry.GetConnection` yourself.
@@ -81,6 +94,7 @@ Ratelimit `Close` is terminal in both standalone and distributed modes; later ca
 
 - Constructors copy configs before defaults. Do not mutate a config to reconfigure a live component; construct a replacement instead.
 - Public TTLs use `time.Duration`. Replace bare numeric values with explicit units.
+- Public duration values are never silently defaulted when negative. Zero keeps each field's documented default/no-expiry meaning; negative values return a configuration or `ErrInvalidTTL` error.
 - Etcd-backed TTLs must be at least one second.
 - NATS JetStream now exposes `AckWait`, `MaxDeliver`, retention, storage, max age, max bytes and replicas. Review auto-created stream settings before production use.
 - JetStream queue-group and durable consumer identities are now scoped by topic. Reusing one logical name across topics no longer rewrites another subscription's filter, but the physical JetStream durable name differs from pre-v1 candidates.
@@ -98,6 +112,6 @@ Ratelimit `Close` is terminal in both standalone and distributed modes; later ca
 - Registry Watch begins with PUT events for the current snapshot and then streams changes without a Get/Watch gap.
 - Auth validates access versus refresh token type in addition to signature, issuer, audience and expiry. `GinMiddleware` accepts access tokens only.
 - dlock rejects new acquisitions after `Close` with `ErrClosed`. Monitor `Lost(key)` while inside a critical section and use downstream fencing/CAS for irreversible writes.
-- Connector construction validates configuration but does not connect; call `Connect` and classify failures with `errors.Is(err, connector.ErrConnection)`.
+- Connector construction validates configuration but does not connect; call `Connect` before injecting a connector into cache, dlock, idem, idgen, mq, ratelimit, registry, or DB. Constructors reject an unconnected connector with an error classifiable as `connector.ErrClientNil`; classify connection failures with `errors.Is(err, connector.ErrConnection)`.
 
 The full frozen surface and cross-package decisions are recorded in [v1-api-inventory.md](./v1-api-inventory.md) and [v1-api-decisions.md](./v1-api-decisions.md).

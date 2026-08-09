@@ -28,7 +28,7 @@ import (
 //	r.POST("/orders", idem.GinMiddleware(), func(c *gin.Context) {
 //	    c.JSON(200, gin.H{"order_id": "123"})
 //	})
-func (i *idem) GinMiddleware(opts ...MiddlewareOption) any {
+func (i *idem) GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc {
 	// 应用选项
 	opt := middlewareOptions{
 		headerKey: "X-Idempotency-Key",

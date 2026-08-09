@@ -139,6 +139,29 @@ func TestConfigValidationIdentifiesInvalidField(t *testing.T) {
 	}
 }
 
+func TestConfigValidationRejectsNegativeDurations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "mysql", err: (&MySQLConfig{DSN: "user:pass@tcp(localhost:3306)/db", ConnectTimeout: -time.Second}).validate()},
+		{name: "redis", err: (&RedisConfig{Addr: "localhost:6379", ReadTimeout: -time.Second}).validate()},
+		{name: "etcd", err: (&EtcdConfig{Endpoints: []string{"localhost:2379"}, DialTimeout: -time.Second}).validate()},
+		{name: "nats", err: (&NATSConfig{URL: "nats://localhost:4222", ReconnectWait: -time.Second}).validate()},
+		{name: "kafka", err: (&KafkaConfig{Seed: []string{"localhost:9092"}, RequestTimeout: -time.Second}).validate()},
+		{name: "postgresql", err: (&PostgreSQLConfig{DSN: "postgres://localhost/db", ConnMaxLifetime: -time.Second}).validate()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.ErrorIs(t, tt.err, ErrConfig)
+		})
+	}
+}
+
 // TestRedisConfigValidation 测试 Redis 配置验证
 func TestRedisConfigValidation(t *testing.T) {
 	t.Parallel()

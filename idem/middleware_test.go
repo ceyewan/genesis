@@ -28,9 +28,7 @@ func TestGinMiddleware(t *testing.T) {
 	}
 
 	r := gin.New()
-	// 注意：这里需要类型断言，因为 GinMiddleware 返回的是 interface{}
-	// 且返回的是匿名函数 func(*gin.Context)，需要转换为 gin.HandlerFunc
-	r.Use(gin.HandlerFunc(idemComp.GinMiddleware().(func(*gin.Context))))
+	r.Use(idemComp.GinMiddleware())
 
 	var handlerExecCount int32
 	r.POST("/test", func(c *gin.Context) {

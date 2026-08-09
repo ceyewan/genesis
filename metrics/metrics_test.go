@@ -232,6 +232,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestNewFailsWhenMetricsPortIsInUse(t *testing.T) {
+	before := otel.GetMeterProvider()
 	ln, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatalf("listen failed: %v", err)
@@ -250,6 +251,9 @@ func TestNewFailsWhenMetricsPortIsInUse(t *testing.T) {
 	}
 	if !errors.Is(err, ErrListen) {
 		t.Fatalf("New() error = %v, want ErrListen", err)
+	}
+	if after := otel.GetMeterProvider(); after != before {
+		t.Fatal("failed New replaced the global MeterProvider")
 	}
 }
 

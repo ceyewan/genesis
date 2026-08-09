@@ -51,19 +51,30 @@ import (
 func main() {
 	ctx := context.Background()
 
-	logger, _ := clog.New(clog.NewDevDefaultConfig("registry-example"))
+	logger, err := clog.New(clog.NewDevDefaultConfig("registry-example"))
+	if err != nil {
+		panic(err)
+	}
 	defer logger.Close()
 
-	etcdConn, _ := connector.NewEtcd(&connector.EtcdConfig{
+	etcdConn, err := connector.NewEtcd(&connector.EtcdConfig{
 		Endpoints: []string{"127.0.0.1:2379"},
 	}, connector.WithLogger(logger))
+	if err != nil {
+		panic(err)
+	}
 	defer etcdConn.Close()
-	_ = etcdConn.Connect(ctx)
+	if err := etcdConn.Connect(ctx); err != nil {
+		panic(err)
+	}
 
-	reg, _ := registry.New(etcdConn, &registry.Config{
+	reg, err := registry.New(etcdConn, &registry.Config{
 		Namespace:  "/genesis/services",
 		DefaultTTL: 30 * time.Second,
-}, registry.WithLogger(logger))
+	}, registry.WithLogger(logger))
+	if err != nil {
+		panic(err)
+	}
 	defer reg.Close()
 
 	service := &registry.ServiceInstance{
@@ -188,10 +199,13 @@ defer conn.Close()
 `registry` 借用外部 `EtcdConnector` 的连接，不负责 connector 的生命周期。推荐遵循：
 
 ```go
-etcdConn, _ := connector.NewEtcd(...)
+etcdConn, err := connector.NewEtcd(...)
+if err != nil { return err }
 defer etcdConn.Close()
+if err := etcdConn.Connect(ctx); err != nil { return err }
 
-reg, _ := registry.New(etcdConn, cfg)
+reg, err := registry.New(etcdConn, cfg)
+if err != nil { return err }
 defer reg.Close()
 ```
 

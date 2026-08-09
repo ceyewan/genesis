@@ -53,12 +53,21 @@ client.Set(ctx, "key", "value", time.Hour)
 连接器遵循"谁创建，谁释放"原则。上层组件（cache、dlock 等）不应调用连接器的 `Close()`，应用层通过 `defer` 按 LIFO 顺序释放：
 
 ```go
-redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+redisConn, err := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+if err != nil {
+    return err
+}
 defer redisConn.Close()
-redisConn.Connect(ctx)
+if err := redisConn.Connect(ctx); err != nil {
+    return err
+}
 
 // 注入连接器；cache 不拥有其生命周期
-dist, _ := cache.NewDistributed(&cfg.Cache, cache.WithRedisConnector(redisConn))
+dist, err := cache.NewDistributed(&cfg.Cache, cache.WithRedisConnector(redisConn))
+if err != nil {
+    return err
+}
+defer dist.Close()
 ```
 
 ### 健康检查

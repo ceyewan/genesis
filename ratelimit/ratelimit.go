@@ -177,7 +177,12 @@ func (c *Config) validate() error {
 		return xerrors.New("ratelimit: driver is required")
 	}
 	switch c.Driver {
-	case DriverStandalone, DriverDistributed:
+	case DriverStandalone:
+		if c.Standalone.CleanupInterval < 0 || c.Standalone.IdleTimeout < 0 {
+			return xerrors.New("ratelimit: cleanup_interval and idle_timeout must not be negative")
+		}
+		return nil
+	case DriverDistributed:
 		return nil
 	default:
 		return xerrors.New("ratelimit: unsupported driver: " + string(c.Driver))
@@ -188,10 +193,10 @@ func (c *StandaloneConfig) setDefaults() {
 	if c == nil {
 		return
 	}
-	if c.CleanupInterval <= 0 {
+	if c.CleanupInterval == 0 {
 		c.CleanupInterval = 1 * time.Minute
 	}
-	if c.IdleTimeout <= 0 {
+	if c.IdleTimeout == 0 {
 		c.IdleTimeout = 5 * time.Minute
 	}
 }

@@ -51,14 +51,25 @@ func main() {
     ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer cancel()
 
-    cfg, _ := config.Load("config.yaml")
-    logger, _ := clog.New(&cfg.Log)
+    loader, err := config.New(nil)
+    if err != nil { panic(err) }
+    defer loader.Close()
+    if err := loader.Load(ctx); err != nil { panic(err) }
+
+    var cfg AppConfig
+    if err := loader.Unmarshal(&cfg); err != nil { panic(err) }
+    logger, err := clog.New(&cfg.Log)
+    if err != nil { panic(err) }
     defer logger.Close()
 
-    redisConn, _ := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+    redisConn, err := connector.NewRedis(&cfg.Redis, connector.WithLogger(logger))
+    if err != nil { panic(err) }
     defer redisConn.Close()
+    if err := redisConn.Connect(ctx); err != nil { panic(err) }
 
-    cacheClient, _ := cache.New(&cfg.Cache, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
+    cacheClient, err := cache.NewDistributed(&cfg.Cache, cache.WithRedisConnector(redisConn), cache.WithLogger(logger))
+    if err != nil { panic(err) }
+    defer cacheClient.Close()
 
     _, _ = cacheClient.Get(ctx, "demo:key")
 }

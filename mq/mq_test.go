@@ -12,8 +12,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
 )
+
+func TestNewRejectsUnconnectedConnectors(t *testing.T) {
+	t.Parallel()
+
+	redisConn, err := connector.NewRedis(&connector.RedisConfig{Addr: "127.0.0.1:6379"})
+	require.NoError(t, err)
+	_, err = New(&Config{Driver: DriverRedisStream}, WithRedisConnector(redisConn))
+	require.ErrorIs(t, err, connector.ErrClientNil)
+
+	natsConn, err := connector.NewNATS(&connector.NATSConfig{URL: "nats://127.0.0.1:4222"})
+	require.NoError(t, err)
+	_, err = New(&Config{Driver: DriverNATSJetStream}, WithNATSConnector(natsConn))
+	require.ErrorIs(t, err, connector.ErrClientNil)
+}
 
 // ============================================================
 // Config 测试
