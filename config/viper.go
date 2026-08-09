@@ -469,7 +469,7 @@ func (l *loader) watchLoop(watcher *fsnotify.Watcher, targets map[string]struct{
 			if _, ok := targets[filepath.Clean(event.Name)]; !ok {
 				continue
 			}
-			if !(event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) || event.Has(fsnotify.Remove) || event.Has(fsnotify.Chmod)) {
+			if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) && !event.Has(fsnotify.Rename) && !event.Has(fsnotify.Remove) && !event.Has(fsnotify.Chmod) {
 				continue
 			}
 

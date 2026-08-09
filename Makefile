@@ -1,7 +1,9 @@
-.PHONY: help up down test test-race lint modernize modernize-check clean logs status examples examples-check buf-lint api-inventory api-inventory-check exported-comments godoc-artifacts
+.PHONY: help up down test test-race lint lint-tool-check modernize modernize-check clean logs status examples examples-check buf-lint api-inventory api-inventory-check exported-comments godoc-artifacts
 
 DEV_COMPOSE_FILE := deploy/dev/docker-compose.yml
 BUF_DIR := examples/proto
+GOLANGCI_LINT_VERSION ?= 2.12.2
+GOLANGCI_LINT_VERSION_NORMALIZED := $(patsubst v%,%,$(GOLANGCI_LINT_VERSION))
 
 help:
 	@echo "Genesis 开发环境"
@@ -36,7 +38,18 @@ test-race:
 	@echo "运行 race tests..."
 	@go test -race -count=1 ./...
 
-lint:
+lint-tool-check:
+	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "未安装 golangci-lint，请执行: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION_NORMALIZED)"; \
+		exit 1; \
+	fi
+	@if ! golangci-lint version 2>/dev/null | grep -Fq "version $(GOLANGCI_LINT_VERSION_NORMALIZED)"; then \
+		echo "golangci-lint 版本不匹配，需要 $(GOLANGCI_LINT_VERSION_NORMALIZED)"; \
+		echo "安装命令: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION_NORMALIZED)"; \
+		exit 1; \
+	fi
+
+lint: lint-tool-check
 	@echo "运行代码检查..."
 	@golangci-lint run
 
@@ -71,7 +84,7 @@ api-inventory:
 api-inventory-check:
 	@go run ./internal/cmd/apiinventory -check docs/v1-api-inventory.md
 
-exported-comments:
+exported-comments: lint-tool-check
 	@golangci-lint run --config .golangci-doc.yml ./...
 
 godoc-artifacts:
