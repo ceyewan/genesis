@@ -2,6 +2,11 @@
 
 > 一个面向 Go 微服务的轻量组件库，而不是框架。
 
+当前已发布预发行基线为
+[`v1.0.0-rc.1`](https://github.com/ceyewan/genesis/releases/tag/v1.0.0-rc.1)，
+tag 指向 `ec5ad2c31fb4adce2bd42529e3d7fbfe92b23aa7`。后续测试和文档提交不会
+自动产生新版本；生产修复需要独立的 `rc.2` 决策与完整发布门禁。
+
 Genesis 提供一组可以直接组合的基础设施与治理组件，目标不是接管应用，而是把日志、配置、连接管理、缓存、分布式锁、消息、认证、限流、熔断、注册发现等通用能力沉淀成统一积木。
 
 项目的核心约束只有三条：
@@ -108,6 +113,7 @@ make example-<component>
 - [组件设计文档索引](docs/README.md)
 - [示例索引](examples/README.md)
 - [测试指南](testkit/README.md)
+- [v1.0.0-rc.1 契约加固与消费者风险清单](docs/v1-rc1-contract-hardening.md)
 
 ## License
 

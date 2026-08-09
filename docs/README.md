@@ -4,6 +4,7 @@
 - [v0.5.0 到 v1.0.0 迁移说明](./v1-migration.md)
 - [v1 导出 API 清单](./v1-api-inventory.md)
 - [v1.0.0-rc.1 验收证据](./v1-rc1-evidence.md)
+- [v1.0.0-rc.1 契约加固与消费者风险清单](./v1-rc1-contract-hardening.md)
 
 本文档目录包含 Genesis 项目的设计文档和规范。
 

@@ -1,6 +1,9 @@
 # Genesis v1.0.0-rc.1 verification evidence
 
-This record describes the local and GitHub-hosted candidate verification performed on 2026-08-09. PR [#58](https://github.com/ceyewan/genesis/pull/58) was merged through the protected branch into `main`; its merge commit was `c80babaf35f71d656b85e28b8ae02a54e06ce7ce`. No tag, GitHub Release, or deployment has been created.
+This record describes the local and GitHub-hosted verification that culminated
+in the published `v1.0.0-rc.1` prerelease on 2026-08-09. The final protected
+merge was PR [#61](https://github.com/ceyewan/genesis/pull/61), and the annotated
+tag resolves to `ec5ad2c31fb4adce2bd42529e3d7fbfe92b23aa7`.
 
 ## Environment
 
@@ -8,6 +11,7 @@ This record describes the local and GitHub-hosted candidate verification perform
 - Docker client/server: `29.4.0` / `29.4.0`
 - Original remediation baseline: `48acd69eea91764bc8452ea3f55dfe7a2a027607`
 - Final pre-RC audit baseline: `c80babaf35f71d656b85e28b8ae02a54e06ce7ce`
+- Published RC baseline: `ec5ad2c31fb4adce2bd42529e3d7fbfe92b23aa7`
 - Scope: all 18 externally importable packages, plus examples and internal API-inventory tooling
 
 ## Full local gates
@@ -66,7 +70,13 @@ The full ordinary and race suites include regression coverage for the audit find
 - The first post-remediation `main` run [31290566522](https://github.com/ceyewan/genesis/actions/runs/31290566522) passed ordinary Testcontainers and all non-race gates but caught a transient NATS `EOF` in `TestJetStreamPublishSubscribeIntegration`; the Release gate did not run and publication stopped. Its uploaded race JSON is the evidence for the additional NATS ready-log wait and bounded connection retry in this record.
 - `main` branch protection requires those four checks on an up-to-date branch, applies to administrators, requires pull requests and resolved conversations, and disallows force pushes and deletion.
 - Controlled negative PR [#59](https://github.com/ceyewan/genesis/pull/59) introduced generated API-inventory drift. Hosted run [31288303160](https://github.com/ceyewan/genesis/actions/runs/31288303160) failed specifically at `Check exported API inventory`, and GitHub reported the PR merge state as `BLOCKED`. The PR was then closed and its remote branch deleted.
-- Independent review nevertheless withheld tag approval after reproducing the negative sequencer-step bug and the local concurrent container flake described above. The commit containing this remediation and evidence must receive a complete hosted PR run, protected merge, `main` push run, and exact-SHA pre-tag dispatch before it replaces `c80baba` as the approved candidate.
+- The final remediation passed PR #61, protected merge, exact-main, pre-tag,
+  and tag verification. The final `main` run was
+  [31290988629](https://github.com/ceyewan/genesis/actions/runs/31290988629),
+  the exact-SHA pre-tag run was
+  [31291156982](https://github.com/ceyewan/genesis/actions/runs/31291156982),
+  and the annotated-tag run was
+  [31291334025](https://github.com/ceyewan/genesis/actions/runs/31291334025).
 
 ## Accepted v1 boundaries
 
@@ -77,4 +87,10 @@ The full ordinary and race suites include regression coverage for the audit find
 - Dlock exposes ownership loss but does not issue fencing tokens; irreversible downstream writes still require CAS/version fencing.
 - Trace supports system TLS and static OTLP headers, but custom certificate-pool construction remains application/deployment configuration outside Genesis v1.
 
-No unresolved local P0/P1 API, correctness, migration, test-stability, or repository-workflow defect identified by the stage audits remains after this remediation. Required-check enforcement and both positive and negative hosted behavior are proven. Stage one is reopened until this remediation passes the complete protected PR/main/pre-tag sequence and the external stage goal records the resulting exact SHA. Tag and release creation remain separate, explicit actions.
+No unresolved local P0/P1 API, correctness, migration, test-stability, or
+repository-workflow defect identified by the release audit remained at
+publication. Required-check enforcement and both positive and negative hosted
+behavior were proven. Stage one and CI-G1 are complete; the tag and GitHub
+prerelease are published. Post-release maintenance evidence is recorded in
+[v1-rc1-contract-hardening.md](./v1-rc1-contract-hardening.md) and does not move
+or replace the published tag.

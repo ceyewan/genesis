@@ -1,6 +1,6 @@
 # Genesis v1 API and lifecycle decisions
 
-This document freezes the cross-package rules used by the `v1.0.0-rc.1` candidate. The exhaustive symbol surface is in [v1-api-inventory.md](./v1-api-inventory.md).
+This document freezes the cross-package rules published as `v1.0.0-rc.1`. The exhaustive symbol surface is in [v1-api-inventory.md](./v1-api-inventory.md).
 
 ## Constructor contract
 
