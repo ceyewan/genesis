@@ -90,7 +90,10 @@ jobs:
             candidate_tag="${INPUT_CANDIDATE_TAG}"
             resonance_sha="${INPUT_RESONANCE_SHA}"
             [[ "${candidate_tag}" =~ ${semver} ]]
-            ! git rev-parse --verify --quiet "refs/tags/${candidate_tag}"
+            if git rev-parse --verify --quiet "refs/tags/${candidate_tag}"; then
+              echo "candidate tag already exists: ${candidate_tag}" >&2
+              exit 1
+            fi
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             test "$(git cat-file -t "${GITHUB_REF}")" = "tag"
             candidate_sha="$(git rev-list -n 1 "${GITHUB_REF}")"
@@ -1243,7 +1246,7 @@ jobs:
           test "$("${GH_BINARY}" version | sed -nE '1s/^gh version ([0-9]+\.[0-9]+\.[0-9]+).*$/\1/p')" = "${GH_VERSION}"
           attestation_file="${RUNNER_TEMP}/release-attestation.json"
           verified=false
-          for attempt in $(seq 1 10); do
+          for _ in $(seq 1 10); do
             if "${GH_BINARY}" release verify "${CANDIDATE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
               --format json > "${attestation_file}"; then

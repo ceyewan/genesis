@@ -19,7 +19,7 @@ record_image() {
   local inspection image_id repo_digests
   local -a resolved_digests
 
-  inspection="$(docker image inspect --format '{{.Id}}|{{join .RepoDigests ","}}' "${image}")"
+  inspection="$(docker image inspect --format '{{.Id}}|{{range $index, $digest := .RepoDigests}}{{if $index}},{{end}}{{$digest}}{{end}}' "${image}")"
   IFS='|' read -r image_id repo_digests <<< "${inspection}"
   [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]
   [[ -n "${repo_digests}" ]]
