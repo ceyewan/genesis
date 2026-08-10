@@ -18,7 +18,7 @@
 //
 // 需要注意的是，Redis 与 Etcd 并不是完全等价的协议实现。尤其在 TTL 语义上，
 // Etcd 依赖 lease，精度为秒级，因此 `DefaultTTL` 和 `WithTTL(...)` 都要求
-// 至少 1 秒且必须是整秒；Redis 则直接使用原生 `time.Duration`。
+// 至少 1 秒且必须是整秒；Redis 为毫秒精度，最小 TTL 为 1 毫秒。
 //
 // Locker does not issue fencing tokens. Callers protecting irreversible writes
 // must use a downstream compare-and-set/version mechanism in addition to
@@ -61,15 +61,15 @@ func New(cfg *Config, opts ...Option) (Locker, error) {
 	switch cfg.Driver {
 	case DriverRedis:
 		if opt.redisConnector == nil {
-			return nil, xerrors.New("dlock: redis connector is required, use WithRedisConnector")
+			return nil, xerrors.Wrap(ErrConnectorNil, "redis connector is required, use WithRedisConnector")
 		}
 		return newRedis(opt.redisConnector, cfg, logger)
 	case DriverEtcd:
 		if opt.etcdConnector == nil {
-			return nil, xerrors.New("dlock: etcd connector is required, use WithEtcdConnector")
+			return nil, xerrors.Wrap(ErrConnectorNil, "etcd connector is required, use WithEtcdConnector")
 		}
 		return newEtcd(opt.etcdConnector, cfg, logger)
 	default:
-		return nil, xerrors.New("dlock: unsupported driver: " + string(cfg.Driver))
+		return nil, xerrors.Wrap(ErrInvalidConfig, "unsupported driver: "+string(cfg.Driver))
 	}
 }

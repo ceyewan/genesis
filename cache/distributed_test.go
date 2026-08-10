@@ -10,7 +10,7 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/testkit"
+	"github.com/ceyewan/genesis/internal/testkit"
 )
 
 // setupTestDistributed 创建用于测试的分布式缓存实例

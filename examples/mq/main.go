@@ -12,8 +12,8 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/internal/testkit"
 	"github.com/ceyewan/genesis/mq"
-	"github.com/ceyewan/genesis/testkit"
 )
 
 func main() {

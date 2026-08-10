@@ -17,6 +17,9 @@ import (
 	"github.com/ceyewan/genesis/config"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/db"
+	"github.com/ceyewan/genesis/dlock"
+	"github.com/ceyewan/genesis/idem"
+	"github.com/ceyewan/genesis/idgen"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/mq"
 	"github.com/ceyewan/genesis/ratelimit"
@@ -32,7 +35,29 @@ func TestRC1ConsumerConstructorsRejectNilConfiguration(t *testing.T) {
 		{name: "auth", construct: func() error { _, err := auth.New(nil); return err }, class: auth.ErrInvalidConfig},
 		{name: "cache local", construct: func() error { _, err := cache.NewLocal(nil); return err }, class: cache.ErrInvalidConfig},
 		{name: "cache distributed", construct: func() error { _, err := cache.NewDistributed(nil); return err }, class: cache.ErrInvalidConfig},
+		{name: "connector MySQL", construct: func() error { _, err := connector.NewMySQL(nil); return err }, class: connector.ErrConfig},
+		{name: "connector PostgreSQL", construct: func() error { _, err := connector.NewPostgreSQL(nil); return err }, class: connector.ErrConfig},
+		{name: "connector SQLite", construct: func() error { _, err := connector.NewSQLite(nil); return err }, class: connector.ErrConfig},
+		{name: "connector Redis", construct: func() error { _, err := connector.NewRedis(nil); return err }, class: connector.ErrConfig},
+		{name: "connector etcd", construct: func() error { _, err := connector.NewEtcd(nil); return err }, class: connector.ErrConfig},
+		{name: "connector NATS", construct: func() error { _, err := connector.NewNATS(nil); return err }, class: connector.ErrConfig},
+		{name: "connector Kafka", construct: func() error { _, err := connector.NewKafka(nil); return err }, class: connector.ErrConfig},
+		{name: "dlock", construct: func() error { _, err := dlock.New(nil); return err }, class: dlock.ErrInvalidConfig},
+		{name: "idem", construct: func() error { _, err := idem.New(nil); return err }, class: idem.ErrConfigNil},
+		{name: "idgen allocator", construct: func() error { _, err := idgen.NewAllocator(nil); return err }, class: idgen.ErrInvalidInput},
+		{name: "idgen generator", construct: func() error { _, err := idgen.NewGenerator(nil); return err }, class: idgen.ErrInvalidInput},
+		{name: "idgen sequencer", construct: func() error { _, err := idgen.NewSequencer(nil); return err }, class: idgen.ErrInvalidInput},
 		{name: "metrics", construct: func() error { _, err := metrics.New(nil); return err }, class: metrics.ErrInvalidConfig},
+		{name: "metrics HTTP helper", construct: func() error { _, err := metrics.NewHTTPServerMetrics(metrics.Discard(), nil); return err }, class: metrics.ErrInvalidConfig},
+		{name: "metrics HTTP helper meter", construct: func() error {
+			_, err := metrics.NewHTTPServerMetrics(nil, metrics.DefaultHTTPServerMetricsConfig("contract"))
+			return err
+		}, class: metrics.ErrInvalidConfig},
+		{name: "metrics gRPC helper", construct: func() error { _, err := metrics.NewGRPCServerMetrics(metrics.Discard(), nil); return err }, class: metrics.ErrInvalidConfig},
+		{name: "metrics gRPC helper meter", construct: func() error {
+			_, err := metrics.NewGRPCServerMetrics(nil, metrics.DefaultGRPCServerMetricsConfig("contract"))
+			return err
+		}, class: metrics.ErrInvalidConfig},
 		{name: "mq", construct: func() error { _, err := mq.New(nil); return err }, class: mq.ErrInvalidConfig},
 		{name: "ratelimit", construct: func() error { _, err := ratelimit.New(nil); return err }, class: ratelimit.ErrConfigNil},
 		{name: "trace", construct: func() error { _, err := genesistrace.Init(nil); return err }},
@@ -163,8 +188,20 @@ func TestRC1ErrorsPreservePublicClassification(t *testing.T) {
 	if _, err := cache.NewLocal(nil); !errors.Is(err, cache.ErrInvalidConfig) {
 		t.Fatalf("NewLocal(nil) error = %v, want ErrInvalidConfig", err)
 	}
+	if _, err := cache.NewLocal(&cache.LocalConfig{Driver: "unknown"}); !errors.Is(err, cache.ErrInvalidConfig) {
+		t.Fatalf("NewLocal(unsupported driver) error = %v, want ErrInvalidConfig", err)
+	}
+	if _, err := cache.NewDistributed(&cache.DistributedConfig{Driver: "unknown"}); !errors.Is(err, cache.ErrInvalidConfig) {
+		t.Fatalf("NewDistributed(unsupported driver) error = %v, want ErrInvalidConfig", err)
+	}
 	if _, err := db.New(&db.Config{Driver: "unknown"}); !errors.Is(err, db.ErrInvalidConfig) {
 		t.Fatalf("db.New() error = %v, want ErrInvalidConfig", err)
+	}
+	if _, err := mq.New(&mq.Config{Driver: mq.DriverNATSJetStream}); !errors.Is(err, connector.ErrClientNil) {
+		t.Fatalf("mq.New(NATS without connector) error = %v, want connector.ErrClientNil", err)
+	}
+	if _, err := mq.New(&mq.Config{Driver: mq.DriverRedisStream}); !errors.Is(err, connector.ErrClientNil) {
+		t.Fatalf("mq.New(Redis without connector) error = %v, want connector.ErrClientNil", err)
 	}
 }
 

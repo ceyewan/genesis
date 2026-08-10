@@ -73,7 +73,7 @@ import (
 //	}, registry.WithLogger(logger))
 func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, error) {
 	if conn == nil {
-		return nil, xerrors.New("etcd connector is required")
+		return nil, xerrors.Wrap(connector.ErrClientNil, "etcd connector is required")
 	}
 	if cfg == nil {
 		cfg = &Config{} // 使用默认配置
@@ -95,7 +95,7 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 
 	client := conn.GetClient()
 	if client == nil {
-		return nil, xerrors.New("etcd client cannot be nil")
+		return nil, xerrors.Wrap(connector.ErrClientNil, "etcd connector is not connected")
 	}
 
 	// 设置默认值
@@ -136,6 +136,7 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 		cfg:               cfg,
 		logger:            opt.logger,
 		keepAlives:        make(map[string]*leaseKeepAlive),
+		registering:       make(map[string]*pendingRegistration),
 		watchers:          make(map[uint64]context.CancelFunc),
 		stopChan:          make(chan struct{}),
 		closeDone:         make(chan struct{}),
@@ -171,6 +172,10 @@ type leaseKeepAlive struct {
 	closed      uint32
 }
 
+type pendingRegistration struct {
+	cancel context.CancelFunc
+}
+
 // etcdRegistry 基于 Etcd 的服务注册发现实现
 type etcdRegistry struct {
 	client *clientv3.Client
@@ -178,7 +183,9 @@ type etcdRegistry struct {
 	logger clog.Logger
 
 	// 后台任务管理
-	keepAlives        map[string]*leaseKeepAlive    // serviceID -> keepAlive info
+	keepAlives        map[string]*leaseKeepAlive // serviceID -> keepAlive info
+	registering       map[string]*pendingRegistration
+	registrationWG    sync.WaitGroup
 	watchers          map[uint64]context.CancelFunc // watchID -> cancel
 	watchSeq          uint64
 	stopChan          chan struct{}
@@ -193,6 +200,10 @@ type etcdRegistry struct {
 	watchEvents       metrics.Counter
 	leaseFailureCount metrics.Counter
 	leaseFailuresOnce sync.Once
+
+	// beforeRegisterCommit is an internal test seam used to exercise the
+	// Register/Shutdown commit boundary deterministically.
+	beforeRegisterCommit func()
 }
 
 func (r *etcdRegistry) isClosed() bool {
@@ -229,68 +240,86 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 		return ErrInvalidTTL
 	}
 
+	service = cloneServiceInstance(service)
+	value, err := json.Marshal(service)
+	if err != nil {
+		return xerrors.Wrap(err, "marshal service failed")
+	}
+
+	operationCtx, operationCancel := context.WithCancel(ctx)
+	keepAliveCtx, keepAliveCancel := context.WithCancel(context.Background())
+	pending := &pendingRegistration{cancel: func() {
+		operationCancel()
+		keepAliveCancel()
+	}}
+	committed := false
+
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.isClosed() {
+		r.mu.Unlock()
+		pending.cancel()
 		return ErrRegistryClosed
 	}
-
-	// 检查是否已注册
 	if _, exists := r.keepAlives[service.ID]; exists {
+		r.mu.Unlock()
+		pending.cancel()
 		return ErrServiceAlreadyRegistered
 	}
+	if _, exists := r.registering[service.ID]; exists {
+		r.mu.Unlock()
+		pending.cancel()
+		return ErrServiceAlreadyRegistered
+	}
+	r.registering[service.ID] = pending
+	r.registrationWG.Add(1)
+	r.mu.Unlock()
+
+	defer func() {
+		operationCancel()
+		if !committed {
+			keepAliveCancel()
+		}
+		r.mu.Lock()
+		if current := r.registering[service.ID]; current == pending {
+			delete(r.registering, service.ID)
+		}
+		r.mu.Unlock()
+		r.registrationWG.Done()
+	}()
 
 	// 创建租约
-	lease, err := r.client.Grant(ctx, int64(ttl.Seconds()))
+	lease, err := r.client.Grant(operationCtx, int64(ttl.Seconds()))
 	if err != nil {
 		r.logger.Error("failed to grant lease",
 			clog.String("service_id", service.ID),
 			clog.Error(err))
-		return xerrors.Wrap(err, "grant lease failed")
-	}
-
-	// 序列化服务实例
-	value, err := json.Marshal(service)
-	if err != nil {
-		if _, revokeErr := r.client.Revoke(ctx, lease.ID); revokeErr != nil {
-			r.logger.Error("failed to revoke lease",
-				clog.String("leaseID", fmt.Sprintf("%d", lease.ID)),
-				clog.Error(revokeErr))
-		}
-		return xerrors.Wrap(err, "marshal service failed")
+		return r.registerError(err, "grant lease failed")
 	}
 
 	// 生成 key
 	key := r.buildKey(service.Name, service.ID)
 
 	// 写入 Etcd
-	_, err = r.client.Put(ctx, key, string(value), clientv3.WithLease(lease.ID))
+	_, err = r.client.Put(operationCtx, key, string(value), clientv3.WithLease(lease.ID))
 	if err != nil {
-		if _, revokeErr := r.client.Revoke(ctx, lease.ID); revokeErr != nil {
-			r.logger.Error("failed to revoke lease",
-				clog.String("leaseID", fmt.Sprintf("%d", lease.ID)),
-				clog.Error(revokeErr))
-		}
+		r.revokeRegistrationLease(lease.ID, service.ID)
 		r.logger.Error("failed to put service",
 			clog.String("key", key),
 			clog.Error(err))
-		return xerrors.Wrap(err, "put service failed")
+		return r.registerError(err, "put service failed")
 	}
 
 	// 启动 KeepAlive 后台协程
-	keepAliveCtx, keepAliveCancel := context.WithCancel(context.Background())
+	if err := operationCtx.Err(); err != nil {
+		r.revokeRegistrationLease(lease.ID, service.ID)
+		return r.registerError(err, "registration canceled before keepalive")
+	}
 	keepAliveCh, err := r.client.KeepAlive(keepAliveCtx, lease.ID)
 	if err != nil {
-		keepAliveCancel()
-		if _, revokeErr := r.client.Revoke(ctx, lease.ID); revokeErr != nil {
-			r.logger.Error("failed to revoke lease",
-				clog.String("leaseID", fmt.Sprintf("%d", lease.ID)),
-				clog.Error(revokeErr))
-		}
-		return xerrors.Wrap(err, "keepalive failed")
+		r.revokeRegistrationLease(lease.ID, service.ID)
+		return r.registerError(err, "keepalive failed")
 	}
 
-	// 保存 keepAlive 信息
 	ka := &leaseKeepAlive{
 		leaseID:     lease.ID,
 		keepAliveCh: keepAliveCh,
@@ -298,12 +327,32 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 		serviceID:   service.ID,
 		serviceName: service.Name,
 	}
+
+	if r.beforeRegisterCommit != nil {
+		r.beforeRegisterCommit()
+	}
+
+	// Network calls above never hold mu. This commit point is paired with
+	// Shutdown's closed transition: the registration either commits before
+	// Shutdown snapshots it, or observes closed and revokes its lease.
+	r.mu.Lock()
+	if r.isClosed() {
+		r.mu.Unlock()
+		r.revokeRegistrationLease(lease.ID, service.ID)
+		return xerrors.Wrap(ErrRegistryClosed, "registration rejected during shutdown")
+	}
+	if err := operationCtx.Err(); err != nil {
+		r.mu.Unlock()
+		r.revokeRegistrationLease(lease.ID, service.ID)
+		return xerrors.Wrap(err, "registration canceled before commit")
+	}
+	delete(r.registering, service.ID)
 	r.keepAlives[service.ID] = ka
-
-	// 启动 KeepAlive 监控协程
 	r.wg.Add(1)
-	go r.monitorKeepAlive(ka)
+	committed = true
+	r.mu.Unlock()
 
+	go r.monitorKeepAlive(ka)
 	r.logger.Info("service registered",
 		clog.String("service_id", service.ID),
 		clog.String("service_name", service.Name),
@@ -313,12 +362,30 @@ func (r *etcdRegistry) Register(ctx context.Context, service *ServiceInstance, t
 	return nil
 }
 
+func (r *etcdRegistry) registerError(err error, message string) error {
+	if r.isClosed() {
+		return xerrors.Wrap(xerrors.Join(ErrRegistryClosed, err), message)
+	}
+	return xerrors.Wrap(err, message)
+}
+
+func (r *etcdRegistry) revokeRegistrationLease(leaseID clientv3.LeaseID, serviceID string) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := r.client.Revoke(cleanupCtx, leaseID); err != nil {
+		r.logger.Error("failed to revoke uncommitted lease",
+			clog.String("service_id", serviceID),
+			clog.String("leaseID", fmt.Sprintf("%d", leaseID)),
+			clog.Error(err))
+	}
+}
+
 // Deregister 注销服务实例
 func (r *etcdRegistry) Deregister(ctx context.Context, serviceID string) error {
 	if err := r.ensureOpen(); err != nil {
 		return err
 	}
-	if serviceID == "" {
+	if !isValidKeySegment(serviceID) {
 		return ErrInvalidServiceInstance
 	}
 
@@ -329,10 +396,11 @@ func (r *etcdRegistry) Deregister(ctx context.Context, serviceID string) error {
 		return ErrServiceNotFound
 	}
 	leaseID := ka.leaseID
-	// 取消 KeepAlive 协程
+	// Stop renewing immediately, but retain the registration record until Revoke
+	// succeeds. A canceled caller or transient Etcd failure can then be retried by
+	// Deregister, and Shutdown can still discover and revoke the lease.
 	atomic.StoreUint32(&ka.closed, 1)
 	ka.cancel()
-	delete(r.keepAlives, serviceID)
 	r.mu.Unlock()
 
 	// 撤销租约（会自动删除关联的 key）
@@ -342,6 +410,12 @@ func (r *etcdRegistry) Deregister(ctx context.Context, serviceID string) error {
 			clog.Error(err))
 		return xerrors.Wrap(err, "revoke lease failed")
 	}
+
+	r.mu.Lock()
+	if current, ok := r.keepAlives[serviceID]; ok && current == ka {
+		delete(r.keepAlives, serviceID)
+	}
+	r.mu.Unlock()
 
 	r.logger.Info("service deregistered",
 		clog.String("service_id", serviceID))
@@ -354,7 +428,7 @@ func (r *etcdRegistry) GetService(ctx context.Context, serviceName string) ([]*S
 	if err := r.ensureOpen(); err != nil {
 		return nil, err
 	}
-	if serviceName == "" {
+	if !isValidKeySegment(serviceName) {
 		return nil, ErrInvalidServiceInstance
 	}
 
@@ -390,7 +464,7 @@ func (r *etcdRegistry) Watch(ctx context.Context, serviceName string) (<-chan Se
 	if err := r.ensureOpen(); err != nil {
 		return nil, err
 	}
-	if serviceName == "" {
+	if !isValidKeySegment(serviceName) {
 		return nil, ErrInvalidServiceInstance
 	}
 
@@ -590,7 +664,7 @@ func (r *etcdRegistry) GetConnection(ctx context.Context, serviceName string, op
 	if err := r.ensureOpen(); err != nil {
 		return nil, err
 	}
-	if serviceName == "" {
+	if !isValidKeySegment(serviceName) {
 		return nil, ErrInvalidServiceInstance
 	}
 	if len(opts) == 0 {
@@ -679,10 +753,15 @@ func (r *etcdRegistry) Shutdown(ctx context.Context) error {
 func (r *etcdRegistry) shutdown(ctx context.Context) error {
 	r.mu.Lock()
 	close(r.stopChan)
-	r.mu.Unlock()
+
+	// Cancel every operation that was admitted before the closed transition.
+	// Register will either already be present in keepAlives below or reject its
+	// commit and revoke the uncommitted lease.
+	for _, pending := range r.registering {
+		pending.cancel()
+	}
 
 	// 取消所有 watchers
-	r.mu.Lock()
 	for _, cancelFunc := range r.watchers {
 		cancelFunc()
 	}
@@ -709,9 +788,10 @@ func (r *etcdRegistry) shutdown(ctx context.Context) error {
 		}
 	}
 
-	// 等待所有 goroutine 结束，但不越过调用方的 shutdown deadline。
+	// 等待所有 registration 和后台 goroutine 结束，但不越过内部 cleanup deadline。
 	waitDone := make(chan struct{})
 	go func() {
+		r.registrationWG.Wait()
 		r.wg.Wait()
 		r.leaseFailuresOnce.Do(func() { close(r.leaseFailures) })
 		close(waitDone)
@@ -812,7 +892,7 @@ func (r *etcdRegistry) buildPrefix(serviceName string) string {
 }
 
 func validateServiceInstance(service *ServiceInstance) error {
-	if service == nil || service.ID == "" || service.Name == "" {
+	if service == nil || !isValidKeySegment(service.ID) || !isValidKeySegment(service.Name) {
 		return ErrInvalidServiceInstance
 	}
 	if len(service.Endpoints) == 0 {
@@ -824,6 +904,10 @@ func validateServiceInstance(service *ServiceInstance) error {
 		}
 	}
 	return nil
+}
+
+func isValidKeySegment(segment string) bool {
+	return segment != "" && !strings.Contains(segment, "/")
 }
 
 func isValidGRPCEndpoint(endpoint string) bool {

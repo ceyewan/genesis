@@ -49,6 +49,14 @@ func TestDistributed_Hash_Integration(t *testing.T) {
 		require.Empty(t, got)
 	})
 
+	t.Run("HGetAll rejects a map with non-string keys", func(t *testing.T) {
+		var got map[int]string
+		require.NotPanics(t, func() {
+			err := cache.HGetAll(ctx, "hash:2", &got)
+			require.ErrorIs(t, err, ErrInvalidDestination)
+		})
+	})
+
 	t.Run("HDel", func(t *testing.T) {
 		err := cache.HSet(ctx, "hash:3", "field1", "value1")
 		require.NoError(t, err)

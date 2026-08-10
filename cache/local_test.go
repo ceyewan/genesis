@@ -295,6 +295,36 @@ func TestLocal_Concurrency(t *testing.T) {
 	})
 }
 
+func TestLocalExpireCannotResurrectDeletedKey(t *testing.T) {
+	local := setupTestLocal(t, 100)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	ctx := context.Background()
+
+	for i := range 1000 {
+		key := "expire-delete:" + strconv.Itoa(i)
+		require.NoError(t, local.Set(ctx, key, "value", time.Hour))
+
+		start := make(chan struct{})
+		expireDone := make(chan error, 1)
+		deleteDone := make(chan error, 1)
+		go func() {
+			<-start
+			_, err := local.Expire(ctx, key, time.Minute)
+			expireDone <- err
+		}()
+		go func() {
+			<-start
+			deleteDone <- local.Delete(ctx, key)
+		}()
+		close(start)
+
+		require.NoError(t, <-expireDone)
+		require.NoError(t, <-deleteDone)
+		var got string
+		require.ErrorIs(t, local.Get(ctx, key, &got), ErrMiss)
+	}
+}
+
 // TestLocal_Close 测试 Close 操作
 func TestLocal_Close(t *testing.T) {
 	cache := setupTestLocal(t, 100)

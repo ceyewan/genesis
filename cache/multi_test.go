@@ -22,6 +22,7 @@ type mockLocalForMulti struct {
 	failDel    atomic.Bool
 	failHas    atomic.Bool
 	failExpire atomic.Bool
+	closeCalls atomic.Int32
 }
 
 func newMockLocalForMulti() *mockLocalForMulti {
@@ -78,6 +79,7 @@ func (m *mockLocalForMulti) Expire(ctx context.Context, key string, ttl time.Dur
 }
 
 func (m *mockLocalForMulti) Close() error {
+	m.closeCalls.Add(1)
 	return nil
 }
 
@@ -89,6 +91,7 @@ type mockKVForMulti struct {
 	failDel    atomic.Bool
 	failHas    atomic.Bool
 	failExpire atomic.Bool
+	closeCalls atomic.Int32
 }
 
 func newMockKVForMulti() *mockKVForMulti {
@@ -143,61 +146,62 @@ func (m *mockKVForMulti) Expire(ctx context.Context, key string, ttl time.Durati
 }
 
 func (m *mockKVForMulti) Close() error {
+	m.closeCalls.Add(1)
 	return nil
 }
 
-// 以下是 Distributed 接口需要但未实现的方法（返回 ErrNotSupported）
+// 以下是 Distributed 接口需要但未实现的方法。
 
 func (m *mockKVForMulti) HSet(ctx context.Context, key, field string, value any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) HGet(ctx context.Context, key, field string, dest any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) HGetAll(ctx context.Context, key string, destMap any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) HDel(ctx context.Context, key string, fields ...string) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) HIncrBy(ctx context.Context, key, field string, increment int64) (int64, error) {
-	return 0, ErrNotSupported
+	return 0, errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) ZAdd(ctx context.Context, key string, score float64, member any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) ZRem(ctx context.Context, key string, members ...any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) ZScore(ctx context.Context, key string, member any) (float64, error) {
-	return 0, ErrNotSupported
+	return 0, errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) ZRange(ctx context.Context, key string, start, stop int64, destSlice any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) ZRevRange(ctx context.Context, key string, start, stop int64, destSlice any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) ZRangeByScore(ctx context.Context, key string, min, max float64, destSlice any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) MGet(ctx context.Context, keys []string, destSlice any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) MSet(ctx context.Context, items map[string]any, ttl time.Duration) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockKVForMulti) RawClient() *redis.Client {
@@ -603,8 +607,10 @@ func TestMulti_EdgeCases(t *testing.T) {
 		multi, err := NewMulti(local, remote, &MultiConfig{})
 		require.NoError(t, err)
 
-		err = multi.Close()
-		require.NoError(t, err)
+		require.NoError(t, multi.Close())
+		require.NoError(t, multi.Close())
+		require.Zero(t, local.closeCalls.Load())
+		require.Zero(t, remote.closeCalls.Load())
 	})
 
 	t.Run("Expire with zero TTL preserves caller intent when LocalTTL is unset", func(t *testing.T) {

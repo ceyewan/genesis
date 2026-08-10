@@ -15,7 +15,7 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	pb "github.com/ceyewan/genesis/examples/idem/proto"
+	pb "github.com/ceyewan/genesis/examples/idem/internal/proto"
 	"github.com/ceyewan/genesis/idem"
 )
 

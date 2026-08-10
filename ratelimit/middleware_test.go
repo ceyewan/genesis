@@ -250,7 +250,24 @@ func TestGinMiddleware_EdgeCases(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		require.Equal(t, http.StatusTooManyRequests, w.Code)
+		require.Equal(t, http.StatusServiceUnavailable, w.Code)
+		require.Contains(t, w.Body.String(), "rate limiter unavailable")
+	})
+
+	t.Run("未知错误策略不会静默降级为 fail-open", func(t *testing.T) {
+		router := setupTestRouter()
+		router.Use(GinMiddleware(&errorLimiter{err: errors.New("limiter error")}, &GinMiddlewareOptions{
+			KeyFunc:     func(*gin.Context) string { return "test" },
+			LimitFunc:   func(*gin.Context) Limit { return Limit{Rate: 1, Burst: 1} },
+			ErrorPolicy: ErrorPolicy("fail_clsoed"),
+		}))
+		router.GET("/test", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusServiceUnavailable, w.Code)
 		require.Contains(t, w.Body.String(), "rate limiter unavailable")
 	})
 

@@ -72,16 +72,19 @@ type Loader interface {
 	//
 	// Load 可以重复调用。每次调用都会基于当前 Config 重新创建内部 Viper 状态，
 	// 并重新读取基础配置、环境配置和环境变量；.env 也会重新处理，但只补齐当前
-	// 仍然缺失的环境变量。
+	// 仍然缺失的环境变量。Load 会在各加载阶段之间检查 ctx；取消时返回
+	// context.Canceled 或 context.DeadlineExceeded，且不提交未完成的新快照。
 	Load(ctx context.Context) error
 
 	// Get 获取原始配置值
 	Get(key string) any
 
-	// Unmarshal 将整个配置反序列化到结构体
+	// Unmarshal 将整个配置反序列化到结构体。环境变量只覆盖其映射的叶子字段，
+	// 同层的文件配置会被保留；读取不会修改 Loader 已加载的配置快照。
 	Unmarshal(v any) error
 
-	// UnmarshalKey 将指定 Key 的配置反序列化到结构体
+	// UnmarshalKey 将指定 Key 的配置反序列化到结构体。环境变量只覆盖其映射的
+	// 叶子字段，同层的文件配置会被保留；读取不会修改 Loader 已加载的配置快照。
 	UnmarshalKey(key string, v any) error
 
 	// Watch 监听配置变化，通过 context 取消监听。

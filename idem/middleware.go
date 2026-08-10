@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -31,7 +33,8 @@ import (
 func (i *idem) GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc {
 	// 应用选项
 	opt := middlewareOptions{
-		headerKey: "X-Idempotency-Key",
+		headerKey:       "X-Idempotency-Key",
+		maxRequestBytes: defaultHTTPMaxBodyBytes,
 		shouldCache: func(status int) bool {
 			return status >= 200 && status < 300
 		},
@@ -48,16 +51,34 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		if err := i.validateRawKey(rawKey); err != nil {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+		identityScope, err := resolveHTTPIdentityScope(c, opt.identityScopeFunc)
+		if err != nil {
+			if i.logger != nil {
+				i.logger.Warn("failed to resolve HTTP idem identity scope", clog.Error(err))
+			}
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
 		scope := c.FullPath()
 		if scope == "" {
 			scope = c.Request.URL.Path
 		}
-		key := scopedIdempotencyKey("http", c.Request.Method+" "+scope, rawKey)
-		fingerprint, err := fingerprintHTTPRequest(c.Request)
+		keyMaterial := bindIdempotencyIdentity("http-key", rawKey, identityScope)
+		key := scopedIdempotencyKey("http", c.Request.Method+" "+scope, keyMaterial)
+		fingerprint, err := fingerprintHTTPRequest(c.Request, opt.maxRequestBytes)
 		if err != nil {
-			c.AbortWithStatus(http.StatusBadRequest)
+			if errors.Is(err, errHTTPRequestTooLarge) {
+				c.AbortWithStatus(http.StatusRequestEntityTooLarge)
+			} else {
+				c.AbortWithStatus(http.StatusBadRequest)
+			}
 			return
 		}
+		fingerprint = bindIdempotencyIdentity("http-fingerprint", fingerprint, identityScope)
 
 		decode := func(cached []byte, logger clog.Logger, key string) (any, error) {
 			payload, err := decodeIdemEnvelope(cached, fingerprint)
@@ -66,13 +87,16 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc {
 			}
 			return decodeCachedHTTPResponse(payload, logger, key)
 		}
-		cachedResp, token, locked, err := i.loadResultOrAcquireLock(c.Request.Context(), key, decode)
+		requestCtx := c.Request.Context()
+		cachedResp, token, locked, err := i.loadResultOrAcquireLock(requestCtx, key, decode)
 		if err != nil {
 			if i.logger != nil {
 				i.logger.Error("failed to wait for HTTP idem result", clog.Error(err), clog.String("key", key))
 			}
 			if errors.Is(err, ErrKeyConflict) {
 				c.AbortWithStatus(http.StatusConflict)
+			} else if errors.Is(err, ErrStoreCapacity) {
+				c.AbortWithStatus(http.StatusServiceUnavailable)
 			} else {
 				c.AbortWithStatus(http.StatusInternalServerError)
 			}
@@ -92,11 +116,11 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc {
 			if lockReleased {
 				return
 			}
-			if err := i.store.Unlock(c.Request.Context(), key, token); err != nil && i.logger != nil {
+			if err := i.unlockForCleanup(requestCtx, key, token); err != nil && i.logger != nil {
 				i.logger.Error("failed to unlock after HTTP execution failure", clog.Error(err), clog.String("key", key))
 			}
 		}()
-		execCtx, cancel := context.WithCancel(c.Request.Context())
+		execCtx, cancel := context.WithCancel(requestCtx)
 		defer cancel()
 		c.Request = c.Request.WithContext(execCtx)
 
@@ -106,7 +130,7 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc {
 		// 使用 ResponseWriter 包装器捕获响应
 		writer := &responseWriter{
 			ResponseWriter: c.Writer,
-			body:           bytes.NewBuffer(nil),
+			body:           newLimitedCapture(i.maxResultBytes),
 		}
 		c.Writer = writer
 
@@ -122,16 +146,33 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc {
 		}
 
 		if opt.shouldCache(c.Writer.Status()) {
+			if writer.body.Exceeded() {
+				if i.logger != nil {
+					i.logger.Warn("skip caching oversized HTTP response",
+						clog.String("key", key),
+						clog.Int("max_result_bytes", i.maxResultBytes))
+				}
+				return
+			}
 			resp := cachedHTTPResponse{
 				Status: c.Writer.Status(),
 				Header: cloneHeader(c.Writer.Header()),
-				Body:   append([]byte(nil), writer.body.Bytes()...),
+				Body:   writer.body.Bytes(),
 			}
 			resp.Header.Del("Content-Length")
 
 			if respBytes, err := json.Marshal(resp); err == nil {
 				envelope, envelopeErr := encodeIdemEnvelope(fingerprint, respBytes)
 				if envelopeErr != nil {
+					return
+				}
+				if len(envelope) > i.maxResultBytes {
+					if i.logger != nil {
+						i.logger.Warn("skip caching oversized encoded HTTP response",
+							clog.String("key", key),
+							clog.Int("result_bytes", len(envelope)),
+							clog.Int("max_result_bytes", i.maxResultBytes))
+					}
 					return
 				}
 				if err := i.store.SetResult(c.Request.Context(), key, envelope, i.cfg.DefaultTTL, token); err != nil {
@@ -170,16 +211,55 @@ func scopedIdempotencyKey(kind, endpoint, key string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(kind+"\x00"+endpoint+"\x00"+key)))
 }
 
-func fingerprintHTTPRequest(req *http.Request) (string, error) {
+func resolveHTTPIdentityScope(c *gin.Context, fn HTTPIdentityScopeFunc) (string, error) {
+	if fn == nil {
+		return "", nil
+	}
+	scope, err := fn(c)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(scope) == "" {
+		return "", errors.New("idem: HTTP identity scope is empty")
+	}
+	return scope, nil
+}
+
+func bindIdempotencyIdentity(kind, value, identityScope string) string {
+	if identityScope == "" {
+		return value
+	}
+	hash := sha256.New()
+	var size [8]byte
+	for _, part := range []string{kind, identityScope, value} {
+		binary.BigEndian.PutUint64(size[:], uint64(len(part)))
+		_, _ = hash.Write(size[:])
+		_, _ = hash.Write([]byte(part))
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+var errHTTPRequestTooLarge = errors.New("idem: HTTP request body exceeds the configured byte limit")
+
+func fingerprintHTTPRequest(req *http.Request, maxBytes int64) (string, error) {
 	var body []byte
 	if req.Body != nil {
+		if req.ContentLength > maxBytes {
+			_ = req.Body.Close()
+			return "", errHTTPRequestTooLarge
+		}
+		readLimit := max(maxBytes+1, maxBytes)
 		var err error
-		body, err = io.ReadAll(req.Body)
+		body, err = io.ReadAll(io.LimitReader(req.Body, readLimit))
 		if err != nil {
+			_ = req.Body.Close()
 			return "", err
 		}
 		if err := req.Body.Close(); err != nil {
 			return "", err
+		}
+		if int64(len(body)) > maxBytes {
+			return "", errHTTPRequestTooLarge
 		}
 		req.Body = io.NopCloser(bytes.NewReader(body))
 	}
@@ -227,19 +307,21 @@ func cloneHeader(header http.Header) http.Header {
 // responseWriter 响应写入器包装器，用于捕获响应体
 type responseWriter struct {
 	gin.ResponseWriter
-	body *bytes.Buffer
+	body *limitedCapture
 }
 
 // Write 写入响应体
 func (w *responseWriter) Write(b []byte) (int, error) {
-	w.body.Write(b)
-	return w.ResponseWriter.Write(b)
+	n, err := w.ResponseWriter.Write(b)
+	w.body.Write(b[:n])
+	return n, err
 }
 
 // WriteString 写入字符串响应体
 func (w *responseWriter) WriteString(s string) (int, error) {
-	w.body.WriteString(s)
-	return w.ResponseWriter.WriteString(s)
+	n, err := w.ResponseWriter.WriteString(s)
+	w.body.WriteString(s[:n])
+	return n, err
 }
 
 // WriteHeader 写入响应头
@@ -265,4 +347,119 @@ func (w *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // Pusher 返回推送器
 func (w *responseWriter) Pusher() http.Pusher {
 	return w.ResponseWriter.Pusher()
+}
+
+// limitedCapture grows lazily in bounded chunks. Response bytes continue to
+// stream to the caller after the capture is full; Exceeded then disables
+// caching. The sum of capture chunk capacities never exceeds limit.
+type limitedCapture struct {
+	chunks   [][]byte
+	n        int
+	limit    int
+	exceeded bool
+}
+
+const (
+	minCaptureChunkBytes = 1 << 10
+	maxCaptureChunkBytes = 32 << 10
+)
+
+func newLimitedCapture(limit int) *limitedCapture {
+	return &limitedCapture{limit: limit}
+}
+
+func (b *limitedCapture) Write(p []byte) {
+	if len(p) == 0 {
+		return
+	}
+	if b.n >= b.limit {
+		b.exceeded = true
+		return
+	}
+	written := b.writeBytes(p)
+	if written < len(p) {
+		b.exceeded = true
+	}
+}
+
+func (b *limitedCapture) WriteString(s string) {
+	if len(s) == 0 {
+		return
+	}
+	if b.n >= b.limit {
+		b.exceeded = true
+		return
+	}
+	written := b.writeString(s)
+	if written < len(s) {
+		b.exceeded = true
+	}
+}
+
+func (b *limitedCapture) writeBytes(p []byte) int {
+	total := 0
+	for len(p) > 0 && b.n < b.limit {
+		chunk := b.writableChunk(len(p))
+		n := copy(chunk[len(chunk):cap(chunk)], p)
+		last := len(b.chunks) - 1
+		b.chunks[last] = chunk[:len(chunk)+n]
+		b.n += n
+		total += n
+		p = p[n:]
+	}
+	return total
+}
+
+func (b *limitedCapture) writeString(s string) int {
+	total := 0
+	for len(s) > 0 && b.n < b.limit {
+		chunk := b.writableChunk(len(s))
+		n := copy(chunk[len(chunk):cap(chunk)], s)
+		last := len(b.chunks) - 1
+		b.chunks[last] = chunk[:len(chunk)+n]
+		b.n += n
+		total += n
+		s = s[n:]
+	}
+	return total
+}
+
+func (b *limitedCapture) writableChunk(nextWriteBytes int) []byte {
+	if len(b.chunks) > 0 {
+		last := b.chunks[len(b.chunks)-1]
+		if len(last) < cap(last) {
+			return last
+		}
+	}
+
+	remaining := b.limit - b.n
+	capacity := min(max(nextWriteBytes, minCaptureChunkBytes), maxCaptureChunkBytes, remaining)
+	b.chunks = append(b.chunks, make([]byte, 0, capacity))
+	return b.chunks[len(b.chunks)-1]
+}
+
+func (b *limitedCapture) Capacity() int {
+	total := 0
+	for _, chunk := range b.chunks {
+		total += cap(chunk)
+	}
+	return total
+}
+
+func (b *limitedCapture) Bytes() []byte {
+	if b.n == 0 {
+		return nil
+	}
+	if len(b.chunks) == 1 {
+		return b.chunks[0]
+	}
+	joined := make([]byte, 0, b.n)
+	for _, chunk := range b.chunks {
+		joined = append(joined, chunk...)
+	}
+	return joined
+}
+
+func (b *limitedCapture) Exceeded() bool {
+	return b.exceeded
 }

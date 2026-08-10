@@ -1,3 +1,5 @@
+<!-- markdownlint-disable-file MD013 -->
+
 # Genesis trace：全局链路追踪组件的设计与取舍
 
 Genesis `trace` 是 Genesis 的 L0 基础组件，核心职责是提供统一的 tracing 初始化、上下文传播和消息链路辅助能力。它面向微服务和组件库场景，重点解决 OpenTelemetry `TracerProvider` 初始化、Gin / gRPC 自动传播，以及 MQ 异步消息场景下的链路关系建模问题。这篇文章不只介绍 `trace` 怎么用，更重点说明它为什么这样设计、适合什么场景，以及它和直接使用 OpenTelemetry Tracing SDK 之间的取舍。

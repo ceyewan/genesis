@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/ceyewan/genesis/testkit"
+	"github.com/ceyewan/genesis/internal/testkit"
 )
 
 func TestGinMiddleware(t *testing.T) {

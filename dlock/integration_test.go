@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/testkit"
+	"github.com/ceyewan/genesis/internal/testkit"
 )
 
 // ============================================================================
@@ -43,6 +43,21 @@ func newEtcdLockerWithConn(t *testing.T, conn connector.EtcdConnector) Locker {
 		t.Fatalf("failed to create etcd locker: %v", err)
 	}
 	return locker
+}
+
+func requireEmptyKeyRejected(t *testing.T, locker Locker) {
+	t.Helper()
+
+	require.ErrorIs(t, locker.Lock(context.Background(), ""), ErrInvalidKey)
+	ok, err := locker.TryLock(context.Background(), "")
+	require.False(t, ok)
+	require.ErrorIs(t, err, ErrInvalidKey)
+	require.ErrorIs(t, locker.Unlock(context.Background(), ""), ErrInvalidKey)
+
+	lost := locker.Lost("")
+	require.ErrorIs(t, <-lost, ErrInvalidKey)
+	_, open := <-lost
+	require.False(t, open)
 }
 
 // ============================================================================
@@ -119,6 +134,32 @@ func TestRedisLocker_LockUnlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unlock failed: %v", err)
 	}
+}
+
+func TestRedisLocker_RejectsEmptyKey(t *testing.T) {
+	conn := testkit.NewRedisContainerConnector(t)
+	locker := newRedisLockerWithConn(t, conn)
+	defer locker.Close()
+
+	requireEmptyKeyRejected(t, locker)
+}
+
+func TestRedisLocker_RejectsSubMillisecondTTL(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 30*time.Second)
+	defer cancel()
+
+	conn := testkit.NewRedisContainerConnector(t)
+	locker := newRedisLockerWithConn(t, conn)
+	defer locker.Close()
+
+	key := "test:" + testkit.NewID()
+	require.ErrorIs(t, locker.Lock(ctx, key, WithTTL(time.Microsecond)), ErrInvalidTTL)
+	ok, err := locker.TryLock(ctx, key, WithTTL(time.Nanosecond))
+	require.False(t, ok)
+	require.ErrorIs(t, err, ErrInvalidTTL)
+	exists, err := conn.GetClient().Exists(ctx, "dlock:test:"+key).Result()
+	require.NoError(t, err)
+	require.Zero(t, exists)
 }
 
 func TestRedisLocker_TryLock(t *testing.T) {
@@ -511,6 +552,14 @@ func TestEtcdLocker_LockUnlock(t *testing.T) {
 	}
 }
 
+func TestEtcdLocker_RejectsEmptyKey(t *testing.T) {
+	conn := testkit.NewEtcdContainerConnector(t)
+	locker := newEtcdLockerWithConn(t, conn)
+	defer locker.Close()
+
+	requireEmptyKeyRejected(t, locker)
+}
+
 func TestEtcdLocker_TryLock(t *testing.T) {
 	ctx, cancel := testkit.NewContext(t, 30*time.Second)
 	defer cancel()
@@ -595,6 +644,89 @@ func TestEtcdLocker_TryLock_Contention(t *testing.T) {
 	}
 
 	_ = locker2.Unlock(ctx, key)
+}
+
+func TestEtcdLocker_ConcurrentSameKeyDoesNotReleaseOwner(t *testing.T) {
+	ctx, cancel := testkit.NewContext(t, 30*time.Second)
+	defer cancel()
+
+	conn := testkit.NewEtcdContainerConnector(t)
+	owner := newEtcdLockerWithConn(t, conn).(*etcdLocker)
+	contender := newEtcdLockerWithConn(t, conn)
+	defer owner.Close()
+	defer contender.Close()
+
+	key := "test:" + testkit.NewID()
+	entered := make(chan struct{})
+	releaseCriticalSection := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseOwner := func() { releaseOnce.Do(func() { close(releaseCriticalSection) }) }
+	defer releaseOwner()
+
+	ownerDone := make(chan error, 1)
+
+	// Hold the state mutex so the first call can reserve the key but cannot yet
+	// enter etcd. This makes the same-key overlap deterministic.
+	owner.mu.Lock()
+	stateGateLocked := true
+	defer func() {
+		if stateGateLocked {
+			owner.mu.Unlock()
+		}
+	}()
+
+	go func() {
+		if err := owner.Lock(ctx, key); err != nil {
+			ownerDone <- err
+			return
+		}
+		close(entered)
+		<-releaseCriticalSection
+		ownerDone <- owner.Unlock(ctx, key)
+	}()
+
+	require.Eventually(t, func() bool {
+		owner.acquireMu.Lock()
+		defer owner.acquireMu.Unlock()
+		_, reserved := owner.acquiring[key]
+		return reserved
+	}, time.Second, time.Millisecond, "first acquisition did not reserve the key")
+
+	duplicateDone := make(chan error, 1)
+	go func() { duplicateDone <- owner.Lock(ctx, key) }()
+	select {
+	case err := <-duplicateDone:
+		require.ErrorIs(t, err, ErrLockAlreadyHeld)
+	case <-time.After(time.Second):
+		t.Fatal("concurrent same-key acquisition did not fail promptly")
+	}
+
+	owner.mu.Unlock()
+	stateGateLocked = false
+
+	select {
+	case <-entered:
+	case err := <-ownerDone:
+		require.NoError(t, err, "first acquisition failed before entering its critical section")
+	case <-time.After(5 * time.Second):
+		t.Fatal("first acquisition did not enter its critical section")
+	}
+
+	// A separate Locker has a distinct etcd session. It must remain excluded for
+	// the entire first owner's critical section, even after the duplicate attempt.
+	for range 3 {
+		acquired, err := contender.TryLock(ctx, key)
+		require.NoError(t, err)
+		require.False(t, acquired, "third-party contender entered the first owner's critical section")
+	}
+
+	releaseOwner()
+	require.NoError(t, <-ownerDone)
+
+	acquired, err := contender.TryLock(ctx, key)
+	require.NoError(t, err)
+	require.True(t, acquired, "contender should acquire after the owner releases")
+	require.NoError(t, contender.Unlock(ctx, key))
 }
 
 func TestEtcdLocker_UnlockNotHeld(t *testing.T) {

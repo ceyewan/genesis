@@ -99,12 +99,12 @@ make example-all                 # 运行所有示例
 
 ## 测试规范
 
-详见 [测试指南](testkit/README.md)。核心要求：
+详见 [测试指南](internal/testkit/README.md)。核心要求：
 
-- 优先使用 `testkit`：`testkit.NewRedisContainerClient(t)`、`testkit.NewMySQLDB(t)` 等 helper 获取基础设施连接
-- 真实集成测试通过 `testkit` 内置的 **testcontainers** 自动启动容器，无需手动执行 `make up`
+- Genesis 仓库内优先使用 `internal/testkit`：`testkit.NewRedisContainerClient(t)`、`testkit.NewMySQLDB(t)` 等 helper 获取基础设施连接
+- 真实集成测试通过 `internal/testkit` 内置的 **testcontainers** 自动启动容器，无需手动执行 `make up`
 - **`make up` / `make status` 只用于运行 `examples`**
-- 可复用的测试代码写在 `testkit` 包，供全局复用
+- 仓库内可复用的测试代码写在 `internal/testkit` 包；外部项目维护自己的 fixture
 - 使用 `testify/require` 包做断言，不用 `assert`
 - 可并行的测试用 `t.Parallel()` 标记
 - 需要临时目录时使用 `t.TempDir()`

@@ -16,7 +16,7 @@ import (
 
 	"github.com/ceyewan/genesis/breaker"
 	"github.com/ceyewan/genesis/clog"
-	pb "github.com/ceyewan/genesis/examples/proto/demo/v1"
+	pb "github.com/ceyewan/genesis/examples/breaker/internal/proto/demo/v1"
 )
 
 func main() {

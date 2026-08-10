@@ -1,9 +1,12 @@
 package idem
 
 import (
+	"context"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 
+	"github.com/gin-gonic/gin"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -16,11 +19,23 @@ type MiddlewareOption func(*middlewareOptions)
 // InterceptorOption gRPC 拦截器选项函数
 type InterceptorOption func(*interceptorOptions)
 
+// HTTPIdentityScopeFunc 从已认证的 Gin 上下文中提取稳定的租户或主体作用域。
+// 返回空字符串或错误时，中间件会拒绝请求，不会降级到未隔离的幂等 key。
+// 认证中间件必须先于 idem 中间件运行。
+type HTTPIdentityScopeFunc func(c *gin.Context) (string, error)
+
+// GRPCIdentityScopeFunc 从已认证的 gRPC 上下文中提取稳定的租户或主体作用域。
+// 返回空字符串或错误时，拦截器会拒绝请求，不会降级到未隔离的幂等 key。
+type GRPCIdentityScopeFunc func(ctx context.Context) (string, error)
+
 // options 组件初始化选项配置（内部使用，小写）
 type options struct {
-	logger    clog.Logger
-	redisConn connector.RedisConnector
-	store     Store
+	logger           clog.Logger
+	redisConn        connector.RedisConnector
+	store            Store
+	maxKeyBytes      int
+	maxResultBytes   int
+	memoryMaxEntries int
 }
 
 // WithStore injects a custom persistence implementation. It takes precedence
@@ -36,14 +51,17 @@ func WithStore(store Store) Option {
 
 // middlewareOptions Gin 中间件选项配置（内部使用，小写）
 type middlewareOptions struct {
-	headerKey   string // 幂等键的 HTTP 头名称，默认 "X-Idempotency-Key"
-	shouldCache func(status int) bool
+	headerKey         string // 幂等键的 HTTP 头名称，默认 "X-Idempotency-Key"
+	shouldCache       func(status int) bool
+	identityScopeFunc HTTPIdentityScopeFunc
+	maxRequestBytes   int64
 }
 
 // interceptorOptions gRPC 拦截器选项配置（内部使用，小写）
 type interceptorOptions struct {
-	metadataKey string // 幂等键的 gRPC metadata 键名，默认 "x-idem-key"
-	shouldCache func(msg proto.Message) bool
+	metadataKey       string // 幂等键的 gRPC metadata 键名，默认 "x-idem-key"
+	shouldCache       func(msg proto.Message) bool
+	identityScopeFunc GRPCIdentityScopeFunc
 }
 
 // WithLogger 设置 Logger。
@@ -58,6 +76,37 @@ func WithRedisConnector(conn connector.RedisConnector) Option {
 	return func(o *options) {
 		if conn != nil {
 			o.redisConn = conn
+		}
+	}
+}
+
+// WithMaxKeyBytes 设置客户端提供的原始幂等 key 的最大字节数。
+// 默认上限为 256 字节。非正值会被忽略并保留安全默认值。
+func WithMaxKeyBytes(maxBytes int) Option {
+	return func(o *options) {
+		if maxBytes > 0 {
+			o.maxKeyBytes = maxBytes
+		}
+	}
+}
+
+// WithMaxResultBytes 设置单个缓存结果的最大序列化字节数。
+// 默认上限为 1 MiB。超限的成功业务结果仍会返回，但不会缓存；非正值会被忽略。
+func WithMaxResultBytes(maxBytes int) Option {
+	return func(o *options) {
+		if maxBytes > 0 {
+			o.maxResultBytes = maxBytes
+		}
+	}
+}
+
+// WithMemoryMaxEntries 设置内置 Memory 后端允许保留的最大逻辑 key 数。
+// 默认上限为 10000。该选项不影响 Redis 或 WithStore 注入的自定义后端；
+// 非正值会被忽略并保留安全默认值。
+func WithMemoryMaxEntries(maxEntries int) Option {
+	return func(o *options) {
+		if maxEntries > 0 {
+			o.memoryMaxEntries = maxEntries
 		}
 	}
 }
@@ -82,6 +131,31 @@ func WithHTTPStatusCacheFunc(fn func(status int) bool) MiddlewareOption {
 	}
 }
 
+// WithHTTPIdentityScopeFunc 把可信的租户或主体身份同时绑定到 HTTP 幂等
+// storage key 和请求 fingerprint。这样即使不同身份复用了相同的客户端 key
+// 和请求体，也不会共享锁或缓存结果。
+//
+// fn 应从认证中间件写入的 Gin context 或 request context 中读取身份，不应直接
+// 信任客户端可伪造的普通 header。fn 返回空字符串或错误时请求会 fail closed。
+func WithHTTPIdentityScopeFunc(fn HTTPIdentityScopeFunc) MiddlewareOption {
+	return func(o *middlewareOptions) {
+		if fn != nil {
+			o.identityScopeFunc = fn
+		}
+	}
+}
+
+// WithHTTPMaxRequestBytes 设置带幂等 key 的 HTTP 请求体最大字节数。
+// 默认上限为 1 MiB。超限请求会在 handler 执行前返回 HTTP 413；
+// 非正值会被忽略并保留安全默认值。没有幂等 key 的请求不受此选项影响。
+func WithHTTPMaxRequestBytes(maxBytes int64) MiddlewareOption {
+	return func(o *middlewareOptions) {
+		if maxBytes > 0 {
+			o.maxRequestBytes = maxBytes
+		}
+	}
+}
+
 // WithMetadataKey 设置 gRPC 拦截器的幂等键 metadata 键名。
 // 默认为 "x-idem-key"。
 func WithMetadataKey(metadataKey string) InterceptorOption {
@@ -98,6 +172,20 @@ func WithGRPCResponseCacheFunc(fn func(msg proto.Message) bool) InterceptorOptio
 	return func(o *interceptorOptions) {
 		if fn != nil {
 			o.shouldCache = fn
+		}
+	}
+}
+
+// WithGRPCIdentityScopeFunc 把可信的租户或主体身份同时绑定到 gRPC 幂等
+// storage key 和请求 fingerprint。这样即使不同身份复用了相同的客户端 key
+// 和请求消息，也不会共享锁或缓存结果。
+//
+// fn 应从认证拦截器写入的 context 中读取身份，不应直接信任客户端可伪造的
+// metadata。fn 返回空字符串或错误时请求会 fail closed。
+func WithGRPCIdentityScopeFunc(fn GRPCIdentityScopeFunc) InterceptorOption {
+	return func(o *interceptorOptions) {
+		if fn != nil {
+			o.identityScopeFunc = fn
 		}
 	}
 }

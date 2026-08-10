@@ -6,7 +6,7 @@
 
 ## 组件定位
 
-- 提供稳定的结构化日志接口，避免上层组件直接耦合 `slog`
+- 提供稳定的 Logger 接口，避免上层组件耦合 `slog.Logger` / `slog.Handler`；`Field` 则刻意复用 `slog.Attr`
 - 支持 `With` 和 `WithNamespace` 派生，方便按服务、模块、子模块组织日志
 - 支持从 `context.Context` 自动提取业务字段与 OpenTelemetry Trace 字段
 - 支持 JSON / console 两种输出格式，以及运行时动态调整级别

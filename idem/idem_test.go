@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ceyewan/genesis/testkit"
+	"github.com/ceyewan/genesis/internal/testkit"
 )
 
 func TestRedisStoreRejectsStaleOwnerResult(t *testing.T) {

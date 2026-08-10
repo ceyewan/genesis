@@ -30,7 +30,7 @@ type MQ interface {
 	//
 	// 参数：
 	//   - ctx: 上下文，用于超时控制和取消
-	//   - topic: 消息主题（NATS subject / Redis stream key）
+	//   - topic: 非空消息主题（NATS subject / Redis stream key）
 	//   - data: 消息体
 	//   - opts: 发布选项（Headers 等）
 	Publish(ctx context.Context, topic string, data []byte, opts ...PublishOption) error
@@ -42,8 +42,8 @@ type MQ interface {
 	//
 	// 参数：
 	//   - ctx: 订阅生命周期上下文，取消时自动停止订阅
-	//   - topic: 订阅主题
-	//   - handler: 消息处理函数
+	//   - topic: 非空订阅主题
+	//   - handler: 非 nil 消息处理函数
 	//   - opts: 订阅选项（QueueGroup、AutoAck 等）
 	Subscribe(ctx context.Context, topic string, handler Handler, opts ...SubscribeOption) (Subscription, error)
 
@@ -53,7 +53,7 @@ type MQ interface {
 	Drain(ctx context.Context) error
 
 	// Close 关闭 MQ 客户端
-	// 注意：底层连接由 Connector 管理，此方法仅释放 MQ 内部资源
+	// 注意：此方法会停止并等待当前订阅，但底层连接由 Connector 管理，不会被关闭。
 	Close() error
 }
 
@@ -112,7 +112,7 @@ func newTransport(cfg *Config, o *options) (transport, error) {
 	switch cfg.Driver {
 	case DriverNATSJetStream:
 		if o.natsConnector == nil {
-			return nil, xerrors.New("NATS connector required, use WithNATSConnector")
+			return nil, xerrors.Wrap(connector.ErrClientNil, "NATS connector required, use WithNATSConnector")
 		}
 		if o.natsConnector.GetClient() == nil {
 			return nil, xerrors.Wrap(connector.ErrClientNil, "mq: NATS connector is not connected")
@@ -121,7 +121,7 @@ func newTransport(cfg *Config, o *options) (transport, error) {
 
 	case DriverRedisStream:
 		if o.redisConnector == nil {
-			return nil, xerrors.New("Redis connector required, use WithRedisConnector")
+			return nil, xerrors.Wrap(connector.ErrClientNil, "Redis connector required, use WithRedisConnector")
 		}
 		if o.redisConnector.GetClient() == nil {
 			return nil, xerrors.Wrap(connector.ErrClientNil, "mq: Redis connector is not connected")

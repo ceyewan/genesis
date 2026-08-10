@@ -148,6 +148,10 @@ func (t *natsJetStreamTransport) Subscribe(ctx context.Context, topic string, ha
 
 	// 启动消费
 	subCtx, cancel := context.WithCancel(ctx)
+	consumeOpts := make([]jetstream.PullConsumeOpt, 0, 1)
+	if opts.batchSizeSet {
+		consumeOpts = append(consumeOpts, jetstream.PullMaxMessages(opts.BatchSize))
+	}
 	cons, err := consumer.Consume(func(msg jetstream.Msg) {
 		m := &jetStreamMessage{
 			msg:     msg,
@@ -156,7 +160,7 @@ func (t *natsJetStreamTransport) Subscribe(ctx context.Context, topic string, ha
 		}
 		// 错误已在上层 wrapHandler 中处理
 		_ = handler(m)
-	})
+	}, consumeOpts...)
 	if err != nil {
 		cancel()
 		return nil, xerrors.Wrap(err, "start consuming failed")
@@ -301,6 +305,8 @@ type jetStreamMessage struct {
 	acked   bool
 }
 
+var _ ProgressMessage = (*jetStreamMessage)(nil)
+
 func (m *jetStreamMessage) Context() context.Context {
 	if m.ctx == nil {
 		return context.Background()
@@ -342,6 +348,15 @@ func (m *jetStreamMessage) NakWithDelay(delay time.Duration) error {
 		return xerrors.Wrap(ErrInvalidConfig, "nak delay must not be negative")
 	}
 	return m.msg.NakWithDelay(delay)
+}
+
+func (m *jetStreamMessage) InProgress() error {
+	m.ackMu.Lock()
+	defer m.ackMu.Unlock()
+	if m.acked {
+		return nil
+	}
+	return m.msg.InProgress()
 }
 
 func (m *jetStreamMessage) ID() string {

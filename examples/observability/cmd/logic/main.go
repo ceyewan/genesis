@@ -18,7 +18,7 @@ import (
 	"github.com/ceyewan/genesis/db"
 	"github.com/ceyewan/genesis/examples/observability/internal/bootstrap"
 	"github.com/ceyewan/genesis/examples/observability/internal/order"
-	"github.com/ceyewan/genesis/examples/observability/proto"
+	"github.com/ceyewan/genesis/examples/observability/internal/proto"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/mq"
 	"github.com/ceyewan/genesis/trace"

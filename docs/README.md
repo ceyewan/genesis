@@ -3,8 +3,14 @@
 - [v1 API 与生命周期决策](./v1-api-decisions.md)
 - [v0.5.0 到 v1.0.0 迁移说明](./v1-migration.md)
 - [v1 导出 API 清单](./v1-api-inventory.md)
+- [RC1 到 RC2 获批 API removals](./v1-api-compat-removals.md)
 - [v1.0.0-rc.1 验收证据](./v1-rc1-evidence.md)
 - [v1.0.0-rc.1 契约加固与消费者风险清单](./v1-rc1-contract-hardening.md)
+- [v1.0.0-rc.2 发布流程](./v1-rc2-release-process.md)
+- [v1.0.0-rc.2 候选证据](./v1-rc2-evidence.md)
+- [v1.0.0-rc.2 Release Notes（草稿）](./v1-rc2-release-notes.md)
+- [v1 后端与工具链兼容矩阵](./v1-compatibility.md)
+- [v1 安全与依赖治理政策](./v1-security-and-dependencies.md)
 
 本文档目录包含 Genesis 项目的设计文档和规范。
 
@@ -30,7 +36,7 @@
 - [Registry 核心原理](./genesis-registry-blog.md) - 服务注册发现、Watch 增量同步与 gRPC Resolver 机制
 - [Trace 设计与取舍](./genesis-trace-blog.md) - 全局链路追踪初始化、传播与 MQ 关系建模
 - [XErrors 设计与取舍](./genesis-xerrors-blog.md) - 轻量错误封装、错误链兼容与能力边界
-- [Testkit 测试辅助包](../testkit/README.md) - 测试基础设施 helper、testcontainers 容器与生命周期约定
+- [Internal Testkit](../internal/testkit/README.md) - 仓库内部测试基础设施、Testcontainers 容器与生命周期约定
 
 ## 架构概览
 
@@ -46,6 +52,6 @@ Genesis 采用四层扁平化架构：
 ## 相关链接
 
 - [项目主页](../README.md) - 返回项目主页
-- [组件列表](../README.md#-组件列表) - 查看所有组件
+- [架构分层](../README.md#架构分层) - 查看各层组件与职责
 - [使用示例](../examples/) - 查看代码示例
-- [测试辅助包](../testkit/README.md) - 查看 `testkit` 的测试 helper 和使用约束
+- [内部测试辅助包](../internal/testkit/README.md) - 查看 Genesis 仓库测试 helper 和使用约束

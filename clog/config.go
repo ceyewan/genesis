@@ -18,16 +18,16 @@ const timeFormat = "2006-01-02T15:04:05.000Z07:00"
 // 当 Output 为文件路径时，Logger 会持有对应文件句柄，
 // 调用方应在不再使用时执行 logger.Close() 释放资源。
 type Config struct {
-	Level       string `json:"level" yaml:"level"`               // debug|info|warn|error|fatal
-	Format      string `json:"format" yaml:"format"`             // json|console
-	Output      string `json:"output" yaml:"output"`             // stdout|stderr|<file path>
-	EnableColor bool   `json:"enable_color" yaml:"enable_color"` // 仅在 console 格式下有效，开发环境可启用彩色输出
-	AddSource   bool   `json:"add_source" yaml:"add_source"`     // 是否添加调用源信息
-	SourceRoot  string `json:"source_root" yaml:"source_root"`   // 用于裁剪文件路径，推荐设置为你的项目根目录，获取相对路径
-	ServiceName string `json:"service_name" yaml:"service_name"` // OTel service.name
-	Version     string `json:"version" yaml:"version"`           // OTel service.version
-	InstanceID  string `json:"instance_id" yaml:"instance_id"`   // OTel service.instance.id
-	Environment string `json:"environment" yaml:"environment"`   // OTel deployment.environment
+	Level       string `json:"level" yaml:"level" mapstructure:"level"`                      // debug|info|warn|error|fatal
+	Format      string `json:"format" yaml:"format" mapstructure:"format"`                   // json|console
+	Output      string `json:"output" yaml:"output" mapstructure:"output"`                   // stdout|stderr|<file path>
+	EnableColor bool   `json:"enable_color" yaml:"enable_color" mapstructure:"enable_color"` // 仅在 console 格式下有效，开发环境可启用彩色输出
+	AddSource   bool   `json:"add_source" yaml:"add_source" mapstructure:"add_source"`       // 是否添加调用源信息
+	SourceRoot  string `json:"source_root" yaml:"source_root" mapstructure:"source_root"`    // 用于裁剪文件路径，推荐设置为你的项目根目录，获取相对路径
+	ServiceName string `json:"service_name" yaml:"service_name" mapstructure:"service_name"` // OTel service.name
+	Version     string `json:"version" yaml:"version" mapstructure:"version"`                // OTel service.version
+	InstanceID  string `json:"instance_id" yaml:"instance_id" mapstructure:"instance_id"`    // OTel service.instance.id
+	Environment string `json:"environment" yaml:"environment" mapstructure:"environment"`    // OTel deployment.environment
 }
 
 // NewDevDefaultConfig 创建开发环境的默认日志配置

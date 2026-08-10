@@ -3,6 +3,7 @@ package breaker
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -41,6 +42,12 @@ func TestNew_InvalidConfig(t *testing.T) {
 			name: "failure ratio greater than one",
 			cfg: &Config{
 				FailureRatio: 1.1,
+			},
+		},
+		{
+			name: "failure ratio is NaN",
+			cfg: &Config{
+				FailureRatio: math.NaN(),
 			},
 		},
 	}

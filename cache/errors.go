@@ -9,8 +9,14 @@ var (
 	// ErrMiss 表示缓存未命中。
 	ErrMiss = xerrors.New("cache: miss")
 
-	// ErrNotSupported 表示当前缓存实现不支持该操作。
+	// ErrNotSupported is retained for RC1 source compatibility. Cache
+	// implementations do not return it.
+	//
+	// Deprecated: no cache operation uses this sentinel.
 	ErrNotSupported = xerrors.New("cache: operation not supported")
+
+	// ErrInvalidDestination 表示读取操作的目标值类型无效。
+	ErrInvalidDestination = xerrors.New("cache: invalid destination")
 
 	// ErrRedisConnectorRequired 表示分布式缓存缺少 Redis 连接器。
 	ErrRedisConnectorRequired = xerrors.New("cache: redis connector is required")

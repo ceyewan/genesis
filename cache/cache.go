@@ -67,7 +67,7 @@ type Distributed interface {
 	HSet(ctx context.Context, key, field string, value any) error
 	// HGet 读取 Hash 字段；未命中时返回 ErrMiss。
 	HGet(ctx context.Context, key, field string, dest any) error
-	// HGetAll 获取整个 Hash；当前仅支持 *map[string]T 目标类型。
+	// HGetAll 获取整个 Hash；当前仅支持 *map[string]T 目标类型，目标无效时返回 ErrInvalidDestination。
 	HGetAll(ctx context.Context, key string, destMap any) error
 	// HDel 删除一个或多个 Hash 字段。
 	HDel(ctx context.Context, key string, fields ...string) error
@@ -136,7 +136,7 @@ func NewDistributed(cfg *DistributedConfig, opts ...Option) (Distributed, error)
 	case DriverRedis:
 		return newRedis(opt.RedisConn, cfg, opt.Serializer, opt.Logger)
 	default:
-		return nil, xerrors.New("cache: unsupported distributed driver: " + string(cfg.Driver))
+		return nil, xerrors.Wrap(ErrInvalidConfig, "unsupported distributed driver: "+string(cfg.Driver))
 	}
 }
 

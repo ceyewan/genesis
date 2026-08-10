@@ -8,7 +8,9 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/ceyewan/genesis/clog"
 )
@@ -262,6 +264,107 @@ func TestUnaryClientInterceptor_WithFallback(t *testing.T) {
 			t.Fatalf("fallback error code = %v, want ResourceExhausted", status.Code(err))
 		}
 	})
+}
+
+func TestUnaryClientInterceptor_AppliesSuccessfulFallbackResult(t *testing.T) {
+	t.Parallel()
+
+	const key = "fallback-result"
+	brk, err := New(&Config{
+		Timeout:         time.Minute,
+		FailureRatio:    1,
+		MinimumRequests: 1,
+	}, WithFallback(func(context.Context, string, error) (any, error) {
+		return wrapperspb.String("cached"), nil
+	}))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	interceptor := brk.UnaryClientInterceptor(WithKeyFunc(func(context.Context, string, *grpc.ClientConn) string {
+		return key
+	}))
+	backendErr := status.Error(codes.Unavailable, "unavailable")
+	for range 1 {
+		if err := interceptor(context.Background(), "/test.Service/Get", nil, &wrapperspb.StringValue{}, nil, (&errorInvoker{err: backendErr}).invoke); !errors.Is(err, backendErr) {
+			t.Fatalf("interceptor() error = %v, want %v", err, backendErr)
+		}
+	}
+
+	reply := &wrapperspb.StringValue{}
+	invoked := false
+	err = interceptor(context.Background(), "/test.Service/Get", nil, reply, nil, func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
+		invoked = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("fallback interceptor() error = %v", err)
+	}
+	if invoked {
+		t.Fatal("invoker was called while breaker was open")
+	}
+	if reply.Value != "cached" {
+		t.Fatalf("reply.Value = %q, want cached", reply.Value)
+	}
+}
+
+func TestUnaryClientInterceptor_RejectsIncompatibleFallbackResult(t *testing.T) {
+	t.Parallel()
+
+	const key = "fallback-type-mismatch"
+	brk, err := New(&Config{
+		Timeout:         time.Minute,
+		FailureRatio:    1,
+		MinimumRequests: 1,
+	}, WithFallback(func(context.Context, string, error) (any, error) {
+		return "not a protobuf reply", nil
+	}))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	interceptor := brk.UnaryClientInterceptor(WithKeyFunc(func(context.Context, string, *grpc.ClientConn) string {
+		return key
+	}))
+	backendErr := status.Error(codes.Unavailable, "unavailable")
+	if err := interceptor(context.Background(), "/test.Service/Get", nil, &wrapperspb.StringValue{}, nil, (&errorInvoker{err: backendErr}).invoke); !errors.Is(err, backendErr) {
+		t.Fatalf("interceptor() error = %v, want %v", err, backendErr)
+	}
+
+	err = interceptor(context.Background(), "/test.Service/Get", nil, &wrapperspb.StringValue{}, nil, (&successInvoker{}).invoke)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("fallback type mismatch code = %v, want Internal", status.Code(err))
+	}
+}
+
+func TestApplyFallbackResultRejectsTypedNilProtoReply(t *testing.T) {
+	t.Parallel()
+
+	var reply *wrapperspb.StringValue
+	err := applyFallbackResult(reply, wrapperspb.String("cached"))
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("applyFallbackResult() code = %v, want Internal", status.Code(err))
+	}
+}
+
+func TestUnaryClientInterceptor_NilKeyFuncUsesDefault(t *testing.T) {
+	t.Parallel()
+
+	brk, err := New(nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	interceptor := brk.UnaryClientInterceptor(WithKeyFunc(nil))
+	cc, err := grpc.NewClient("passthrough:///default-key-target", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = cc.Close() })
+
+	if err := interceptor(context.Background(), "/test.Service/Get", nil, nil, cc, (&successInvoker{}).invoke); err != nil {
+		t.Fatalf("interceptor() error = %v", err)
+	}
 }
 
 func TestUnaryClientInterceptor_MultipleServices(t *testing.T) {

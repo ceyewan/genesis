@@ -14,7 +14,7 @@ import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/examples/observability/internal/bootstrap"
-	"github.com/ceyewan/genesis/examples/observability/proto"
+	"github.com/ceyewan/genesis/examples/observability/internal/proto"
 	"github.com/ceyewan/genesis/mq"
 	"github.com/ceyewan/genesis/trace"
 )

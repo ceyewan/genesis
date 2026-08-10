@@ -97,7 +97,7 @@ var (
 )
 ```
 
-使用 `xerrors.Is` 匹配哨兵错误，`ErrConnection` 可重试，`ErrConfig` 是程序 bug 需修正配置。
+使用 `xerrors.Is` 匹配哨兵错误，`ErrConnection` 可重试，`ErrConfig` 是程序 bug 需修正配置。首次 `Connect(ctx)` 会遵守调用方取消和 deadline；相应错误同时匹配 `ErrConnection` 与 `context.Canceled` / `context.DeadlineExceeded`。NATS 虽然底层连接函数不接收 context，Genesis 仍会用更短的调用方 deadline 限制尝试，并关闭取消后才返回的连接。
 
 ## 测试
 

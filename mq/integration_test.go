@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/testkit"
+	"github.com/ceyewan/genesis/internal/testkit"
 )
 
 func newJetStreamMQ(t *testing.T) MQ {
@@ -119,6 +119,71 @@ func TestJetStreamHeadersIntegration(t *testing.T) {
 	require.NoError(t, mq.Publish(ctx, subject, []byte("payload"), WithHeader("trace-id", "abc123")))
 
 	waitTimeout(t, done, 3*time.Second)
+}
+
+func TestJetStreamProgressMessageIntegration(t *testing.T) {
+	const ackWait = 500 * time.Millisecond
+	q := newJetStreamMQWithConfig(t, &JetStreamConfig{
+		AutoCreateStream: true,
+		AckWait:          ackWait,
+	})
+	ctx, cancel := testkit.NewContext(t, 6*time.Second)
+	defer cancel()
+	subject := uniqueSubject()
+
+	var deliveries atomic.Int32
+	handlerResults := make(chan error, 4)
+	sub, err := q.Subscribe(ctx, subject, func(msg Message) error {
+		if delivery := deliveries.Add(1); delivery != 1 {
+			handlerResults <- fmt.Errorf("message redelivered while first delivery was still active: %d", delivery)
+			return nil
+		}
+		progress, ok := msg.(ProgressMessage)
+		if !ok {
+			err := fmt.Errorf("JetStream message does not implement ProgressMessage")
+			handlerResults <- err
+			return err
+		}
+
+		work := time.NewTimer(1200 * time.Millisecond)
+		defer work.Stop()
+		heartbeat := time.NewTicker(100 * time.Millisecond)
+		defer heartbeat.Stop()
+		for {
+			select {
+			case <-heartbeat.C:
+				if progressErr := progress.InProgress(); progressErr != nil {
+					handlerResults <- progressErr
+					return progressErr
+				}
+			case <-work.C:
+				handlerResults <- nil
+				return nil
+			case <-ctx.Done():
+				handlerResults <- ctx.Err()
+				return ctx.Err()
+			}
+		}
+	}, WithAutoAck())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+
+	require.NoError(t, q.Publish(ctx, subject, []byte("progress")))
+	select {
+	case handlerErr := <-handlerResults:
+		require.NoError(t, handlerErr)
+	case <-time.After(4 * time.Second):
+		t.Fatal("timeout waiting for long-running handler")
+	}
+
+	observation := time.NewTimer(2 * ackWait)
+	defer observation.Stop()
+	select {
+	case handlerErr := <-handlerResults:
+		t.Fatalf("unexpected additional delivery: %v", handlerErr)
+	case <-observation.C:
+	}
+	require.Equal(t, int32(1), deliveries.Load())
 }
 
 func TestJetStreamQueueGroupIntegration(t *testing.T) {

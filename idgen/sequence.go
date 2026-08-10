@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
@@ -94,10 +96,24 @@ func (r *redisSequencer) buildKey(key string) string {
 	return fmt.Sprintf("%s:%s", r.cfg.KeyPrefix, key)
 }
 
+func (r *redisSequencer) client() (*redis.Client, error) {
+	if r.redis == nil {
+		return nil, xerrors.WithCode(ErrConnectorNil, "redis_connector_required")
+	}
+	client := r.redis.GetClient()
+	if client == nil {
+		return nil, xerrors.Wrap(connector.ErrClientNil, "idgen: redis connector is not connected")
+	}
+	return client, nil
+}
+
 // Next 生成下一个序列号
 func (r *redisSequencer) Next(ctx context.Context, key string) (int64, error) {
 	redisKey := r.buildKey(key)
-	client := r.redis.GetClient()
+	client, err := r.client()
+	if err != nil {
+		return 0, err
+	}
 
 	// Lua 脚本：原子执行 IncrBy + MaxValue Check + rollback + Expire。
 	// 达到上限时回滚本次增量，绝不重置或回绕。
@@ -166,7 +182,10 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 	}
 
 	redisKey := r.buildKey(key)
-	client := r.redis.GetClient()
+	client, err := r.client()
+	if err != nil {
+		return nil, err
+	}
 
 	// Lua 脚本：原子执行 Batch IncrBy + MaxValue Check + rollback + Expire。
 	script := `
@@ -248,7 +267,10 @@ func (r *redisSequencer) Set(ctx context.Context, key string, value int64) error
 	}
 
 	redisKey := r.buildKey(key)
-	client := r.redis.GetClient()
+	client, err := r.client()
+	if err != nil {
+		return err
+	}
 	expiration := r.cfg.TTL
 
 	if err := client.Set(ctx, redisKey, value, expiration).Err(); err != nil {
@@ -284,7 +306,10 @@ func (r *redisSequencer) SetIfNotExists(ctx context.Context, key string, value i
 	}
 
 	redisKey := r.buildKey(key)
-	client := r.redis.GetClient()
+	client, err := r.client()
+	if err != nil {
+		return false, err
+	}
 	expiration := r.cfg.TTL
 
 	// 使用 SETNX (Set if Not eXists) 命令

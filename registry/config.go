@@ -9,17 +9,17 @@ import (
 // Config Registry 组件配置
 type Config struct {
 	// Namespace Etcd Key 前缀，默认 "/genesis/services"
-	Namespace string `yaml:"namespace" json:"namespace"`
+	Namespace string `mapstructure:"namespace" yaml:"namespace" json:"namespace"`
 
 	// DefaultTTL 默认服务注册租约时长，默认 30s
-	DefaultTTL time.Duration `yaml:"default_ttl" json:"default_ttl"`
+	DefaultTTL time.Duration `mapstructure:"default_ttl" yaml:"default_ttl" json:"default_ttl"`
 
 	// RetryInterval 重连/重试间隔，默认 1s
-	RetryInterval time.Duration `yaml:"retry_interval" json:"retry_interval"`
+	RetryInterval time.Duration `mapstructure:"retry_interval" yaml:"retry_interval" json:"retry_interval"`
 
 	// LeaseFailureBuffer 是 LeaseFailures 通道缓冲，默认 64，必须大于 0。
 	// 缓冲满时新事件会被记录并丢弃，永不阻塞 registry 后台生命周期。
-	LeaseFailureBuffer int `yaml:"lease_failure_buffer" json:"lease_failure_buffer"`
+	LeaseFailureBuffer int `mapstructure:"lease_failure_buffer" yaml:"lease_failure_buffer" json:"lease_failure_buffer"`
 }
 
 // Validate 验证配置有效性
@@ -28,16 +28,16 @@ func (c *Config) validate() error {
 		return nil // nil 配置使用默认值，在 New() 中处理
 	}
 	if c.DefaultTTL < 0 {
-		return xerrors.New("registry: invalid default_ttl, must be non-negative")
+		return xerrors.Wrap(ErrInvalidConfig, "default_ttl must be non-negative")
 	}
 	if c.DefaultTTL > 0 && c.DefaultTTL < time.Second {
-		return xerrors.New("registry: invalid default_ttl, must be >= 1s")
+		return xerrors.Wrap(ErrInvalidConfig, "default_ttl must be at least 1s")
 	}
 	if c.RetryInterval < 0 {
-		return xerrors.New("registry: invalid retry_interval, must be non-negative")
+		return xerrors.Wrap(ErrInvalidConfig, "retry_interval must be non-negative")
 	}
 	if c.LeaseFailureBuffer < 0 {
-		return xerrors.New("registry: invalid lease_failure_buffer, must be non-negative")
+		return xerrors.Wrap(ErrInvalidConfig, "lease_failure_buffer must be non-negative")
 	}
 	return nil
 }

@@ -20,8 +20,16 @@ type etcdLocker struct {
 	cfg     *Config
 	logger  clog.Logger
 	locks   map[string]*etcdLockEntry
-	lost    map[string]*etcdLockEntry
+	lost    boundedTombstones[*etcdLockEntry]
 	mu      sync.RWMutex
+
+	// acquiring reserves a key while its distributed acquisition is in flight.
+	// Etcd mutexes derive their contender key from prefix + session lease ID, so
+	// two concurrent acquisitions for the same key on the shared default session
+	// would otherwise appear reentrant to etcd. The losing local acquisition could
+	// then delete the first acquisition's shared mutex key while cleaning up.
+	acquireMu sync.Mutex
+	acquiring map[string]struct{}
 
 	closeOnce sync.Once
 	closeErr  error
@@ -61,12 +69,13 @@ func newEtcd(conn connector.EtcdConnector, cfg *Config, logger clog.Logger) (Loc
 	}
 
 	return &etcdLocker{
-		client:  client,
-		session: session,
-		cfg:     cfg,
-		logger:  logger,
-		locks:   make(map[string]*etcdLockEntry),
-		lost:    make(map[string]*etcdLockEntry),
+		client:    client,
+		session:   session,
+		cfg:       cfg,
+		logger:    logger,
+		locks:     make(map[string]*etcdLockEntry),
+		lost:      newBoundedTombstones[*etcdLockEntry](),
+		acquiring: make(map[string]struct{}),
 	}, nil
 }
 
@@ -86,6 +95,18 @@ func (l *etcdLocker) TryLock(ctx context.Context, key string, opts ...LockOption
 }
 
 func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...LockOption) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
+	// Reserve the key before checking or contacting etcd. The default session is
+	// shared by all locks in this Locker, and etcd/concurrency treats another
+	// mutex with the same prefix and lease as the same owner. Only one local
+	// acquisition for a key may therefore enter the distributed protocol.
+	if !l.reserveAcquisition(key) {
+		return xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
+	}
+	defer l.releaseAcquisition(key)
+
 	// 检查本地是否已持有锁（防止同一 locker 重复获取同一把锁）
 	l.mu.RLock()
 	if l.closed {
@@ -96,6 +117,7 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 		l.mu.RUnlock()
 		return xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
+	defaultSession := l.session
 	l.mu.RUnlock()
 
 	ttl, err := resolveLockTTL(l.cfg.DefaultTTL, opts...)
@@ -116,7 +138,7 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 			return xerrors.Wrap(err, "failed to create etcd session")
 		}
 	} else {
-		session = l.session
+		session = defaultSession
 	}
 
 	mutex := concurrency.NewMutex(session, etcdKey)
@@ -168,7 +190,7 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 		return xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
 	l.locks[key] = entry
-	delete(l.lost, key)
+	l.lost.Delete(key)
 	l.mu.Unlock()
 	go l.monitorOwnership(key, entry)
 
@@ -178,11 +200,33 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 	return nil
 }
 
+func (l *etcdLocker) reserveAcquisition(key string) bool {
+	l.acquireMu.Lock()
+	defer l.acquireMu.Unlock()
+	if l.acquiring == nil {
+		l.acquiring = make(map[string]struct{})
+	}
+	if _, exists := l.acquiring[key]; exists {
+		return false
+	}
+	l.acquiring[key] = struct{}{}
+	return true
+}
+
+func (l *etcdLocker) releaseAcquisition(key string) {
+	l.acquireMu.Lock()
+	delete(l.acquiring, key)
+	l.acquireMu.Unlock()
+}
+
 func (l *etcdLocker) Unlock(ctx context.Context, key string) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
 	l.mu.RLock()
 	entry, exists := l.locks[key]
 	if !exists {
-		_, lost := l.lost[key]
+		_, lost := l.lost.Get(key)
 		l.mu.RUnlock()
 		if lost {
 			return xerrors.Wrapf(ErrOwnershipLost, "key: %s", key)
@@ -218,19 +262,19 @@ func (l *etcdLocker) Unlock(ctx context.Context, key string) error {
 }
 
 func (l *etcdLocker) Lost(key string) <-chan error {
+	if err := validateKey(key); err != nil {
+		return terminalErrorChannel(err)
+	}
 	l.mu.RLock()
 	entry := l.locks[key]
 	if entry == nil {
-		entry = l.lost[key]
+		entry, _ = l.lost.Get(key)
 	}
 	l.mu.RUnlock()
 	if entry != nil {
 		return entry.lostCh
 	}
-	ch := make(chan error, 1)
-	ch <- xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
-	close(ch)
-	return ch
+	return terminalErrorChannel(xerrors.Wrapf(ErrLockNotHeld, "key: %s", key))
 }
 
 func (l *etcdLocker) monitorOwnership(key string, entry *etcdLockEntry) {
@@ -246,7 +290,7 @@ func (l *etcdLocker) markOwnershipLost(key string, entry *etcdLockEntry) {
 	l.mu.Lock()
 	if l.locks[key] == entry {
 		delete(l.locks, key)
-		l.lost[key] = entry
+		l.lost.Put(key, entry)
 		entry.lostOnce.Do(func() {
 			entry.lostCh <- xerrors.Wrapf(ErrOwnershipLost, "key: %s", key)
 			close(entry.lostCh)
@@ -285,7 +329,7 @@ func (l *etcdLocker) Close() error {
 		entries := make(map[string]*etcdLockEntry, len(l.locks))
 		maps.Copy(entries, l.locks)
 		l.locks = make(map[string]*etcdLockEntry)
-		l.lost = make(map[string]*etcdLockEntry)
+		l.lost.Clear()
 		defaultSession := l.session
 		l.session = nil
 		l.mu.Unlock()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
@@ -14,6 +15,7 @@ import (
 type natsConnector struct {
 	cfg     *NATSConfig
 	conn    *nats.Conn
+	connect func(string, ...nats.Option) (*nats.Conn, error)
 	logger  clog.Logger
 	metrics *connectorTelemetry
 	healthy atomic.Bool
@@ -41,6 +43,7 @@ func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
 
 	c := &natsConnector{
 		cfg:     cfg,
+		connect: nats.Connect,
 		logger:  opt.logger.With(clog.String("connector", "nats"), clog.String("name", cfg.Name)),
 		metrics: newConnectorTelemetry(opt.meter, "nats", cfg.Name),
 	}
@@ -61,14 +64,12 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 
 	c.logger.Info("attempting to connect to nats", clog.String("url", c.cfg.URL))
 
-	// 注意：nats.Connect 不接受 context，取消语义通过 nats.Timeout(cfg.ConnectTimeout) 实现
 	// 创建 NATS 连接选项
 	natsOpts := []nats.Option{
 		nats.Name(c.cfg.Name),
 		nats.ReconnectWait(c.cfg.ReconnectWait),
 		nats.MaxReconnects(c.cfg.MaxReconnects),
 		nats.PingInterval(c.cfg.PingInterval),
-		nats.Timeout(c.cfg.ConnectTimeout),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
 			c.healthy.Store(false)
 			if c.closing.Load() {
@@ -98,8 +99,11 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 		natsOpts = append(natsOpts, nats.Token(c.cfg.Token))
 	}
 
-	// 建立连接
-	conn, err := nats.Connect(c.cfg.URL, natsOpts...)
+	// nats.Connect itself does not accept a context. Run the bounded attempt
+	// behind a context-aware handoff and use the shorter caller deadline as the
+	// NATS timeout. A connection that completes after cancellation is closed by
+	// the attempt goroutine instead of being leaked.
+	conn, err := c.connectWithContext(ctx, natsOpts...)
 	if err != nil {
 		c.logger.Error("failed to connect to nats", clog.Error(err), clog.String("url", c.cfg.URL))
 		return wrapConnectorCause(ErrConnection, err, "nats connector[%s]", c.cfg.Name)
@@ -110,6 +114,56 @@ func (c *natsConnector) Connect(ctx context.Context) error {
 	c.logger.Info("successfully connected to nats", clog.String("url", c.cfg.URL))
 
 	return nil
+}
+
+type natsConnectResult struct {
+	conn *nats.Conn
+	err  error
+}
+
+func (c *natsConnector) connectWithContext(ctx context.Context, opts ...nats.Option) (*nats.Conn, error) {
+	if ctx == nil {
+		return nil, xerrors.New("nats connect context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	timeout := c.cfg.ConnectTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, context.DeadlineExceeded
+		}
+		timeout = min(timeout, remaining)
+	}
+	opts = append(opts, nats.Timeout(timeout))
+
+	resultCh := make(chan natsConnectResult)
+	abandoned := make(chan struct{})
+	go func() {
+		conn, err := c.connect(c.cfg.URL, opts...)
+		select {
+		case resultCh <- natsConnectResult{conn: conn, err: err}:
+		case <-abandoned:
+			if conn != nil {
+				conn.Close()
+			}
+		}
+	}()
+
+	select {
+	case result := <-resultCh:
+		close(abandoned)
+		if result.err != nil && result.conn != nil {
+			result.conn.Close()
+			result.conn = nil
+		}
+		return result.conn, result.err
+	case <-ctx.Done():
+		close(abandoned)
+		return nil, ctx.Err()
+	}
 }
 
 // Close 关闭连接

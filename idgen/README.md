@@ -132,6 +132,7 @@ if err != nil {
 - `GeneratorConfig.Mode` 决定 Snowflake 位布局，不要再用 `DatacenterID == 0` 隐式推断模式。
 - `single_dc` 模式下 `WorkerID` 范围是 `0..1023`，且 `DatacenterID` 必须为 `0`。
 - `multi_dc` 模式下 `WorkerID` 范围是 `0..31`，`DatacenterID` 范围是 `0..31`。
+- 每个 `Generator` 都有独立的时间戳/序列状态。同一个 ID 碰撞域（例如同一张表的主键、会汇入同一唯一索引或消息命名空间）内，不能同时创建两个使用相同 `(Mode, DatacenterID, WorkerID)` 的 `Generator`，即使它们位于同一进程；否则同一毫秒内可能生成重复 ID。只有永不合并、互不比较唯一性的命名空间才可以复用该组合。
 - `Sequencer` 当前不支持 Etcd。
 - `SequencerConfig.TTL`、`AllocatorConfig.TTL` 都是 `time.Duration`；不要再传裸整数秒。
 - `MaxValue` 是耗尽边界；超过时返回 `ErrSequenceExhausted`，Redis 中的值保持不变，永不回绕。

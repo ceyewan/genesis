@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -56,11 +57,23 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 			// 幂等键为空，直接调用 handler
 			return handler(ctx, req)
 		}
-		key := scopedIdempotencyKey("grpc", info.FullMethod, rawKey)
+		if err := i.validateRawKey(rawKey); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		identityScope, identityErr := resolveGRPCIdentityScope(ctx, opt.identityScopeFunc)
+		if identityErr != nil {
+			if i.logger != nil {
+				i.logger.Warn("failed to resolve gRPC idem identity scope", clog.Error(identityErr))
+			}
+			return nil, status.Error(codes.Unauthenticated, "unable to resolve idempotency identity scope")
+		}
+		keyMaterial := bindIdempotencyIdentity("grpc-key", rawKey, identityScope)
+		key := scopedIdempotencyKey("grpc", info.FullMethod, keyMaterial)
 		fingerprint, fingerprintErr := fingerprintGRPCRequest(info.FullMethod, req)
 		if fingerprintErr != nil {
 			return nil, status.Error(codes.InvalidArgument, "unable to fingerprint idempotent request")
 		}
+		fingerprint = bindIdempotencyIdentity("grpc-fingerprint", fingerprint, identityScope)
 
 		if i.logger != nil {
 			i.logger.Debug("gRPC call with idem key",
@@ -83,6 +96,9 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 			if xerrors.Is(err, ErrKeyConflict) {
 				return nil, status.Error(codes.AlreadyExists, err.Error())
 			}
+			if xerrors.Is(err, ErrStoreCapacity) {
+				return nil, status.Error(codes.ResourceExhausted, err.Error())
+			}
 			return nil, err
 		}
 		if !locked {
@@ -97,7 +113,7 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 			if lockReleased {
 				return
 			}
-			if err := i.store.Unlock(ctx, key, token); err != nil {
+			if err := i.unlockForCleanup(ctx, key, token); err != nil {
 				if i.logger != nil {
 					i.logger.Error("failed to unlock idem key", clog.Error(err), clog.String("key", key))
 				}
@@ -122,11 +138,28 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 				if !opt.shouldCache(msg) {
 					return result, nil
 				}
+				if proto.Size(msg) > i.maxResultBytes {
+					if i.logger != nil {
+						i.logger.Warn("skip caching oversized gRPC response",
+							clog.String("key", key),
+							clog.Int("max_result_bytes", i.maxResultBytes))
+					}
+					return result, nil
+				}
 				if anyMsg, err := anypb.New(msg); err == nil {
 					if respBytes, err := proto.Marshal(anyMsg); err == nil {
 						envelope, envelopeErr := encodeIdemEnvelope(fingerprint, respBytes)
 						if envelopeErr != nil {
 							return nil, envelopeErr
+						}
+						if len(envelope) > i.maxResultBytes {
+							if i.logger != nil {
+								i.logger.Warn("skip caching oversized encoded gRPC response",
+									clog.String("key", key),
+									clog.Int("result_bytes", len(envelope)),
+									clog.Int("max_result_bytes", i.maxResultBytes))
+							}
+							return result, nil
 						}
 						if err := i.store.SetResult(ctx, key, envelope, i.cfg.DefaultTTL, token); err != nil {
 							if i.logger != nil {
@@ -165,6 +198,20 @@ func fingerprintGRPCRequest(fullMethod string, req any) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(append([]byte(fullMethod+"\x00"), data...))), nil
+}
+
+func resolveGRPCIdentityScope(ctx context.Context, fn GRPCIdentityScopeFunc) (string, error) {
+	if fn == nil {
+		return "", nil
+	}
+	scope, err := fn(ctx)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(scope) == "" {
+		return "", xerrors.New("idem: gRPC identity scope is empty")
+	}
+	return scope, nil
 }
 
 func decodeCachedGRPCResponse(cachedResp []byte, _ clog.Logger, _ string) (any, error) {

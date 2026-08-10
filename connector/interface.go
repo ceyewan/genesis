@@ -70,6 +70,7 @@ type Connector interface {
 	// 返回错误：
 	//   - ErrConnection: 连接建立失败
 	//   - ErrConfig: 配置无效
+	//   - context.Canceled/context.DeadlineExceeded: 调用方取消或超时（同时保留 ErrConnection 分类）
 	Connect(ctx context.Context) error
 
 	// Close 关闭连接并释放资源。

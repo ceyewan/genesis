@@ -81,7 +81,10 @@ func New(cfg *Config) (Meter, error) {
 	if cfg.Port > 0 && cfg.Path != "" {
 		addr := net.JoinHostPort(cfg.ListenAddress, strconv.Itoa(cfg.Port))
 		mux := http.NewServeMux()
-		mux.Handle(cfg.Path, promhttp.Handler())
+		if err := registerMetricsHandler(mux, cfg.Path, promhttp.Handler()); err != nil {
+			_ = mp.Shutdown(context.Background())
+			return nil, err
+		}
 		httpServer = &http.Server{Addr: addr, Handler: mux}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -127,6 +130,17 @@ func New(cfg *Config) (Meter, error) {
 		logger:       logger,
 		shutdownDone: make(chan struct{}),
 	}, nil
+}
+
+func registerMetricsHandler(mux *http.ServeMux, pattern string, handler http.Handler) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = xerrors.Wrapf(ErrInvalidConfig, "invalid metrics path pattern %q: %v", pattern, recovered)
+		}
+	}()
+
+	mux.Handle(pattern, handler)
+	return nil
 }
 
 type meterImpl struct {
@@ -255,32 +269,32 @@ func (c *counterImpl) Add(ctx context.Context, val float64, labels ...Label) {
 type gaugeImpl struct {
 	g      metric.Float64Gauge
 	values map[string]float64
-	mu     sync.RWMutex
+	mu     sync.Mutex
 }
 
 func (g *gaugeImpl) Set(ctx context.Context, val float64, labels ...Label) {
 	key := labelKey(labels)
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.values[key] = val
-	g.mu.Unlock()
 	g.g.Record(ctx, val, metric.WithAttributes(toAttributes(labels)...))
 }
 
 func (g *gaugeImpl) Inc(ctx context.Context, labels ...Label) {
 	key := labelKey(labels)
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.values[key]++
 	val := g.values[key]
-	g.mu.Unlock()
 	g.g.Record(ctx, val, metric.WithAttributes(toAttributes(labels)...))
 }
 
 func (g *gaugeImpl) Dec(ctx context.Context, labels ...Label) {
 	key := labelKey(labels)
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.values[key]--
 	val := g.values[key]
-	g.mu.Unlock()
 	g.g.Record(ctx, val, metric.WithAttributes(toAttributes(labels)...))
 }
 

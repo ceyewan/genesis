@@ -13,7 +13,10 @@ var (
 	// ErrNotSupported 操作不支持
 	ErrNotSupported = xerrors.New("mq: operation not supported by this driver")
 
-	// ErrSubscriptionClosed 订阅已关闭
+	// ErrSubscriptionClosed is retained for RC1 source compatibility.
+	//
+	// Deprecated: subscription shutdown is reported through Done, Drain, and
+	// backend/context errors; no implementation returns this sentinel.
 	ErrSubscriptionClosed = xerrors.New("mq: subscription closed")
 
 	// ErrPanicRecovered Handler panic 已恢复

@@ -37,6 +37,7 @@ limiter, err := ratelimit.New(&ratelimit.Config{
 	Standalone: &ratelimit.StandaloneConfig{
 		CleanupInterval: time.Minute,
 		IdleTimeout:     5 * time.Minute,
+		MaxKeys:        10000,
 	},
 }, ratelimit.WithLogger(logger))
 if err != nil {
@@ -164,8 +165,11 @@ server := grpc.NewServer(
 
 - `Allow` / `AllowN` 是核心能力，适用于两种驱动。
 - `Wait` 只适用于单机模式；分布式模式返回 `ErrNotSupported`。
+- `Limit.Rate` 必须是大于零的有限数，`Burst` 必须大于零；NaN 和正负无穷均返回 `ErrInvalidLimit`。
+- 单机模式按 `key + Limit` 缓存桶，`MaxKeys` 默认 10000 且是硬上限；达到上限的新组合返回 `ErrKeyLimitExceeded`。不要把请求 ID 等无界高基数值直接作为 key。
 - 当前分布式实现只有 Redis 令牌桶，没有滑动窗口、漏桶等可切换算法。
-- 中间件和拦截器默认 `fail_open`，这是为了把限流器故障和业务故障隔离开；如果你的场景更重保护而不是可用性，应显式改成 `fail_closed`。
-- `MetricAllowTotal`、`MetricErrors` 等更细粒度指标常量已经定义，但当前实现主要记录的是允许/拒绝计数。
+- 中间件和拦截器在未配置策略时默认 `fail_open`，这是为了把限流器故障和业务故障隔离开；如果你的场景更重保护而不是可用性，应显式改成 `fail_closed`。显式但未知的策略值按 `fail_closed` 处理，避免拼写错误静默关闭硬保护。
+- Gin 的真实限流拒绝返回 `429 Too Many Requests`；限流器自身故障且采用 `fail_closed` 时返回 `503 Service Unavailable`，与 gRPC 的 `Unavailable` 语义一致。
+- 当前实现记录 `MetricAllowed`（`ratelimit_allowed_total`）、`MetricDenied`（`ratelimit_denied_total`）和 `MetricErrors`（`ratelimit_errors_total`），并只以低基数 `LabelMode` 区分 standalone / distributed。容量拒绝、后端错误和其他操作错误计入 `MetricErrors`。
 
 更完整的设计背景、分布式语义和工程取舍见：[Genesis ratelimit：请求入口限流组件的设计与取舍](../docs/genesis-ratelimit-blog.md)

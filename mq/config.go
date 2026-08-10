@@ -115,7 +115,7 @@ func (c *Config) setDefaults() {
 // validate 验证配置
 func (c *Config) validate() error {
 	if c.Driver == "" {
-		return xerrors.New("driver is required")
+		return xerrors.Wrap(ErrInvalidConfig, "driver is required")
 	}
 
 	switch c.Driver {

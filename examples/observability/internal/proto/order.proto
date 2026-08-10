@@ -1,0 +1,34 @@
+syntax = "proto3";
+package proto;
+option go_package = "github.com/ceyewan/genesis/examples/observability/internal/proto;proto";
+
+service OrderService {
+  rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
+}
+
+service GatewayCallbackService {
+  rpc PushResult (PushResultRequest) returns (PushResultResponse);
+}
+
+message CreateOrderRequest {
+  string user_id = 1;
+  string product_id = 2;
+}
+
+message CreateOrderResponse {
+  string order_id = 1;
+  string status = 2;
+}
+
+message OrderResult {
+  string order_id = 1;
+  string status = 2;
+}
+
+message PushResultRequest {
+  OrderResult result = 1;
+}
+
+message PushResultResponse {
+  bool ok = 1;
+}

@@ -153,9 +153,9 @@ user-service.api.order
 
 ## 5 关键实现思路
 
-### 5.1 基于 `slog`，但不暴露 `slog`
+### 5.1 基于 `slog`，但不暴露 `slog.Logger` / `slog.Handler`
 
-`clog` 的底层实现建立在 `log/slog` 之上。选择 `slog` 的原因很直接：它是标准库的一部分，具备结构化字段、`Handler` 抽象、`LevelVar`、`Record` 等成熟能力，足够支撑 Genesis 当前需要的日志能力。
+`clog` 的底层实现建立在 `log/slog` 之上。选择 `slog` 的原因很直接：它是标准库的一部分，具备结构化字段、`Handler` 抽象、`LevelVar`、`Record` 等成熟能力，足够支撑 Genesis 当前需要的日志能力。公共 `Logger` 接口不暴露 `slog.Logger` 或 `slog.Handler`，但 `Field` 刻意作为 `slog.Attr` 的类型别名；这是减少字段适配成本的显式第三方类型绑定，不是完全隐藏 `slog`。
 
 但 `clog` 不直接把 `slog.Logger` 暴露给上层。这样做的目的不是为了“再包一层”，而是为了保持上层组件契约稳定。只要 `clog.Logger` 不变，底层具体用 `slog` 还是别的实现，上层组件都不用改。
 

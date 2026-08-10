@@ -13,6 +13,8 @@ package trace
 import (
 	"context"
 	"maps"
+	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,9 +30,12 @@ import (
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
-// Inject 将当前 Context 的 Trace 信息注入到 carrier 中
-// 用于 MQ 等场景，将链路追踪信息传递给下游
+// Inject 将当前 Context 的 Trace 信息注入到 carrier 中。
+// 用于 MQ 等场景，将链路追踪信息传递给下游。nil carrier 是安全的 no-op。
 func Inject(ctx context.Context, carrier map[string]string) {
+	if carrier == nil {
+		return
+	}
 	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(carrier))
 }
 
@@ -50,7 +55,7 @@ func Extract(ctx context.Context, carrier map[string]string) context.Context {
 // 实例，还会将全局 tracing 状态重置为安全默认值。
 func Init(cfg *Config) (func(context.Context) error, error) {
 	if cfg == nil {
-		return nil, xerrors.New("config is required")
+		return nil, validateConfig(nil)
 	}
 	config := *cfg
 	config.Headers = maps.Clone(cfg.Headers)
@@ -168,22 +173,22 @@ func (e *reportingExporter) ExportSpans(ctx context.Context, spans []sdktrace.Re
 
 func validateConfig(cfg *Config) error {
 	if cfg == nil {
-		return xerrors.New("config is required")
+		return xerrors.Wrap(ErrInvalidConfig, "config is required")
 	}
-	if cfg.ServiceName == "" {
-		return xerrors.New("service_name is required")
+	if strings.TrimSpace(cfg.ServiceName) == "" {
+		return xerrors.Wrap(ErrInvalidConfig, "service_name is required")
 	}
-	if cfg.Endpoint == "" {
-		return xerrors.New("endpoint is required")
+	if strings.TrimSpace(cfg.Endpoint) == "" {
+		return xerrors.Wrap(ErrInvalidConfig, "endpoint is required")
 	}
-	if cfg.Sampler < 0 || cfg.Sampler > 1 {
-		return xerrors.New("sampler must be between 0 and 1")
+	if math.IsNaN(cfg.Sampler) || cfg.Sampler < 0 || cfg.Sampler > 1 {
+		return xerrors.Wrap(ErrInvalidConfig, "sampler must be between 0 and 1")
 	}
 	if cfg.ExporterTimeout < 0 {
-		return xerrors.New("exporter_timeout must not be negative")
+		return xerrors.Wrap(ErrInvalidConfig, "exporter_timeout must not be negative")
 	}
 	if cfg.Batcher != "" && cfg.Batcher != BatcherBatch && cfg.Batcher != BatcherImmediate {
-		return xerrors.New("batcher must be \"batch\" or \"immediate\"")
+		return xerrors.Wrap(ErrInvalidConfig, "batcher must be \"batch\" or \"immediate\"")
 	}
 	return nil
 }

@@ -2,7 +2,7 @@
 // 它基于 slog，支持命名空间管理、Context 字段提取和运行时级别调整。
 //
 // 特性：
-//   - 抽象接口，不暴露底层实现（slog）
+//   - 不暴露 slog.Logger / slog.Handler；Field 刻意复用 slog.Attr
 //   - 支持层级命名空间，对于子模块 order，可使用 logger.WithNamespace("order")
 //   - 基于标准库 slog，额外支持可选的 OpenTelemetry Trace 上下文字段提取
 //   - 采用函数式选项模式，符合 Genesis 标准

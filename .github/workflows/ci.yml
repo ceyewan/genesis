@@ -16,6 +16,15 @@ on:
         description: Full commit SHA to verify before creating the tag
         required: true
         type: string
+      resonance_sha:
+        description: Full Resonance commit SHA that must consume this candidate successfully
+        required: true
+        type: string
+      publish_tag:
+        description: Create the annotated candidate tag only after every release gate succeeds
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -25,76 +34,475 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26.1"
+  GO_MIN_VERSION: "1.26.0"
+  GO_VERSION: "1.26.5"
+  NODE_VERSION: "22.23.2"
   GOLANGCI_LINT_VERSION: "v2.12.2"
   BUF_VERSION: "v1.66.1"
   ACTIONLINT_VERSION: "v1.7.7"
+  MARKDOWNLINT_CLI2_VERSION: "0.18.1"
 
 jobs:
-  test:
-    name: Test + Testcontainers
+  candidate-source:
+    name: Resolve candidate identity
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 5
+    outputs:
+      candidate_sha: ${{ steps.resolve.outputs.candidate_sha }}
+      candidate_tag: ${{ steps.resolve.outputs.candidate_tag }}
+      resonance_sha: ${{ steps.resolve.outputs.resonance_sha }}
+      stage3_manifest_path: ${{ steps.resolve.outputs.stage3_manifest_path }}
+      stage3_manifest_sha256: ${{ steps.resolve.outputs.stage3_manifest_sha256 }}
+      stage3_tested_resonance_sha: ${{ steps.resolve.outputs.stage3_tested_resonance_sha }}
+      stage3_tested_at: ${{ steps.resolve.outputs.stage3_tested_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+          fetch-depth: 0
+      - name: Resolve and validate source identities
+        id: resolve
+        env:
+          INPUT_CANDIDATE_SHA: ${{ inputs.candidate_sha || '' }}
+          INPUT_CANDIDATE_TAG: ${{ inputs.candidate_tag || '' }}
+          INPUT_RESONANCE_SHA: ${{ inputs.resonance_sha || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_sha="$(git rev-parse HEAD)"
+          candidate_tag=""
+          resonance_sha=""
+          stage3_manifest_path=""
+          stage3_manifest_sha256=""
+          stage3_tested_resonance_sha=""
+          stage3_tested_at=""
+          pre_id='(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
+          semver="^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-${pre_id}(\\.${pre_id})*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            test "${GITHUB_REF}" = "refs/heads/main"
+            [[ "${INPUT_CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+            [[ "${INPUT_RESONANCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+            test "${INPUT_CANDIDATE_SHA}" != "0000000000000000000000000000000000000000"
+            test "${INPUT_RESONANCE_SHA}" != "0000000000000000000000000000000000000000"
+            test "${GITHUB_SHA}" = "${INPUT_CANDIDATE_SHA}"
+            test "${candidate_sha}" = "${INPUT_CANDIDATE_SHA}"
+            candidate_sha="${INPUT_CANDIDATE_SHA}"
+            candidate_tag="${INPUT_CANDIDATE_TAG}"
+            resonance_sha="${INPUT_RESONANCE_SHA}"
+            [[ "${candidate_tag}" =~ ${semver} ]]
+            ! git rev-parse --verify --quiet "refs/tags/${candidate_tag}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            test "$(git cat-file -t "${GITHUB_REF}")" = "tag"
+            candidate_sha="$(git rev-list -n 1 "${GITHUB_REF}")"
+            test "${candidate_sha}" != "0000000000000000000000000000000000000000"
+            test "${candidate_sha}" = "${GITHUB_SHA}"
+            candidate_tag="${GITHUB_REF_NAME}"
+            annotation_fields=":"
+            preflight_attempt=""
+            workflow_sha=""
+            normal_artifact_name=""
+            race_artifact_name=""
+            api_artifact_name=""
+            consumer_artifact_name=""
+            evidence_artifact_name=""
+            normal_artifact_attempt=""
+            race_artifact_attempt=""
+            api_artifact_attempt=""
+            consumer_artifact_attempt=""
+            evidence_artifact_attempt=""
+
+            mark_annotation_field() {
+              local field="$1"
+              if [[ "${annotation_fields}" == *":${field}:"* ]]; then
+                echo "duplicate tag annotation field: ${field}" >&2
+                exit 1
+              fi
+              annotation_fields="${annotation_fields}${field}:"
+            }
+
+            invalid_annotation_field() {
+              echo "invalid tag annotation field: $1" >&2
+              exit 1
+            }
+
+            while IFS= read -r line; do
+              annotation_line="${line#"${line%%[![:space:]]*}"}"
+              case "${annotation_line}" in
+                Resonance-SHA*)
+                  [[ "${line}" =~ ^Resonance-SHA:[[:space:]]*([0-9a-f]{40})$ ]] || invalid_annotation_field "Resonance-SHA"
+                  resonance_sha="${BASH_REMATCH[1]}"
+                  test "${resonance_sha}" != "0000000000000000000000000000000000000000"
+                  mark_annotation_field resonance_sha
+                  ;;
+                Stage3-Manifest-Path*)
+                  test "${line}" = "Stage3-Manifest-Path: docs/verification/evidence/genesis-v1.0.0-rc.2-stage3.json" || invalid_annotation_field "Stage3-Manifest-Path"
+                  stage3_manifest_path="docs/verification/evidence/genesis-v1.0.0-rc.2-stage3.json"
+                  mark_annotation_field stage3_manifest_path
+                  ;;
+                Stage3-Manifest-SHA256*)
+                  [[ "${line}" =~ ^Stage3-Manifest-SHA256:[[:space:]]*([0-9a-f]{64})$ ]] || invalid_annotation_field "Stage3-Manifest-SHA256"
+                  stage3_manifest_sha256="${BASH_REMATCH[1]}"
+                  [[ ! "${stage3_manifest_sha256}" =~ ^0+$ ]]
+                  mark_annotation_field stage3_manifest_sha256
+                  ;;
+                Stage3-Tested-Resonance-SHA*)
+                  [[ "${line}" =~ ^Stage3-Tested-Resonance-SHA:[[:space:]]*([0-9a-f]{40})$ ]] || invalid_annotation_field "Stage3-Tested-Resonance-SHA"
+                  stage3_tested_resonance_sha="${BASH_REMATCH[1]}"
+                  [[ ! "${stage3_tested_resonance_sha}" =~ ^0+$ ]]
+                  mark_annotation_field stage3_tested_resonance_sha
+                  ;;
+                Stage3-Tested-At*)
+                  [[ "${line}" =~ ^Stage3-Tested-At:[[:space:]]*([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z)$ ]] || invalid_annotation_field "Stage3-Tested-At"
+                  stage3_tested_at="${BASH_REMATCH[1]}"
+                  mark_annotation_field stage3_tested_at
+                  ;;
+                Resonance-Main-Tip-At-Publish*)
+                  [[ "${line}" =~ ^Resonance-Main-Tip-At-Publish:[[:space:]]*([0-9a-f]{40})$ ]] || invalid_annotation_field "Resonance-Main-Tip-At-Publish"
+                  test "${BASH_REMATCH[1]}" = "${resonance_sha}"
+                  mark_annotation_field resonance_main_tip_at_publish
+                  ;;
+                Resonance-Main-Checked-At*)
+                  [[ "${line}" =~ ^Resonance-Main-Checked-At:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || invalid_annotation_field "Resonance-Main-Checked-At"
+                  mark_annotation_field resonance_main_checked_at
+                  ;;
+                Preflight-Run*)
+                  [[ "${line}" =~ ^Preflight-Run:[[:space:]]*([1-9][0-9]*)$ ]] || invalid_annotation_field "Preflight-Run"
+                  mark_annotation_field preflight_run
+                  ;;
+                Preflight-Attempt*)
+                  [[ "${line}" =~ ^Preflight-Attempt:[[:space:]]*([1-9][0-9]*)$ ]] || invalid_annotation_field "Preflight-Attempt"
+                  preflight_attempt="${BASH_REMATCH[1]}"
+                  mark_annotation_field preflight_attempt
+                  ;;
+                Workflow-SHA*)
+                  [[ "${line}" =~ ^Workflow-SHA:[[:space:]]*([0-9a-f]{40})$ ]] || invalid_annotation_field "Workflow-SHA"
+                  workflow_sha="${BASH_REMATCH[1]}"
+                  mark_annotation_field workflow_sha
+                  ;;
+                evidence_artifact_sha256*)
+                  [[ "${line}" =~ ^evidence_artifact_sha256=([0-9a-f]{64})$ ]] || invalid_annotation_field "evidence_artifact_sha256"
+                  [[ ! "${BASH_REMATCH[1]}" =~ ^0+$ ]]
+                  mark_annotation_field evidence_artifact_sha256
+                  ;;
+                evidence_artifact_id*)
+                  [[ "${line}" =~ ^evidence_artifact_id=([1-9][0-9]*)$ ]] || invalid_annotation_field "evidence_artifact_id"
+                  mark_annotation_field evidence_artifact_id
+                  ;;
+                evidence_artifact_name*)
+                  [[ "${line}" =~ ^evidence_artifact_name=(release-evidence-[0-9a-f]{40}-[1-9][0-9]*)$ ]] || invalid_annotation_field "evidence_artifact_name"
+                  evidence_artifact_name="${BASH_REMATCH[1]}"
+                  mark_annotation_field evidence_artifact_name
+                  ;;
+                evidence_artifact_attempt*)
+                  [[ "${line}" =~ ^evidence_artifact_attempt=([1-9][0-9]*)$ ]] || invalid_annotation_field "evidence_artifact_attempt"
+                  evidence_artifact_attempt="${BASH_REMATCH[1]}"
+                  mark_annotation_field evidence_artifact_attempt
+                  ;;
+                evidence_artifact_size*)
+                  [[ "${line}" =~ ^evidence_artifact_size=([1-9][0-9]*)$ ]] || invalid_annotation_field "evidence_artifact_size"
+                  mark_annotation_field evidence_artifact_size
+                  ;;
+                normal_artifact_sha256*)
+                  [[ "${line}" =~ ^normal_artifact_sha256=([0-9a-f]{64})$ ]] || invalid_annotation_field "normal_artifact_sha256"
+                  [[ ! "${BASH_REMATCH[1]}" =~ ^0+$ ]]
+                  mark_annotation_field normal_artifact_sha256
+                  ;;
+                normal_artifact_id*)
+                  [[ "${line}" =~ ^normal_artifact_id=([1-9][0-9]*)$ ]] || invalid_annotation_field "normal_artifact_id"
+                  mark_annotation_field normal_artifact_id
+                  ;;
+                normal_artifact_name*)
+                  [[ "${line}" =~ ^normal_artifact_name=(testcontainers-normal-[0-9a-f]{40}-[1-9][0-9]*)$ ]] || invalid_annotation_field "normal_artifact_name"
+                  normal_artifact_name="${BASH_REMATCH[1]}"
+                  mark_annotation_field normal_artifact_name
+                  ;;
+                normal_artifact_attempt*)
+                  [[ "${line}" =~ ^normal_artifact_attempt=([1-9][0-9]*)$ ]] || invalid_annotation_field "normal_artifact_attempt"
+                  normal_artifact_attempt="${BASH_REMATCH[1]}"
+                  mark_annotation_field normal_artifact_attempt
+                  ;;
+                normal_artifact_size*)
+                  [[ "${line}" =~ ^normal_artifact_size=([1-9][0-9]*)$ ]] || invalid_annotation_field "normal_artifact_size"
+                  mark_annotation_field normal_artifact_size
+                  ;;
+                race_artifact_sha256*)
+                  [[ "${line}" =~ ^race_artifact_sha256=([0-9a-f]{64})$ ]] || invalid_annotation_field "race_artifact_sha256"
+                  [[ ! "${BASH_REMATCH[1]}" =~ ^0+$ ]]
+                  mark_annotation_field race_artifact_sha256
+                  ;;
+                race_artifact_id*)
+                  [[ "${line}" =~ ^race_artifact_id=([1-9][0-9]*)$ ]] || invalid_annotation_field "race_artifact_id"
+                  mark_annotation_field race_artifact_id
+                  ;;
+                race_artifact_name*)
+                  [[ "${line}" =~ ^race_artifact_name=(testcontainers-race-[0-9a-f]{40}-[1-9][0-9]*)$ ]] || invalid_annotation_field "race_artifact_name"
+                  race_artifact_name="${BASH_REMATCH[1]}"
+                  mark_annotation_field race_artifact_name
+                  ;;
+                race_artifact_attempt*)
+                  [[ "${line}" =~ ^race_artifact_attempt=([1-9][0-9]*)$ ]] || invalid_annotation_field "race_artifact_attempt"
+                  race_artifact_attempt="${BASH_REMATCH[1]}"
+                  mark_annotation_field race_artifact_attempt
+                  ;;
+                race_artifact_size*)
+                  [[ "${line}" =~ ^race_artifact_size=([1-9][0-9]*)$ ]] || invalid_annotation_field "race_artifact_size"
+                  mark_annotation_field race_artifact_size
+                  ;;
+                api_artifact_sha256*)
+                  [[ "${line}" =~ ^api_artifact_sha256=([0-9a-f]{64})$ ]] || invalid_annotation_field "api_artifact_sha256"
+                  [[ ! "${BASH_REMATCH[1]}" =~ ^0+$ ]]
+                  mark_annotation_field api_artifact_sha256
+                  ;;
+                api_artifact_id*)
+                  [[ "${line}" =~ ^api_artifact_id=([1-9][0-9]*)$ ]] || invalid_annotation_field "api_artifact_id"
+                  mark_annotation_field api_artifact_id
+                  ;;
+                api_artifact_name*)
+                  [[ "${line}" =~ ^api_artifact_name=(v1-api-godoc-[0-9a-f]{40}-[1-9][0-9]*)$ ]] || invalid_annotation_field "api_artifact_name"
+                  api_artifact_name="${BASH_REMATCH[1]}"
+                  mark_annotation_field api_artifact_name
+                  ;;
+                api_artifact_attempt*)
+                  [[ "${line}" =~ ^api_artifact_attempt=([1-9][0-9]*)$ ]] || invalid_annotation_field "api_artifact_attempt"
+                  api_artifact_attempt="${BASH_REMATCH[1]}"
+                  mark_annotation_field api_artifact_attempt
+                  ;;
+                api_artifact_size*)
+                  [[ "${line}" =~ ^api_artifact_size=([1-9][0-9]*)$ ]] || invalid_annotation_field "api_artifact_size"
+                  mark_annotation_field api_artifact_size
+                  ;;
+                consumer_artifact_sha256*)
+                  [[ "${line}" =~ ^consumer_artifact_sha256=([0-9a-f]{64})$ ]] || invalid_annotation_field "consumer_artifact_sha256"
+                  [[ ! "${BASH_REMATCH[1]}" =~ ^0+$ ]]
+                  mark_annotation_field consumer_artifact_sha256
+                  ;;
+                consumer_artifact_id*)
+                  [[ "${line}" =~ ^consumer_artifact_id=([1-9][0-9]*)$ ]] || invalid_annotation_field "consumer_artifact_id"
+                  mark_annotation_field consumer_artifact_id
+                  ;;
+                consumer_artifact_name*)
+                  [[ "${line}" =~ ^consumer_artifact_name=(resonance-consumer-[0-9a-f]{40}-[1-9][0-9]*)$ ]] || invalid_annotation_field "consumer_artifact_name"
+                  consumer_artifact_name="${BASH_REMATCH[1]}"
+                  mark_annotation_field consumer_artifact_name
+                  ;;
+                consumer_artifact_attempt*)
+                  [[ "${line}" =~ ^consumer_artifact_attempt=([1-9][0-9]*)$ ]] || invalid_annotation_field "consumer_artifact_attempt"
+                  consumer_artifact_attempt="${BASH_REMATCH[1]}"
+                  mark_annotation_field consumer_artifact_attempt
+                  ;;
+                consumer_artifact_size*)
+                  [[ "${line}" =~ ^consumer_artifact_size=([1-9][0-9]*)$ ]] || invalid_annotation_field "consumer_artifact_size"
+                  mark_annotation_field consumer_artifact_size
+                  ;;
+              esac
+            done < <(git for-each-ref --format='%(contents)' "${GITHUB_REF}")
+
+            required_annotation_fields=(
+              resonance_sha
+              stage3_manifest_path
+              stage3_manifest_sha256
+              stage3_tested_resonance_sha
+              stage3_tested_at
+              resonance_main_tip_at_publish
+              resonance_main_checked_at
+              preflight_run
+              preflight_attempt
+              workflow_sha
+              evidence_artifact_sha256
+              evidence_artifact_id
+              evidence_artifact_name
+              evidence_artifact_attempt
+              evidence_artifact_size
+              normal_artifact_sha256
+              normal_artifact_id
+              normal_artifact_name
+              normal_artifact_attempt
+              normal_artifact_size
+              race_artifact_sha256
+              race_artifact_id
+              race_artifact_name
+              race_artifact_attempt
+              race_artifact_size
+              api_artifact_sha256
+              api_artifact_id
+              api_artifact_name
+              api_artifact_attempt
+              api_artifact_size
+              consumer_artifact_sha256
+              consumer_artifact_id
+              consumer_artifact_name
+              consumer_artifact_attempt
+              consumer_artifact_size
+            )
+            for field in "${required_annotation_fields[@]}"; do
+              if [[ "${annotation_fields}" != *":${field}:"* ]]; then
+                echo "missing tag annotation field: ${field}" >&2
+                exit 1
+              fi
+            done
+
+            test "${workflow_sha}" = "${candidate_sha}"
+            test "${preflight_attempt}" = "${evidence_artifact_attempt}"
+            test "${evidence_artifact_name}" = "release-evidence-${candidate_sha}-${evidence_artifact_attempt}"
+            test "${normal_artifact_name}" = "testcontainers-normal-${candidate_sha}-${normal_artifact_attempt}"
+            test "${race_artifact_name}" = "testcontainers-race-${candidate_sha}-${race_artifact_attempt}"
+            test "${api_artifact_name}" = "v1-api-godoc-${candidate_sha}-${api_artifact_attempt}"
+            test "${consumer_artifact_name}" = "resonance-consumer-${candidate_sha}-${consumer_artifact_attempt}"
+          fi
+
+          if [[ -n "${candidate_tag}" ]]; then
+            [[ "${candidate_tag}" =~ ${semver} ]]
+          fi
+
+          {
+            echo "candidate_sha=${candidate_sha}"
+            echo "candidate_tag=${candidate_tag}"
+            echo "resonance_sha=${resonance_sha}"
+            echo "stage3_manifest_path=${stage3_manifest_path}"
+            echo "stage3_manifest_sha256=${stage3_manifest_sha256}"
+            echo "stage3_tested_resonance_sha=${stage3_tested_resonance_sha}"
+            echo "stage3_tested_at=${stage3_tested_at}"
+          } >> "${GITHUB_OUTPUT}"
+
+  minimum-go:
+    name: Minimum Go build + unit contracts
+    needs: candidate-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.candidate-source.outputs.candidate_sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_MIN_VERSION }}
+          cache: true
+      - name: Build all packages with the minimum supported Go version
+        run: go build ./...
+      - name: Compile all test packages with the minimum supported Go version
+        run: go test -run '^$' ./...
+      - name: Verify downloaded module checksums
+        run: go mod verify
+      - name: Run dependency-free contract packages
+        run: go test -count=1 ./auth ./breaker ./clog ./config ./db ./metrics ./trace ./xerrors
+      - name: Check exported API inventory
+        run: make api-inventory-check
+      - name: Check RC1 API compatibility baseline
+        run: make api-compat-check
+
+  test:
+    name: Test + Testcontainers
+    needs: candidate-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      artifact_attempt: ${{ steps.artifact.outputs.attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.candidate-source.outputs.candidate_sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: Download modules
         run: go mod download
+      - name: Resolve artifact identity
+        id: artifact
+        run: |
+          echo "name=testcontainers-normal-${{ needs.candidate-source.outputs.candidate_sha }}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+          echo "attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
       - name: Run ordinary tests with container evidence
         shell: bash
         run: |
           set -o pipefail
           mkdir -p artifacts
+          {
+            echo "candidate_sha=${{ needs.candidate-source.outputs.candidate_sha }}"
+            echo "workflow_ref=${GITHUB_WORKFLOW_REF}"
+            echo "workflow_sha=${GITHUB_WORKFLOW_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+          } > artifacts/source-identity.txt
           go test -count=1 -json ./... | tee artifacts/test-normal.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Record backend dependency identities
+        run: bash .github/scripts/record-backend-dependencies.sh artifacts/backend-dependencies-normal.txt
+      - id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: testcontainers-normal-${{ github.sha }}
-          path: artifacts/test-normal.json
+          name: ${{ steps.artifact.outputs.name }}
+          path: artifacts
+          retention-days: 90
 
   race:
     name: Race + Testcontainers
+    needs: candidate-source
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    outputs:
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      artifact_attempt: ${{ steps.artifact.outputs.attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+          ref: ${{ needs.candidate-source.outputs.candidate_sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: Download modules
         run: go mod download
+      - name: Resolve artifact identity
+        id: artifact
+        run: |
+          echo "name=testcontainers-race-${{ needs.candidate-source.outputs.candidate_sha }}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+          echo "attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
       - name: Run race tests with container evidence
         shell: bash
         run: |
           set -o pipefail
           mkdir -p artifacts
-          go test -race -count=1 -json ./... | tee artifacts/test-race.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          {
+            echo "candidate_sha=${{ needs.candidate-source.outputs.candidate_sha }}"
+            echo "workflow_ref=${GITHUB_WORKFLOW_REF}"
+            echo "workflow_sha=${GITHUB_WORKFLOW_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+          } > artifacts/source-identity.txt
+          go test -race -p 1 -count=1 -json ./... | tee artifacts/test-race.json
+      - name: Record backend dependency identities
+        run: bash .github/scripts/record-backend-dependencies.sh artifacts/backend-dependencies-race.txt
+      - id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: testcontainers-race-${{ github.sha }}
-          path: artifacts/test-race.json
+          name: ${{ steps.artifact.outputs.name }}
+          path: artifacts
+          retention-days: 90
 
   quality:
-    name: Lint, modernize, Buf, comments
+    name: Lint, Markdown, modernize, Buf, comments
+    needs: candidate-source
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+          ref: ${{ needs.candidate-source.outputs.candidate_sha }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
       - name: Install pinned tools
         run: |
           go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
@@ -102,6 +510,8 @@ jobs:
           go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
       - name: Validate workflow syntax
         run: actionlint
+      - name: Check Markdown and repository-local links
+        run: make markdown-check
       - name: Check module drift
         run: |
           go mod tidy
@@ -116,54 +526,741 @@ jobs:
         run: make buf-lint
 
   api-docs:
-    name: Build, API, examples, GoDoc
+    name: Build, API, examples, Markdown, GoDoc
+    needs: candidate-source
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - name: Build all packages
-        run: go build ./...
-      - name: Compile Go examples
-        run: make examples-check
-      - name: Check exported API inventory
-        run: make api-inventory-check
-      - name: Generate GoDoc evidence
-        run: make godoc-artifacts
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: v1-api-godoc-${{ github.sha }}
-          path: |
-            artifacts/godoc
-            docs/v1-api-inventory.md
-            docs/v1-api-decisions.md
-            docs/v1-migration.md
-
-  release-gate:
-    name: Release gate
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [test, race, quality, api-docs]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    outputs:
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      artifact_attempt: ${{ steps.artifact.outputs.attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
+          ref: ${{ needs.candidate-source.outputs.candidate_sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Resolve artifact identity
+        id: artifact
+        run: |
+          echo "name=v1-api-godoc-${{ needs.candidate-source.outputs.candidate_sha }}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+          echo "attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+      - name: Build all packages
+        run: go build ./...
+      - name: Compile Go examples
+        run: make examples-check
+      - name: Run standalone Go examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          make example-all | tee artifacts/example-all.txt
+      - name: Record Markdown gate evidence
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          make markdown-check | tee artifacts/markdown-check.txt
+      - name: Check exported API inventory
+        run: make api-inventory-check
+      - name: Rebuild immutable RC1 API baseline from its pinned commit
+        run: make api-baseline-check
+      - name: Check RC1 API compatibility baseline
+        run: make api-compat-check
+      - name: Generate GoDoc evidence
+        run: |
+          make godoc-artifacts
+          {
+            echo "candidate_sha=${{ needs.candidate-source.outputs.candidate_sha }}"
+            echo "workflow_ref=${GITHUB_WORKFLOW_REF}"
+            echo "workflow_sha=${GITHUB_WORKFLOW_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+          } > artifacts/source-identity.txt
+      - id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          retention-days: 90
+          path: |
+            artifacts/godoc
+            artifacts/example-all.txt
+            artifacts/markdown-check.txt
+            artifacts/source-identity.txt
+            docs/v1-api-inventory.md
+            docs/v1-api-decisions.md
+            docs/v1-migration.md
+            docs/api-baselines/v1.0.0-rc.1.md
+            docs/v1-api-compat-allowlist.md
+            docs/v1-api-compat-expected.md
+            docs/v1-api-compat-removals.md
+
+  consumer-compat:
+    name: Resonance candidate consumer
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: candidate-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      artifact_attempt: ${{ steps.artifact.outputs.attempt }}
+      stage3_manifest_path: ${{ steps.stage3-evidence.outputs.stage3_manifest_path }}
+      stage3_manifest_sha256: ${{ steps.stage3-evidence.outputs.stage3_manifest_sha256 }}
+      stage3_tested_resonance_sha: ${{ steps.stage3-evidence.outputs.stage3_tested_resonance_sha }}
+      stage3_tested_at: ${{ steps.stage3-evidence.outputs.stage3_tested_at }}
+    steps:
+      - name: Checkout Genesis candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.candidate-source.outputs.candidate_sha }}
+          path: genesis
+      - name: Checkout exact Resonance consumer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ceyewan/resonance
+          ref: ${{ needs.candidate-source.outputs.resonance_sha }}
+          fetch-depth: 0
+          path: resonance
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            genesis/go.sum
+            resonance/go.sum
+      - name: Resolve artifact identity
+        id: artifact
+        run: |
+          echo "name=resonance-consumer-${{ needs.candidate-source.outputs.candidate_sha }}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+          echo "attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+      - name: Validate exact source identities
+        id: resonance-source
+        env:
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+          RESONANCE_SHA: ${{ needs.candidate-source.outputs.resonance_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ ! "${CANDIDATE_SHA}" =~ ^0+$ ]]
+          [[ "${RESONANCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ ! "${RESONANCE_SHA}" =~ ^0+$ ]]
+          test "$(git -C genesis rev-parse HEAD)" = "${CANDIDATE_SHA}"
+          test "$(git -C resonance rev-parse HEAD)" = "${RESONANCE_SHA}"
+          git -C resonance fetch --no-tags origin main
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            test "$(git -C resonance rev-parse origin/main)" = "${RESONANCE_SHA}"
+          else
+            git -C resonance merge-base --is-ancestor "${RESONANCE_SHA}" origin/main
+          fi
+          echo "main_tip=$(git -C resonance rev-parse origin/main)" >> "${GITHUB_OUTPUT}"
+          echo "checked_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "${GITHUB_OUTPUT}"
+      - name: Validate the committed Stage 3 handoff
+        id: stage3-evidence
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag == true)
+        working-directory: genesis
+        env:
+          RESONANCE_CHECKOUT: ../resonance
+          RESONANCE_CONSUMER_SHA: ${{ needs.candidate-source.outputs.resonance_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./internal/cmd/stage3evidence \
+            --repo "${RESONANCE_CHECKOUT}" \
+            --consumer-sha "${RESONANCE_CONSUMER_SHA}" | tee -a "${GITHUB_OUTPUT}"
+      - name: Match tag-bound Stage 3 evidence
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DERIVED_MANIFEST_PATH: ${{ steps.stage3-evidence.outputs.stage3_manifest_path }}
+          DERIVED_MANIFEST_SHA256: ${{ steps.stage3-evidence.outputs.stage3_manifest_sha256 }}
+          DERIVED_TESTED_RESONANCE_SHA: ${{ steps.stage3-evidence.outputs.stage3_tested_resonance_sha }}
+          DERIVED_TESTED_AT: ${{ steps.stage3-evidence.outputs.stage3_tested_at }}
+          TAG_MANIFEST_PATH: ${{ needs.candidate-source.outputs.stage3_manifest_path }}
+          TAG_MANIFEST_SHA256: ${{ needs.candidate-source.outputs.stage3_manifest_sha256 }}
+          TAG_TESTED_RESONANCE_SHA: ${{ needs.candidate-source.outputs.stage3_tested_resonance_sha }}
+          TAG_TESTED_AT: ${{ needs.candidate-source.outputs.stage3_tested_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${DERIVED_MANIFEST_PATH}" = "${TAG_MANIFEST_PATH}"
+          test "${DERIVED_MANIFEST_SHA256}" = "${TAG_MANIFEST_SHA256}"
+          test "${DERIVED_TESTED_RESONANCE_SHA}" = "${TAG_TESTED_RESONANCE_SHA}"
+          test "${DERIVED_TESTED_AT}" = "${TAG_TESTED_AT}"
+      - name: Test Resonance against the unpublished Genesis candidate
+        working-directory: resonance
+        shell: bash
+        env:
+          GOWORK: off
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          mkdir -p ../artifacts
+          test ! -e go.work
+          test ! -e go.work.sum
+          test -z "$(git status --porcelain=v1 -- go.mod go.sum)"
+          direct_version="$(go list -m -mod=readonly -f '{{.Version}}' github.com/ceyewan/genesis)"
+          direct_replace="$(go list -m -mod=readonly -f '{{with .Replace}}{{.Path}}{{end}}' github.com/ceyewan/genesis)"
+          test "${direct_version}" = "v1.0.0-rc.1"
+          test -z "${direct_replace}"
+          {
+            echo "genesis_direct_version=${direct_version}"
+            echo "genesis_replace=none"
+            echo "gowork=off"
+          } > ../artifacts/resonance-module-input.txt
+          go mod edit -replace=github.com/ceyewan/genesis=../genesis
+          go test -count=1 -json ./... | tee ../artifacts/resonance-test.json
+          go test -race -count=1 ./task/config ./task/consumer ./task/streaming | tee ../artifacts/resonance-task-race.txt
+          go test -race ./pilot/isolation -run '^TestConcurrentTenantIsolation$' -count=5 | tee ../artifacts/resonance-isolation-race.txt
+          git diff -- go.mod go.sum > ../artifacts/resonance-module-diff.patch
+          go mod edit -dropreplace=github.com/ceyewan/genesis
+          git diff --exit-code -- go.mod go.sum
+          test -z "$(git status --porcelain=v1 -- go.mod go.sum)"
+          test "$(go list -m -mod=readonly -f '{{.Version}}' github.com/ceyewan/genesis)" = "${direct_version}"
+      - name: Record candidate pair
+        env:
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          RESONANCE_SHA: ${{ needs.candidate-source.outputs.resonance_sha }}
+          STAGE3_MANIFEST_PATH: ${{ steps.stage3-evidence.outputs.stage3_manifest_path }}
+          STAGE3_MANIFEST_SHA256: ${{ steps.stage3-evidence.outputs.stage3_manifest_sha256 }}
+          STAGE3_TESTED_RESONANCE_SHA: ${{ steps.stage3-evidence.outputs.stage3_tested_resonance_sha }}
+          STAGE3_TESTED_AT: ${{ steps.stage3-evidence.outputs.stage3_tested_at }}
+        shell: bash
+        run: |
+          {
+            echo "genesis_sha=${CANDIDATE_SHA}"
+            echo "candidate_tag=${CANDIDATE_TAG}"
+            echo "resonance_sha=${RESONANCE_SHA}"
+            echo "stage3_manifest_path=${STAGE3_MANIFEST_PATH}"
+            echo "stage3_manifest_sha256=${STAGE3_MANIFEST_SHA256}"
+            echo "stage3_tested_resonance_sha=${STAGE3_TESTED_RESONANCE_SHA}"
+            echo "stage3_tested_at=${STAGE3_TESTED_AT}"
+            echo "resonance_main_tip=${{ steps.resonance-source.outputs.main_tip }}"
+            echo "resonance_main_checked_at=${{ steps.resonance-source.outputs.checked_at }}"
+            sed -n '/^genesis_direct_version=/p' artifacts/resonance-module-input.txt
+            echo "go_version=$(go version)"
+            echo "workflow_ref=${GITHUB_WORKFLOW_REF}"
+            echo "workflow_sha=${GITHUB_WORKFLOW_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+          } > artifacts/candidate-pair.txt
+      - id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: artifacts
+          retention-days: 90
+
+  release-gate:
+    name: Release gate
+    if: >-
+      always() &&
+      (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') &&
+      needs.candidate-source.result == 'success' &&
+      needs.minimum-go.result == 'success' &&
+      needs.test.result == 'success' &&
+      needs.race.result == 'success' &&
+      needs.quality.result == 'success' &&
+      needs.api-docs.result == 'success' &&
+      needs.consumer-compat.result == 'success'
+    needs: [candidate-source, minimum-go, test, race, quality, api-docs, consumer-compat]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      evidence_digest: ${{ steps.upload.outputs.artifact-digest }}
+      evidence_id: ${{ steps.upload.outputs.artifact-id }}
+      evidence_name: ${{ steps.artifact.outputs.name }}
+      evidence_attempt: ${{ steps.artifact.outputs.attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.candidate-source.outputs.candidate_sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_tag == true
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
       - name: Validate release candidate identity
         env:
-          CANDIDATE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_tag || github.ref_name }}
-          CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+          RESONANCE_SHA: ${{ needs.candidate-source.outputs.resonance_sha }}
+          STAGE3_MANIFEST_PATH: ${{ needs.consumer-compat.outputs.stage3_manifest_path }}
+          STAGE3_MANIFEST_SHA256: ${{ needs.consumer-compat.outputs.stage3_manifest_sha256 }}
+          STAGE3_TESTED_RESONANCE_SHA: ${{ needs.consumer-compat.outputs.stage3_tested_resonance_sha }}
+          STAGE3_TESTED_AT: ${{ needs.consumer-compat.outputs.stage3_tested_at }}
+          REQUIRE_STAGE3: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag == true) }}
         shell: bash
         run: |
           set -euo pipefail
           pre_id='(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
           semver="^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-${pre_id}(\\.${pre_id})*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
           [[ "${CANDIDATE_TAG}" =~ ${semver} ]]
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ ! "${CANDIDATE_SHA}" =~ ^0+$ ]]
           test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
+          git fetch --no-tags origin main
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            test "$(git rev-parse origin/main)" = "${CANDIDATE_SHA}"
+          else
+            git merge-base --is-ancestor "${CANDIDATE_SHA}" origin/main
+          fi
+          [[ "${RESONANCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ ! "${RESONANCE_SHA}" =~ ^0+$ ]]
+          if [[ "${REQUIRE_STAGE3}" == "true" ]]; then
+            test "${STAGE3_MANIFEST_PATH}" = "docs/verification/evidence/genesis-v1.0.0-rc.2-stage3.json"
+            [[ "${STAGE3_MANIFEST_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+            [[ ! "${STAGE3_MANIFEST_SHA256}" =~ ^0+$ ]]
+            [[ "${STAGE3_TESTED_RESONANCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+            [[ ! "${STAGE3_TESTED_RESONANCE_SHA}" =~ ^0+$ ]]
+            [[ "${STAGE3_TESTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]
+          else
+            test -z "${STAGE3_MANIFEST_PATH}${STAGE3_MANIFEST_SHA256}${STAGE3_TESTED_RESONANCE_SHA}${STAGE3_TESTED_AT}"
+          fi
           echo "All release gates passed for ${CANDIDATE_TAG} at ${CANDIDATE_SHA}"
+      - name: Validate publication-ready RC2 notes before tag authorization
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_tag == true
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+        run: go run ./internal/cmd/publishprerelease --validate-only
+      - name: Resolve release-evidence artifact identity
+        id: artifact
+        env:
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            name="tag-defense-evidence-${CANDIDATE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          else
+            name="release-evidence-${CANDIDATE_SHA}-${GITHUB_RUN_ATTEMPT}"
+          fi
+          echo "name=${name}" >> "${GITHUB_OUTPUT}"
+          echo "attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+      - name: Record immutable preflight evidence
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+          RESONANCE_SHA: ${{ needs.candidate-source.outputs.resonance_sha }}
+          STAGE3_MANIFEST_PATH: ${{ needs.consumer-compat.outputs.stage3_manifest_path }}
+          STAGE3_MANIFEST_SHA256: ${{ needs.consumer-compat.outputs.stage3_manifest_sha256 }}
+          STAGE3_TESTED_RESONANCE_SHA: ${{ needs.consumer-compat.outputs.stage3_tested_resonance_sha }}
+          STAGE3_TESTED_AT: ${{ needs.consumer-compat.outputs.stage3_tested_at }}
+          REQUIRE_STAGE3: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag == true) }}
+          NORMAL_DIGEST: ${{ needs.test.outputs.artifact_digest }}
+          RACE_DIGEST: ${{ needs.race.outputs.artifact_digest }}
+          API_DIGEST: ${{ needs.api-docs.outputs.artifact_digest }}
+          CONSUMER_DIGEST: ${{ needs.consumer-compat.outputs.artifact_digest }}
+          NORMAL_ID: ${{ needs.test.outputs.artifact_id }}
+          RACE_ID: ${{ needs.race.outputs.artifact_id }}
+          API_ID: ${{ needs.api-docs.outputs.artifact_id }}
+          CONSUMER_ID: ${{ needs.consumer-compat.outputs.artifact_id }}
+          NORMAL_NAME: ${{ needs.test.outputs.artifact_name }}
+          RACE_NAME: ${{ needs.race.outputs.artifact_name }}
+          API_NAME: ${{ needs.api-docs.outputs.artifact_name }}
+          CONSUMER_NAME: ${{ needs.consumer-compat.outputs.artifact_name }}
+          NORMAL_ATTEMPT: ${{ needs.test.outputs.artifact_attempt }}
+          RACE_ATTEMPT: ${{ needs.race.outputs.artifact_attempt }}
+          API_ATTEMPT: ${{ needs.api-docs.outputs.artifact_attempt }}
+          CONSUMER_ATTEMPT: ${{ needs.consumer-compat.outputs.artifact_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for digest in "${NORMAL_DIGEST}" "${RACE_DIGEST}" "${API_DIGEST}" "${CONSUMER_DIGEST}"; do
+            [[ "${digest}" =~ ^[0-9a-f]{64}$ ]]
+            [[ ! "${digest}" =~ ^0+$ ]]
+          done
+          if [[ "${REQUIRE_STAGE3}" == "true" ]]; then
+            test "${STAGE3_MANIFEST_PATH}" = "docs/verification/evidence/genesis-v1.0.0-rc.2-stage3.json"
+            [[ "${STAGE3_MANIFEST_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+            [[ ! "${STAGE3_MANIFEST_SHA256}" =~ ^0+$ ]]
+            [[ "${STAGE3_TESTED_RESONANCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+            [[ ! "${STAGE3_TESTED_RESONANCE_SHA}" =~ ^0+$ ]]
+            [[ "${STAGE3_TESTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]
+          else
+            test -z "${STAGE3_MANIFEST_PATH}${STAGE3_MANIFEST_SHA256}${STAGE3_TESTED_RESONANCE_SHA}${STAGE3_TESTED_AT}"
+          fi
+          for artifact_id in "${NORMAL_ID}" "${RACE_ID}" "${API_ID}" "${CONSUMER_ID}"; do
+            [[ "${artifact_id}" =~ ^[1-9][0-9]*$ ]]
+          done
+          for attempt in "${NORMAL_ATTEMPT}" "${RACE_ATTEMPT}" "${API_ATTEMPT}" "${CONSUMER_ATTEMPT}"; do
+            [[ "${attempt}" =~ ^[1-9][0-9]*$ ]]
+          done
+          test "${NORMAL_NAME}" = "testcontainers-normal-${CANDIDATE_SHA}-${NORMAL_ATTEMPT}"
+          test "${RACE_NAME}" = "testcontainers-race-${CANDIDATE_SHA}-${RACE_ATTEMPT}"
+          test "${API_NAME}" = "v1-api-godoc-${CANDIDATE_SHA}-${API_ATTEMPT}"
+          test "${CONSUMER_NAME}" = "resonance-consumer-${CANDIDATE_SHA}-${CONSUMER_ATTEMPT}"
+          mkdir -p artifacts
+          {
+            echo "candidate_tag=${CANDIDATE_TAG}"
+            echo "genesis_sha=${CANDIDATE_SHA}"
+            echo "resonance_sha=${RESONANCE_SHA}"
+            echo "stage3_manifest_path=${STAGE3_MANIFEST_PATH}"
+            echo "stage3_manifest_sha256=${STAGE3_MANIFEST_SHA256}"
+            echo "stage3_tested_resonance_sha=${STAGE3_TESTED_RESONANCE_SHA}"
+            echo "stage3_tested_at=${STAGE3_TESTED_AT}"
+            echo "normal_artifact_sha256=${NORMAL_DIGEST}"
+            echo "normal_artifact_id=${NORMAL_ID}"
+            echo "normal_artifact_name=${NORMAL_NAME}"
+            echo "normal_artifact_attempt=${NORMAL_ATTEMPT}"
+            echo "race_artifact_sha256=${RACE_DIGEST}"
+            echo "race_artifact_id=${RACE_ID}"
+            echo "race_artifact_name=${RACE_NAME}"
+            echo "race_artifact_attempt=${RACE_ATTEMPT}"
+            echo "api_artifact_sha256=${API_DIGEST}"
+            echo "api_artifact_id=${API_ID}"
+            echo "api_artifact_name=${API_NAME}"
+            echo "api_artifact_attempt=${API_ATTEMPT}"
+            echo "consumer_artifact_sha256=${CONSUMER_DIGEST}"
+            echo "consumer_artifact_id=${CONSUMER_ID}"
+            echo "consumer_artifact_name=${CONSUMER_NAME}"
+            echo "consumer_artifact_attempt=${CONSUMER_ATTEMPT}"
+            echo "workflow_ref=${GITHUB_WORKFLOW_REF}"
+            echo "workflow_sha=${GITHUB_WORKFLOW_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+          } > artifacts/release-evidence.txt
+      - id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: artifacts/release-evidence.txt
+          retention-days: 90
+
+  publish-tag:
+    name: Publish annotated release candidate tag
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.publish_tag == true &&
+      vars.RELEASE_TAG_PUBLISH_ENABLED == 'true' &&
+      needs.candidate-source.outputs.candidate_tag == 'v1.0.0-rc.2' &&
+      needs.release-gate.result == 'success'
+    needs: [candidate-source, test, race, api-docs, consumer-compat, release-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: Mint the dedicated release app token
+        id: release-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-actions: read
+          permission-administration: read
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.candidate-source.outputs.candidate_sha }}
+          token: ${{ steps.release-app-token.outputs.token }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Revalidate publication-ready RC2 notes before tag creation
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+        run: go run ./internal/cmd/publishprerelease --validate-only
+      - name: Download and verify exact preflight archives
+        id: pre-tag
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+          RESONANCE_SHA: ${{ needs.candidate-source.outputs.resonance_sha }}
+          STAGE3_MANIFEST_PATH: ${{ needs.consumer-compat.outputs.stage3_manifest_path }}
+          STAGE3_MANIFEST_SHA256: ${{ needs.consumer-compat.outputs.stage3_manifest_sha256 }}
+          STAGE3_TESTED_RESONANCE_SHA: ${{ needs.consumer-compat.outputs.stage3_tested_resonance_sha }}
+          STAGE3_TESTED_AT: ${{ needs.consumer-compat.outputs.stage3_tested_at }}
+          EVIDENCE_DIGEST: ${{ needs.release-gate.outputs.evidence_digest }}
+          EVIDENCE_ID: ${{ needs.release-gate.outputs.evidence_id }}
+          EVIDENCE_NAME: ${{ needs.release-gate.outputs.evidence_name }}
+          EVIDENCE_ATTEMPT: ${{ needs.release-gate.outputs.evidence_attempt }}
+          NORMAL_DIGEST: ${{ needs.test.outputs.artifact_digest }}
+          RACE_DIGEST: ${{ needs.race.outputs.artifact_digest }}
+          API_DIGEST: ${{ needs.api-docs.outputs.artifact_digest }}
+          CONSUMER_DIGEST: ${{ needs.consumer-compat.outputs.artifact_digest }}
+          NORMAL_ID: ${{ needs.test.outputs.artifact_id }}
+          RACE_ID: ${{ needs.race.outputs.artifact_id }}
+          API_ID: ${{ needs.api-docs.outputs.artifact_id }}
+          CONSUMER_ID: ${{ needs.consumer-compat.outputs.artifact_id }}
+          NORMAL_NAME: ${{ needs.test.outputs.artifact_name }}
+          RACE_NAME: ${{ needs.race.outputs.artifact_name }}
+          API_NAME: ${{ needs.api-docs.outputs.artifact_name }}
+          CONSUMER_NAME: ${{ needs.consumer-compat.outputs.artifact_name }}
+          NORMAL_ATTEMPT: ${{ needs.test.outputs.artifact_attempt }}
+          RACE_ATTEMPT: ${{ needs.race.outputs.artifact_attempt }}
+          API_ATTEMPT: ${{ needs.api-docs.outputs.artifact_attempt }}
+          CONSUMER_ATTEMPT: ${{ needs.consumer-compat.outputs.artifact_attempt }}
+          RELEASE_APP_TOKEN: ${{ steps.release-app-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./internal/cmd/publishprerelease \
+            --pre-tag-check "${RUNNER_TEMP}/rc2-release-archives" | tee -a "${GITHUB_OUTPUT}"
+      - name: Create or verify the tag bound to this preflight
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+          RESONANCE_SHA: ${{ needs.candidate-source.outputs.resonance_sha }}
+          STAGE3_MANIFEST_PATH: ${{ needs.consumer-compat.outputs.stage3_manifest_path }}
+          STAGE3_MANIFEST_SHA256: ${{ needs.consumer-compat.outputs.stage3_manifest_sha256 }}
+          STAGE3_TESTED_RESONANCE_SHA: ${{ needs.consumer-compat.outputs.stage3_tested_resonance_sha }}
+          STAGE3_TESTED_AT: ${{ needs.consumer-compat.outputs.stage3_tested_at }}
+          EVIDENCE_DIGEST: ${{ needs.release-gate.outputs.evidence_digest }}
+          EVIDENCE_ID: ${{ needs.release-gate.outputs.evidence_id }}
+          EVIDENCE_NAME: ${{ needs.release-gate.outputs.evidence_name }}
+          EVIDENCE_ATTEMPT: ${{ needs.release-gate.outputs.evidence_attempt }}
+          EVIDENCE_SIZE: ${{ steps.pre-tag.outputs.evidence_artifact_size }}
+          NORMAL_DIGEST: ${{ needs.test.outputs.artifact_digest }}
+          RACE_DIGEST: ${{ needs.race.outputs.artifact_digest }}
+          API_DIGEST: ${{ needs.api-docs.outputs.artifact_digest }}
+          CONSUMER_DIGEST: ${{ needs.consumer-compat.outputs.artifact_digest }}
+          NORMAL_ID: ${{ needs.test.outputs.artifact_id }}
+          RACE_ID: ${{ needs.race.outputs.artifact_id }}
+          API_ID: ${{ needs.api-docs.outputs.artifact_id }}
+          CONSUMER_ID: ${{ needs.consumer-compat.outputs.artifact_id }}
+          NORMAL_NAME: ${{ needs.test.outputs.artifact_name }}
+          RACE_NAME: ${{ needs.race.outputs.artifact_name }}
+          API_NAME: ${{ needs.api-docs.outputs.artifact_name }}
+          CONSUMER_NAME: ${{ needs.consumer-compat.outputs.artifact_name }}
+          NORMAL_ATTEMPT: ${{ needs.test.outputs.artifact_attempt }}
+          RACE_ATTEMPT: ${{ needs.race.outputs.artifact_attempt }}
+          API_ATTEMPT: ${{ needs.api-docs.outputs.artifact_attempt }}
+          CONSUMER_ATTEMPT: ${{ needs.consumer-compat.outputs.artifact_attempt }}
+          NORMAL_SIZE: ${{ steps.pre-tag.outputs.normal_artifact_size }}
+          RACE_SIZE: ${{ steps.pre-tag.outputs.race_artifact_size }}
+          API_SIZE: ${{ steps.pre-tag.outputs.api_artifact_size }}
+          CONSUMER_SIZE: ${{ steps.pre-tag.outputs.consumer_artifact_size }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${CANDIDATE_TAG}" = "v1.0.0-rc.2"
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${RESONANCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ ! "${CANDIDATE_SHA}" =~ ^0+$ ]]
+          [[ ! "${RESONANCE_SHA}" =~ ^0+$ ]]
+          test "${STAGE3_MANIFEST_PATH}" = "docs/verification/evidence/genesis-v1.0.0-rc.2-stage3.json"
+          [[ "${STAGE3_MANIFEST_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          [[ ! "${STAGE3_MANIFEST_SHA256}" =~ ^0+$ ]]
+          [[ "${STAGE3_TESTED_RESONANCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ ! "${STAGE3_TESTED_RESONANCE_SHA}" =~ ^0+$ ]]
+          [[ "${STAGE3_TESTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]
+          test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
+          for digest in "${NORMAL_DIGEST}" "${RACE_DIGEST}" "${API_DIGEST}" "${CONSUMER_DIGEST}" "${EVIDENCE_DIGEST}"; do
+            [[ "${digest}" =~ ^[0-9a-f]{64}$ ]]
+            [[ ! "${digest}" =~ ^0+$ ]]
+          done
+          for artifact_id in "${NORMAL_ID}" "${RACE_ID}" "${API_ID}" "${CONSUMER_ID}" "${EVIDENCE_ID}"; do
+            [[ "${artifact_id}" =~ ^[1-9][0-9]*$ ]]
+          done
+          for attempt in "${NORMAL_ATTEMPT}" "${RACE_ATTEMPT}" "${API_ATTEMPT}" "${CONSUMER_ATTEMPT}" "${EVIDENCE_ATTEMPT}"; do
+            [[ "${attempt}" =~ ^[1-9][0-9]*$ ]]
+          done
+          for size in "${NORMAL_SIZE}" "${RACE_SIZE}" "${API_SIZE}" "${CONSUMER_SIZE}" "${EVIDENCE_SIZE}"; do
+            [[ "${size}" =~ ^[1-9][0-9]*$ ]]
+          done
+          test "${NORMAL_NAME}" = "testcontainers-normal-${CANDIDATE_SHA}-${NORMAL_ATTEMPT}"
+          test "${RACE_NAME}" = "testcontainers-race-${CANDIDATE_SHA}-${RACE_ATTEMPT}"
+          test "${API_NAME}" = "v1-api-godoc-${CANDIDATE_SHA}-${API_ATTEMPT}"
+          test "${CONSUMER_NAME}" = "resonance-consumer-${CANDIDATE_SHA}-${CONSUMER_ATTEMPT}"
+          test "${EVIDENCE_NAME}" = "release-evidence-${CANDIDATE_SHA}-${EVIDENCE_ATTEMPT}"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "${CANDIDATE_SHA}"
+          set +e
+          resonance_main_record="$(git ls-remote --exit-code https://github.com/ceyewan/resonance.git refs/heads/main)"
+          resonance_lookup_status=$?
+          set -e
+          if [[ "${resonance_lookup_status}" -ne 0 ]]; then
+            echo "Resonance main lookup failed with status ${resonance_lookup_status}" >&2
+            exit "${resonance_lookup_status}"
+          fi
+          [[ "${resonance_main_record}" =~ ^([0-9a-f]{40})[[:space:]]refs/heads/main$ ]]
+          resonance_main_tip="${BASH_REMATCH[1]}"
+          test "${resonance_main_tip}" = "${RESONANCE_SHA}"
+          resonance_main_checked_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/${CANDIDATE_TAG}" > "${RUNNER_TEMP}/tag-lookup.txt"
+          lookup_status=$?
+          set -e
+          case "${lookup_status}" in
+            0)
+              git fetch origin "refs/tags/${CANDIDATE_TAG}:refs/tags/${CANDIDATE_TAG}"
+              ;;
+            2) ;;
+            *) echo "tag lookup failed with status ${lookup_status}" >&2; exit "${lookup_status}" ;;
+          esac
+          if [[ "${lookup_status}" -eq 2 ]]; then
+            git config user.name "Genesis Release Automation"
+            git config user.email "actions@users.noreply.github.com"
+            export RESONANCE_MAIN_TIP="${resonance_main_tip}"
+            export RESONANCE_MAIN_CHECKED_AT="${resonance_main_checked_at}"
+            bash .github/scripts/render-rc2-tag-annotation.sh > "${RUNNER_TEMP}/tag-message.txt"
+            git tag -a "${CANDIDATE_TAG}" "${CANDIDATE_SHA}" -F "${RUNNER_TEMP}/tag-message.txt"
+            git push origin "refs/tags/${CANDIDATE_TAG}"
+          fi
+          remote_object="$(git ls-remote --tags origin "refs/tags/${CANDIDATE_TAG}" | awk '{print $1}')"
+          test "${remote_object}" = "$(git rev-parse "refs/tags/${CANDIDATE_TAG}")"
+          test "$(git cat-file -t "refs/tags/${CANDIDATE_TAG}")" = "tag"
+          test "$(git rev-list -n 1 "refs/tags/${CANDIDATE_TAG}")" = "${CANDIDATE_SHA}"
+          annotation="$(git for-each-ref --format='%(contents)' "refs/tags/${CANDIDATE_TAG}")"
+          require_annotation_line() {
+            test "$(grep -Fxc -- "$1" <<< "${annotation}")" -eq 1
+          }
+          require_annotation_line "Resonance-SHA: ${RESONANCE_SHA}"
+          require_annotation_line "Stage3-Manifest-Path: ${STAGE3_MANIFEST_PATH}"
+          require_annotation_line "Stage3-Manifest-SHA256: ${STAGE3_MANIFEST_SHA256}"
+          require_annotation_line "Stage3-Tested-Resonance-SHA: ${STAGE3_TESTED_RESONANCE_SHA}"
+          require_annotation_line "Stage3-Tested-At: ${STAGE3_TESTED_AT}"
+          require_annotation_line "Resonance-Main-Tip-At-Publish: ${RESONANCE_SHA}"
+          test "$(grep -Ec '^Resonance-Main-Checked-At: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' <<< "${annotation}")" -eq 1
+          require_annotation_line "Preflight-Run: ${GITHUB_RUN_ID}"
+          require_annotation_line "Preflight-Attempt: ${EVIDENCE_ATTEMPT}"
+          require_annotation_line "Workflow-SHA: ${GITHUB_WORKFLOW_SHA}"
+          for tuple in \
+            "evidence:${EVIDENCE_DIGEST}:${EVIDENCE_ID}:${EVIDENCE_NAME}:${EVIDENCE_ATTEMPT}:${EVIDENCE_SIZE}" \
+            "normal:${NORMAL_DIGEST}:${NORMAL_ID}:${NORMAL_NAME}:${NORMAL_ATTEMPT}:${NORMAL_SIZE}" \
+            "race:${RACE_DIGEST}:${RACE_ID}:${RACE_NAME}:${RACE_ATTEMPT}:${RACE_SIZE}" \
+            "api:${API_DIGEST}:${API_ID}:${API_NAME}:${API_ATTEMPT}:${API_SIZE}" \
+            "consumer:${CONSUMER_DIGEST}:${CONSUMER_ID}:${CONSUMER_NAME}:${CONSUMER_ATTEMPT}:${CONSUMER_SIZE}"; do
+            IFS=: read -r kind digest artifact_id artifact_name attempt size <<< "${tuple}"
+            require_annotation_line "${kind}_artifact_sha256=${digest}"
+            require_annotation_line "${kind}_artifact_id=${artifact_id}"
+            require_annotation_line "${kind}_artifact_name=${artifact_name}"
+            require_annotation_line "${kind}_artifact_attempt=${attempt}"
+            require_annotation_line "${kind}_artifact_size=${size}"
+          done
+      - name: Stage the exact immutable-release draft assets
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+          RELEASE_APP_TOKEN: ${{ steps.release-app-token.outputs.token }}
+        run: >-
+          go run ./internal/cmd/publishprerelease
+          --stage-draft "${RUNNER_TEMP}/rc2-release-archives"
+
+  publish-prerelease:
+    name: Publish or verify the RC2 GitHub prerelease
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/tags/v1.0.0-rc.2' &&
+      vars.RELEASE_TAG_PUBLISH_ENABLED == 'true' &&
+      needs.release-gate.result == 'success'
+    needs: [candidate-source, release-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.candidate-source.outputs.candidate_sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Prepare the pinned immutable-release verifier
+        id: attestation-verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh_version="2.96.0"
+          gh_archive="${RUNNER_TEMP}/gh_${gh_version}_linux_amd64.tar.gz"
+          gh_root="${RUNNER_TEMP}/gh_${gh_version}_linux_amd64"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "${gh_archive}" \
+            "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_amd64.tar.gz"
+          echo "83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60  ${gh_archive}" | sha256sum --check --strict
+          tar -xzf "${gh_archive}" -C "${RUNNER_TEMP}"
+          gh_binary="${gh_root}/bin/gh"
+          test -x "${gh_binary}"
+          test "$("${gh_binary}" version | sed -nE '1s/^gh version ([0-9]+\.[0-9]+\.[0-9]+).*$/\1/p')" = "${gh_version}"
+          echo "binary=${gh_binary}" >> "${GITHUB_OUTPUT}"
+          echo "version=${gh_version}" >> "${GITHUB_OUTPUT}"
+      - name: Revalidate the annotated RC2 tag identity
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_EVENT_NAME}" = "push"
+          test "${CANDIDATE_TAG}" = "v1.0.0-rc.2"
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${GITHUB_REF}" = "refs/tags/${CANDIDATE_TAG}"
+          test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
+          test "$(git cat-file -t "refs/tags/${CANDIDATE_TAG}")" = "tag"
+          test "$(git rev-list -n 1 "refs/tags/${CANDIDATE_TAG}")" = "${CANDIDATE_SHA}"
+      - name: Mint the dedicated release app token
+        id: release-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-actions: read
+          permission-administration: read
+          permission-attestations: read
+      - name: Publish or verify the exact RC2 prerelease
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          CANDIDATE_SHA: ${{ needs.candidate-source.outputs.candidate_sha }}
+          DEFENSE_DIGEST: ${{ needs.release-gate.outputs.evidence_digest }}
+          DEFENSE_ID: ${{ needs.release-gate.outputs.evidence_id }}
+          DEFENSE_NAME: ${{ needs.release-gate.outputs.evidence_name }}
+          DEFENSE_ATTEMPT: ${{ needs.release-gate.outputs.evidence_attempt }}
+          RELEASE_APP_TOKEN: ${{ steps.release-app-token.outputs.token }}
+        run: go run ./internal/cmd/publishprerelease
+      - name: Verify and record the immutable release attestation
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate-source.outputs.candidate_tag }}
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+          GH_BINARY: ${{ steps.attestation-verifier.outputs.binary }}
+          GH_VERSION: ${{ steps.attestation-verifier.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "${GH_BINARY}"
+          test "$("${GH_BINARY}" version | sed -nE '1s/^gh version ([0-9]+\.[0-9]+\.[0-9]+).*$/\1/p')" = "${GH_VERSION}"
+          attestation_file="${RUNNER_TEMP}/release-attestation.json"
+          verified=false
+          for attempt in $(seq 1 10); do
+            if "${GH_BINARY}" release verify "${CANDIDATE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --format json > "${attestation_file}"; then
+              verified=true
+              break
+            fi
+            sleep 3
+          done
+          test "${verified}" = "true"
+          test -s "${attestation_file}"
+          cat "${attestation_file}"
+          {
+            echo "### Immutable release attestation"
+            echo
+            echo "Verifier: gh v${GH_VERSION}"
+            echo
+            echo '```json'
+            cat "${attestation_file}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

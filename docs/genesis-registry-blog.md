@@ -1,3 +1,5 @@
+<!-- markdownlint-disable-file MD013 -->
+
 # Genesis registry：基于 Etcd 的服务注册发现与 gRPC 集成设计
 
 Genesis `registry` 是治理层组件，核心职责是把 Etcd 的 lease、KV 和 watch 机制收敛成更稳定的服务注册发现语义，并直接接入 gRPC resolver。这篇文章重点不在于逐段解释源码，而在于回答四个问题：为什么 Genesis 需要自己的 `registry`，为什么它选择“一个进程一个 active registry”，为什么 endpoint 只接受 gRPC 地址，以及它如何在 compaction、优雅下线和客户端连接这些边界场景里保持语义稳定。

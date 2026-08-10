@@ -19,6 +19,11 @@
 //   - single_dc: 41bit 时间戳、10bit worker、12bit sequence
 //   - multi_dc: 41bit 时间戳、5bit datacenter、5bit worker、12bit sequence
 //
+// 每个 Generator 都维护独立的时间戳与序列状态，不会与其他 Generator 协调。
+// 因此在同一个 ID 碰撞域（这些 ID 会被放在一起要求唯一的范围）内，不论实例是否位于
+// 同一进程，都不能让两个存活的 Generator 复用相同的 (Mode, DatacenterID, WorkerID)。
+// 不相交且永不合并的 ID 命名空间可以复用该组合。
+//
 // 时间字段使用固定自定义 epoch 2024-01-01T00:00:00Z，调用 Next 或 NextString 时会显式返回错误，
 // 以便调用方在时钟回拨等异常情况下做出停机、告警或重试决策。
 //

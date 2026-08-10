@@ -1,3 +1,5 @@
+<!-- markdownlint-disable-file MD013 -->
+
 # Genesis connector：微服务外部连接管理的设计与实现
 
 Genesis `connector` 是基础设施层（L1）的核心组件，负责管理与外部服务的原始连接，包括 MySQL、PostgreSQL、SQLite、Redis、Etcd、NATS、Kafka 七种后端。它的目标不是再包一层客户端 API，而是在 Genesis 组件体系里统一连接的生命周期语义：怎么初始化、什么时候连接、如何探活、谁来关闭。这篇文章重点讲 `connector` 为什么这样设计、做了哪些取舍，而不只是用法介绍。

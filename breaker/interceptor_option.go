@@ -17,9 +17,11 @@ type interceptorConfig struct {
 	keyFunc KeyFunc
 }
 
-// WithKeyFunc 设置 Key 生成函数
+// WithKeyFunc 设置 Key 生成函数。传入 nil 时保留默认的服务级 key。
 func WithKeyFunc(fn KeyFunc) InterceptorOption {
 	return func(cfg *interceptorConfig) {
-		cfg.keyFunc = fn
+		if fn != nil {
+			cfg.keyFunc = fn
+		}
 	}
 }

@@ -20,7 +20,7 @@ type redisLocker struct {
 	cfg    *Config
 	logger clog.Logger
 	locks  map[string]*redisLockEntry
-	lost   map[string]*redisLockEntry
+	lost   boundedTombstones[*redisLockEntry]
 	mu     sync.RWMutex
 
 	closeOnce sync.Once
@@ -58,7 +58,7 @@ func newRedis(conn connector.RedisConnector, cfg *Config, logger clog.Logger) (L
 		cfg:    cfg,
 		logger: logger,
 		locks:  make(map[string]*redisLockEntry),
-		lost:   make(map[string]*redisLockEntry),
+		lost:   newBoundedTombstones[*redisLockEntry](),
 	}, nil
 }
 
@@ -78,10 +78,13 @@ func (l *redisLocker) TryLock(ctx context.Context, key string, opts ...LockOptio
 }
 
 func (l *redisLocker) Unlock(ctx context.Context, key string) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
 	l.mu.RLock()
 	entry, exists := l.locks[key]
 	if !exists {
-		_, lost := l.lost[key]
+		_, lost := l.lost.Get(key)
 		l.mu.RUnlock()
 		if lost {
 			return xerrors.Wrapf(ErrOwnershipLost, "key: %s", key)
@@ -135,19 +138,19 @@ func (l *redisLocker) restartWatchdog(key string, entry *redisLockEntry) {
 }
 
 func (l *redisLocker) Lost(key string) <-chan error {
+	if err := validateKey(key); err != nil {
+		return terminalErrorChannel(err)
+	}
 	l.mu.RLock()
 	entry := l.locks[key]
 	if entry == nil {
-		entry = l.lost[key]
+		entry, _ = l.lost.Get(key)
 	}
 	l.mu.RUnlock()
 	if entry != nil {
 		return entry.lostCh
 	}
-	ch := make(chan error, 1)
-	ch <- xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
-	close(ch)
-	return ch
+	return terminalErrorChannel(xerrors.Wrapf(ErrLockNotHeld, "key: %s", key))
 }
 
 func (l *redisLocker) lockWithRetry(ctx context.Context, key string, opts ...LockOption) error {
@@ -175,8 +178,14 @@ func (l *redisLocker) lockWithRetry(ctx context.Context, key string, opts ...Loc
 }
 
 func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockOption) (*redisLockEntry, error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
 	ttl, err := resolveLockTTL(l.cfg.DefaultTTL, opts...)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateRedisTTL(ttl); err != nil {
 		return nil, err
 	}
 
@@ -190,7 +199,7 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 		l.mu.Unlock()
 		return nil, xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
-	delete(l.lost, key)
+	l.lost.Delete(key)
 	l.mu.Unlock()
 
 	// 生成随机 token
@@ -242,7 +251,7 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 	}
 
 	l.locks[key] = entry
-	delete(l.lost, key)
+	l.lost.Delete(key)
 	l.mu.Unlock()
 
 	go l.watchdog(entry, redisKey)
@@ -301,7 +310,7 @@ func (l *redisLocker) markOwnershipLost(key string, entry *redisLockEntry) {
 	current, exists := l.locks[key]
 	if exists && current == entry {
 		delete(l.locks, key)
-		l.lost[key] = entry
+		l.lost.Put(key, entry)
 		l.signalOwnershipLost(key, entry, nil)
 	}
 }
@@ -368,7 +377,7 @@ func (l *redisLocker) Close() error {
 		entries := make(map[string]*redisLockEntry, len(l.locks))
 		maps.Copy(entries, l.locks)
 		l.locks = make(map[string]*redisLockEntry)
-		l.lost = make(map[string]*redisLockEntry)
+		l.lost.Clear()
 		l.mu.Unlock()
 
 		var errs []error

@@ -30,7 +30,6 @@
 - **[breaker](./breaker/)** - 熔断器示例（包含 gRPC 测试）
 - **[registry](./registry/)** - 服务注册发现示例
 - **[grpc-registry](./grpc-registry/)** - gRPC 服务注册发现示例
-- **[registry-stream](./registry-stream/)** - 流式服务发现与 StreamManager 示例
 
 ## 🚀 运行示例
 
@@ -75,7 +74,9 @@ go run main.go -config config.yaml
 
 ### 特殊说明
 
-- **breaker** 和 **grpc-registry** 示例包含 Protocol Buffer 定义文件
+- **breaker**、**grpc-registry**、**idem** 和 **observability** 的 Protocol Buffer
+  定义与生成代码均位于各示例自己的 `internal/proto` 路径，只用于构建示例，不能被
+  Genesis module 外部导入
 - **dlock** 示例支持 Redis 和 Etcd 两种实现
 - **config** 示例展示了多环境配置的使用
 
@@ -94,5 +95,5 @@ make status
 ## 📚 更多文档
 
 - [项目主页](../README.md) - 返回项目主页
-- [组件开发规范](../docs/component-spec.md) - 了解如何开发组件
+- [组件文档审计规范](../docs/component-doc-audit-guide.md) - 了解组件文档的审计与验收要求
 - [架构设计](../docs/genesis-design.md) - 了解项目架构

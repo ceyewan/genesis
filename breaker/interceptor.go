@@ -3,12 +3,14 @@ package breaker
 import (
 	"context"
 	"errors"
+	"reflect"
 
 	"github.com/ceyewan/genesis/clog"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // UnaryClientInterceptor 返回 gRPC 一元调用客户端拦截器。
@@ -41,19 +43,80 @@ func (cb *circuitBreaker) UnaryClientInterceptor(opts ...InterceptorOption) grpc
 
 		// 使用熔断器执行调用
 		var callErr error
-		_, err := cb.Execute(ctx, key, func() (any, error) {
+		result, err := cb.Execute(ctx, key, func() (any, error) {
 			callErr = invoker(ctx, method, req, reply, cc, opts...)
 			if shouldCountGRPCFailure(callErr) {
 				return nil, callErr
 			}
 			return nil, nil
 		})
-		if err == nil {
+		if err != nil {
+			return err
+		}
+
+		if callErr != nil {
 			return callErr
 		}
 
-		return err
+		return applyFallbackResult(reply, result)
 	}
+}
+
+// applyFallbackResult 将 Execute 的 fallback 成功结果写入 gRPC reply。
+// invoker 正常执行时 result 为 nil，因此不会触碰已经填充的 reply。
+func applyFallbackResult(reply, result any) error {
+	if result == nil {
+		return nil
+	}
+	if reply == nil {
+		return status.Errorf(codes.Internal, "breaker: fallback result type %T cannot be applied to a nil reply", result)
+	}
+
+	dstProto, dstIsProto := reply.(proto.Message)
+	srcProto, srcIsProto := result.(proto.Message)
+	if dstIsProto || srcIsProto {
+		if !dstIsProto || !srcIsProto || reflect.TypeOf(dstProto) != reflect.TypeOf(srcProto) {
+			return fallbackResultTypeError(reply, result)
+		}
+
+		dstValue := reflect.ValueOf(dstProto)
+		srcValue := reflect.ValueOf(srcProto)
+		if (dstValue.Kind() == reflect.Pointer && dstValue.IsNil()) ||
+			(srcValue.Kind() == reflect.Pointer && srcValue.IsNil()) {
+			return fallbackResultTypeError(reply, result)
+		}
+
+		cloned := proto.Clone(srcProto)
+		proto.Reset(dstProto)
+		proto.Merge(dstProto, cloned)
+		return nil
+	}
+
+	dst := reflect.ValueOf(reply)
+	if dst.Kind() != reflect.Pointer || dst.IsNil() {
+		return fallbackResultTypeError(reply, result)
+	}
+
+	src := reflect.ValueOf(result)
+	if src.IsValid() && src.Type().AssignableTo(dst.Elem().Type()) {
+		dst.Elem().Set(src)
+		return nil
+	}
+	if src.Kind() == reflect.Pointer && !src.IsNil() && src.Elem().Type().AssignableTo(dst.Elem().Type()) {
+		dst.Elem().Set(src.Elem())
+		return nil
+	}
+
+	return fallbackResultTypeError(reply, result)
+}
+
+func fallbackResultTypeError(reply, result any) error {
+	return status.Errorf(
+		codes.Internal,
+		"breaker: fallback result type %T is incompatible with reply type %T",
+		result,
+		reply,
+	)
 }
 
 func defaultKeyFunc(ctx context.Context, fullMethod string, cc *grpc.ClientConn) string {

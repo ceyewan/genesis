@@ -76,7 +76,7 @@ func TestExecute_RecoversFromCorruptedCachedResult(t *testing.T) {
 		Prefix:     "test:idem:corrupt:",
 		DefaultTTL: time.Minute,
 		LockTTL:    time.Second,
-	}, store, nil)
+	}, store)
 
 	ctx := context.Background()
 	key := "corrupt-key"
@@ -255,7 +255,7 @@ func TestExecute_ReturnsLockLostOnRefreshFailure(t *testing.T) {
 		Prefix:     "test:idem:refresh-fail:",
 		DefaultTTL: time.Minute,
 		LockTTL:    time.Second,
-	}, store, nil)
+	}, store)
 
 	_, err := idemComp.Execute(context.Background(), "refresh-fail", func(ctx context.Context) (any, error) {
 		time.Sleep(650 * time.Millisecond)

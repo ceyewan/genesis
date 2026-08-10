@@ -90,6 +90,7 @@ port := xerrors.MustOK(loadBootstrapPort())
 - Sentinel error 仍然使用 `xerrors.New(...)` 定义，再通过 `errors.Is` / `xerrors.Is` 判断。
 - 只有在确实需要协议映射或稳定机器码时，才使用 `WithCode`；空字符串 code 会退化为 no-op。
 - `Collector` 适合“顺序校验多个字段，返回第一个错误”的场景；如果需要保留所有错误，应直接使用 `Combine` 或在上层定义更明确的数据结构。
+- 外部直接构造 `MultiError` 时，nil 元素会被忽略；`Unwrap` 返回非 nil 错误的副本，调用方不能通过修改返回切片改变错误链。
 - `Must` / `MustOK` 仅用于初始化和测试，不应进入运行时业务分支。
 
 ## 能力边界
