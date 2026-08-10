@@ -1,6 +1,6 @@
 # Genesis v1.0.0-rc.2 release notes
 
-Status: draft, unpublished.
+Status: publication-ready.
 
 RC2 is a contract-hardening release. It does not move or replace the immutable
 `v1.0.0-rc.1` tag. The release owner has approved the final RC2 package
@@ -109,29 +109,6 @@ for the complete caller checklist and
 [the compatibility matrix](https://github.com/ceyewan/genesis/blob/v1.0.0-rc.2/docs/v1-compatibility.md)
 for the tested toolchain and backends. These tag-qualified links keep the same
 meaning when this file is published byte-for-byte as the GitHub Release body.
-
-## Pending before tag publication
-
-- Freeze exact Genesis and final Stage 3 Resonance commits, merge all required
-  protected PRs, preserve their merge provenance, and run the hosted exact-
-  source release gate.
-- Preserve the completed pre-publication Stage 3 handoff: final Resonance SHA
-  plus Compose, IM/Agent E2E, recovery, telemetry, and benchmark evidence. This
-  includes release-owner review of each durable raw-bundle locator and digest;
-  those external locators are not carried by the four machine-derived handoff
-  fields. This handoff does not replace the post-tag direct-RC2 repetition.
-- Verify the protected release environment, tag ruleset, and dedicated Release
-  App; complete the approved security disposition.
-- Have an administrator enable GitHub immutable releases and preserve the API
-  evidence. Limit the Release App to `Contents: write`, plus read-only Actions,
-  Administration, and Attestations permissions; do not grant write access for
-  those three read-only scopes.
-- Confirm that the protected workflow downloads and hashes the four upstream
-  Actions artifacts and release-evidence bundle, stages the five exact ZIPs as
-  prerelease draft assets, adds the tag-defense run's independently bound ZIP as
-  the sixth asset, and verifies the exact immutable Release plus attestation.
-- Publish the annotated tag and GitHub prerelease through the protected
-  workflow.
 
 ## Pending after tag publication
 

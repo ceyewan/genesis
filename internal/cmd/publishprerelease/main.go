@@ -90,7 +90,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 	if apiURL == "" {
 		apiURL = defaultAPIURL
 	}
-	p, err := newPublisher(apiURL, getenv("GITHUB_REPOSITORY"), getenv("RELEASE_APP_TOKEN"), &http.Client{Timeout: githubHTTPTimeout})
+	p, err := newPublisher(apiURL, getenv("GITHUB_REPOSITORY"), getenv("RELEASE_TOKEN"), &http.Client{Timeout: githubHTTPTimeout})
 	if err != nil {
 		return err
 	}
