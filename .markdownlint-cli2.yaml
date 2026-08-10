@@ -1,0 +1,31 @@
+config:
+  default: true
+  MD010:
+    code_blocks: false
+  MD013:
+    line_length: 240
+    code_blocks: false
+    tables: false
+    headings: false
+  MD024:
+    siblings_only: true
+  MD033:
+    allowed_elements:
+      - a
+      - br
+      - details
+      - kbd
+      - summary
+
+globs:
+  - "**/*.md"
+
+ignores:
+  - "AGENTS.md"
+  - "artifacts/**"
+  - "node_modules/**"
+  - "docs/api-baselines/**"
+  - "docs/v1-api-inventory.md"
+  - "docs/v1-api-compat-allowlist.md"
+  - "docs/v1-api-compat-expected.md"
+  - "docs/v1-rc1-evidence.md"

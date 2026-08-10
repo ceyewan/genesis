@@ -10,7 +10,7 @@ Genesis `cache` 是业务层（L2）的缓存组件。它面向的是微服务�
 - `KV` 是稳定公共基座，`Local` 和 `Multi` 只暴露 `KV`。
 - `Distributed` 当前明确面向 Redis，保留 `Hash`、`Sorted Set`、`MGet/MSet` 与 `RawClient()`。
 - 接口刻意不提供 `List` 能力，因为它更像队列或日志容器语义，而不是缓存语义。
-- `ttl <= 0` 统一表示使用组件配置中的 `DefaultTTL`，避免自定义特殊规则。
+- `ttl == 0` 表示使用组件配置中的 `DefaultTTL`；`ttl < 0` 返回 `ErrInvalidTTL`。
 - `Multi` 是缓存策略层，而不是新的存储引擎；它的职责是本地命中、远端回源与回填。
 
 ---

@@ -78,15 +78,25 @@ func (l *loader) newConfiguredViper() *viper.Viper {
 
 // Load 初始化并从所有来源加载配置。
 func (l *loader) Load(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
 		return ErrClosed
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	next := l.newConfiguredViper()
 
 	if err := l.loadDotEnv(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
@@ -96,11 +106,20 @@ func (l *loader) Load(ctx context.Context) error {
 			return xerrors.Wrapf(err, "failed to read config file %s", l.cfg.Name)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if err := l.loadEnvironmentConfig(next); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := l.validateViper(next); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
@@ -188,22 +207,54 @@ func (l *loader) Get(key string) any {
 func (l *loader) Unmarshal(v any) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.materializeEnvironmentForTarget("", v)
-	return l.v.Unmarshal(v)
+	snapshot, err := l.unmarshalSnapshot("", v)
+	if err != nil {
+		return err
+	}
+	return snapshot.Unmarshal(v)
 }
 
 // UnmarshalKey 将特定配置 key 反序列化到结构体
 func (l *loader) UnmarshalKey(key string, v any) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.materializeEnvironmentForTarget(key, v)
-	return l.v.UnmarshalKey(key, v)
+	snapshot, err := l.unmarshalSnapshot(key, v)
+	if err != nil {
+		return err
+	}
+	return snapshot.UnmarshalKey(key, v)
 }
 
-// materializeEnvironmentForTarget binds environment values using the target
-// schema. An underscore is valid inside a field name, so an environment name
-// cannot be safely converted to a dotted path without knowing that schema.
-func (l *loader) materializeEnvironmentForTarget(root string, target any) {
+// unmarshalSnapshot builds a transient, fully merged view for decoding. Viper's
+// Set writes to its highest-priority override register, where a partial nested
+// map can shadow file-backed siblings when a parent key is read. Environment
+// leaves are therefore merged into a separate Viper instance instead of the
+// loader's long-lived state.
+func (l *loader) unmarshalSnapshot(root string, target any) (*viper.Viper, error) {
+	snapshot := viper.New()
+	settings := l.v.AllSettings()
+	if err := snapshot.MergeConfigMap(settings); err != nil {
+		return nil, xerrors.Wrapf(err, "failed to snapshot loaded configuration")
+	}
+
+	environment := make(map[string]any)
+	l.materializeEnvironmentForTarget(root, target, environment)
+	if err := snapshot.MergeConfigMap(environment); err != nil {
+		return nil, xerrors.Wrapf(err, "failed to merge environment configuration")
+	}
+	return snapshot, nil
+}
+
+// materializeEnvironmentForTarget discovers environment values using the
+// target schema. An underscore is valid inside a field name, so an environment
+// name cannot be safely converted to a dotted path without knowing that schema.
+func (l *loader) materializeEnvironmentForTarget(root string, target any, values map[string]any) {
+	// UnmarshalKey also supports scalar targets. Preserve Viper's exact-key
+	// AutomaticEnv behavior even when no struct schema is available.
+	if root != "" {
+		l.materializeEnvironmentValue(root, values)
+	}
+
 	t := reflect.TypeOf(target)
 	if t == nil {
 		return
@@ -214,10 +265,10 @@ func (l *loader) materializeEnvironmentForTarget(root string, target any) {
 	if t.Kind() != reflect.Struct {
 		return
 	}
-	l.materializeStructEnvironment(root, t)
+	l.materializeStructEnvironment(root, t, values)
 }
 
-func (l *loader) materializeStructEnvironment(root string, t reflect.Type) {
+func (l *loader) materializeStructEnvironment(root string, t reflect.Type, values map[string]any) {
 	for field := range t.Fields() {
 		if field.PkgPath != "" {
 			continue
@@ -238,14 +289,35 @@ func (l *loader) materializeStructEnvironment(root string, t reflect.Type) {
 			fieldType = fieldType.Elem()
 		}
 		if fieldType.Kind() == reflect.Struct && fieldType.PkgPath() != "time" {
-			l.materializeStructEnvironment(path, fieldType)
+			l.materializeStructEnvironment(path, fieldType, values)
 			continue
 		}
-		envName := strings.ToUpper(l.cfg.EnvPrefix + "_" + strings.NewReplacer(".", "_", "-", "_").Replace(path))
-		if value, ok := os.LookupEnv(envName); ok {
-			l.v.Set(path, value)
-		}
+		l.materializeEnvironmentValue(path, values)
 	}
+}
+
+func (l *loader) materializeEnvironmentValue(path string, values map[string]any) {
+	if path == "" {
+		return
+	}
+	envName := strings.ToUpper(l.cfg.EnvPrefix + "_" + strings.NewReplacer(".", "_", "-", "_").Replace(path))
+	if value, ok := os.LookupEnv(envName); ok {
+		setNestedConfigValue(values, path, value)
+	}
+}
+
+func setNestedConfigValue(settings map[string]any, path string, value any) {
+	parts := strings.Split(strings.ToLower(path), ".")
+	current := settings
+	for _, part := range parts[:len(parts)-1] {
+		nested, ok := current[part].(map[string]any)
+		if !ok {
+			nested = make(map[string]any)
+			current[part] = nested
+		}
+		current = nested
+	}
+	current[parts[len(parts)-1]] = value
 }
 
 func configFieldName(field reflect.StructField) (name string, skip, squash bool) {

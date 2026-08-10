@@ -17,6 +17,9 @@ func TestNewRejectsUnreadyConnector(t *testing.T) {
 	if !errors.Is(err, ErrConnectorNotReady) {
 		t.Fatalf("New() error = %v, want ErrConnectorNotReady", err)
 	}
+	if !errors.Is(err, connector.ErrClientNil) {
+		t.Fatalf("New() error = %v, want connector.ErrClientNil", err)
+	}
 }
 
 func TestTransactionRejectsNilFunction(t *testing.T) {

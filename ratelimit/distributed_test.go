@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -9,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ceyewan/genesis/testkit"
+	"github.com/ceyewan/genesis/internal/testkit"
 )
 
 // ============================================================
@@ -51,16 +52,20 @@ func TestDistributedLimiter_Allow_Basic(t *testing.T) {
 
 	t.Run("相同 key 连续请求应该被限流", func(t *testing.T) {
 		key := "test-key-rate-limit"
+		// This assertion is about the burst boundary, not refill timing. Keep the
+		// refill rate negligible so race instrumentation cannot add a token while
+		// the requests are being issued.
+		limit := Limit{Rate: 0.001, Burst: 10}
 
 		// 消耗所有 burst
 		for i := range 10 {
-			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 10, Burst: 10})
+			allowed, err := limiter.Allow(ctx, key, limit)
 			require.NoError(t, err)
 			require.True(t, allowed, "第 %d 次请求应该被允许", i+1)
 		}
 
 		// 下一个请求应该被限流
-		allowed, err := limiter.Allow(ctx, key, Limit{Rate: 10, Burst: 10})
+		allowed, err := limiter.Allow(ctx, key, limit)
 		require.NoError(t, err)
 		require.False(t, allowed, "超过 Burst 的请求应该被限流")
 	})
@@ -87,13 +92,14 @@ func TestDistributedLimiter_AllowN(t *testing.T) {
 	})
 
 	t.Run("AllowN 超过 Burst 应该被拒绝", func(t *testing.T) {
+		limit := Limit{Rate: 0.001, Burst: 100}
 		// 第一次消耗 50 个
-		allowed, err := limiter.AllowN(ctx, "allown-test-2", Limit{Rate: 100, Burst: 100}, 50)
+		allowed, err := limiter.AllowN(ctx, "allown-test-2", limit, 50)
 		require.NoError(t, err)
 		require.True(t, allowed)
 
 		// 第二次请求 60 个（总共需要 110 个，超过 burst=100）
-		allowed, err = limiter.AllowN(ctx, "allown-test-2", Limit{Rate: 100, Burst: 100}, 60)
+		allowed, err = limiter.AllowN(ctx, "allown-test-2", limit, 60)
 		require.NoError(t, err)
 		require.False(t, allowed, "超过 Burst 的请求应该被拒绝")
 	})
@@ -188,6 +194,18 @@ func TestDistributedLimiter_EdgeCases(t *testing.T) {
 		require.False(t, allowed)
 		require.ErrorIs(t, err, ErrInvalidLimit)
 	})
+
+	for name, invalidRate := range map[string]float64{
+		"NaN Rate":     math.NaN(),
+		"positive Inf": math.Inf(1),
+		"negative Inf": math.Inf(-1),
+	} {
+		t.Run(name+" 应该返回错误", func(t *testing.T) {
+			allowed, err := limiter.Allow(ctx, "non-finite-"+name, Limit{Rate: invalidRate, Burst: 1})
+			require.False(t, allowed)
+			require.ErrorIs(t, err, ErrInvalidLimit)
+		})
+	}
 
 	t.Run("浮点数 Rate 应该正常工作", func(t *testing.T) {
 		// Rate=0.1 表示每 10 秒生成 1 个令牌
@@ -315,16 +333,17 @@ func TestDistributedLimiter_Precision(t *testing.T) {
 
 	t.Run("突发流量应该使用 Burst", func(t *testing.T) {
 		key := "burst-test-" + testkit.NewID()
+		limit := Limit{Rate: 0.001, Burst: 5}
 
 		// Burst=5 允许瞬间处理 5 个请求
 		for i := range 5 {
-			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 5})
+			allowed, err := limiter.Allow(ctx, key, limit)
 			require.NoError(t, err)
 			require.True(t, allowed, "Burst 应该允许前 %d 个请求", i+1)
 		}
 
 		// 第 6 个请求应该被拒绝
-		allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 5})
+		allowed, err := limiter.Allow(ctx, key, limit)
 		require.NoError(t, err)
 		require.False(t, allowed, "超过 Burst 的请求应该被拒绝")
 	})
@@ -367,21 +386,22 @@ func TestDistributedLimiter_LuaScript(t *testing.T) {
 		// 这里不等待那么久，只验证逻辑正确性
 	})
 
-	t.Run("不同 Limit 使用相同 Redis key（分布式特性）", func(t *testing.T) {
+	t.Run("不同 Limit 使用隔离的 Redis key", func(t *testing.T) {
 		baseKey := "same-key-" + testkit.NewID()
+		limitA := Limit{Rate: 0.01, Burst: 1}
+		limitB := Limit{Rate: 0.02, Burst: 1}
 
-		// 使用限流规则 A
-		allowed1, err := limiter.Allow(ctx, baseKey, Limit{Rate: 10, Burst: 10})
+		allowed1, err := limiter.Allow(ctx, baseKey, limitA)
 		require.NoError(t, err)
 		require.True(t, allowed1)
 
-		// 相同 key 不同限流规则：分布式限流器使用相同的 Redis key
-		// 所以第一次请求会使用 Redis 中已有的状态
-		allowed2, err := limiter.Allow(ctx, baseKey, Limit{Rate: 1, Burst: 1})
+		// 如果两条规则共享状态，第二条规则的首次请求会被已经耗尽的 Burst 拒绝。
+		allowed2, err := limiter.Allow(ctx, baseKey, limitB)
 		require.NoError(t, err)
-		// 由于已经消耗了一个令牌，且 Redis key 是共享的
-		// 这个测试主要验证不会 panic，具体行为取决于 Redis 中的状态
-		_ = allowed2
+		require.True(t, allowed2)
+
+		impl := limiter.(*distributedLimiter)
+		require.NotEqual(t, impl.buildKey(baseKey, limitA), impl.buildKey(baseKey, limitB))
 	})
 }
 

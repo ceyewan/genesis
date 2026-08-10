@@ -203,6 +203,42 @@ func TestCombine(t *testing.T) {
 	}
 }
 
+func TestMultiErrorDefendsAgainstExternallyConstructedNilEntries(t *testing.T) {
+	t.Parallel()
+
+	first := errors.New("first")
+	second := errors.New("second")
+	multi := &MultiError{Errors: []error{nil, first, nil, second}}
+
+	if got := multi.Error(); got != "first (and 1 more errors)" {
+		t.Fatalf("MultiError.Error() = %q, want %q", got, "first (and 1 more errors)")
+	}
+	if !errors.Is(multi, first) || !errors.Is(multi, second) {
+		t.Fatal("MultiError must preserve every non-nil error in its unwrap chain")
+	}
+
+	unwrapped := multi.Unwrap()
+	if len(unwrapped) != 2 {
+		t.Fatalf("len(MultiError.Unwrap()) = %d, want 2", len(unwrapped))
+	}
+	unwrapped[0] = nil
+	if !errors.Is(multi, first) {
+		t.Fatal("mutating the Unwrap result changed the MultiError chain")
+	}
+}
+
+func TestNilMultiErrorIsSafe(t *testing.T) {
+	t.Parallel()
+
+	var multi *MultiError
+	if got := multi.Error(); got != "no errors" {
+		t.Fatalf("nil MultiError.Error() = %q, want no errors", got)
+	}
+	if got := multi.Unwrap(); got != nil {
+		t.Fatalf("nil MultiError.Unwrap() = %v, want nil", got)
+	}
+}
+
 func TestGetCodeFromCombinedAndJoinedErrors(t *testing.T) {
 	plain := errors.New("plain")
 	codedA := WithCode(errors.New("cache miss"), "CACHE_MISS")

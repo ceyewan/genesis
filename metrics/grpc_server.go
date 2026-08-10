@@ -49,10 +49,10 @@ type GRPCServerMetrics struct {
 // NewGRPCServerMetrics 创建可重用的 gRPC 服务器指标
 func NewGRPCServerMetrics(m Meter, cfg *GRPCServerMetricsConfig) (*GRPCServerMetrics, error) {
 	if m == nil {
-		return nil, xerrors.New("meter is nil")
+		return nil, xerrors.Wrap(ErrInvalidConfig, "meter is nil")
 	}
 	if cfg == nil {
-		return nil, xerrors.New("config is nil")
+		return nil, xerrors.Wrap(ErrInvalidConfig, "config is nil")
 	}
 
 	service := strings.TrimSpace(cfg.Service)

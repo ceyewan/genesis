@@ -9,6 +9,7 @@
 - 在锁持有期间自动续期，减少长任务执行时的锁过期风险
 - `Close()` 会停止续期，并尽力释放当前 `Locker` 已持有的锁
 - 支持通过 `WithTTL(...)` 覆盖单次加锁 TTL
+- 拒绝空字符串 key，避免不同调用方意外竞争同一个后端 key
 
 `dlock` 不提供可重入锁、读写锁、公平锁、锁诊断平台或死锁检测。如果你需要非常定制化的锁协议，应该直接使用底层 Redis 或 Etcd 客户端。
 
@@ -64,16 +65,20 @@ type Locker interface {
 }
 ```
 
-`Lock` 适合“拿不到锁就不能继续”的场景，内部按 `RetryInterval` 重试；`TryLock` 适合任务竞选这类“拿不到就跳过”的场景；`Unlock` 只允许持有者释放；`Lost` 用于在关键区间监听异步所有权丢失；`Close` 用于结束当前 `Locker` 生命周期，停止续期并清理它持有的锁。
+`Lock` 适合“拿不到锁就不能继续”的场景，内部按 `RetryInterval` 重试；`TryLock` 适合任务竞选这类“拿不到就跳过”的场景。
+`Unlock` 只允许持有者释放；`Lost` 用于在关键区间监听异步所有权丢失；`Close` 用于结束当前 `Locker` 生命周期，停止续期并清理它持有的锁。
+五个方法中所有接收 key 的入口都拒绝空字符串：返回值方法返回 `ErrInvalidKey`，`Lost("")` 则返回一个携带 `ErrInvalidKey` 后立即关闭的 channel。
+
+`Lost` 应在成功加锁后立即调用，并在整个临界区间持有返回的 channel。该 channel 在后续所有权丢失时始终会收到通知。Locker 内部只保留有界的近期 lost key 诊断历史，因此不要依赖在所有权丢失很久之后再首次调用 `Lost(key)` 来回溯状态；该历史被驱逐后，查询会返回 `ErrLockNotHeld`。
 
 ## TTL 语义
 
 `WithTTL(...)` 看起来是统一选项，但两种后端的精度并不完全一样：
 
-- Redis 直接使用原生 `time.Duration`
+- Redis 使用毫秒精度，TTL 必须至少为 `1*time.Millisecond`
 - Etcd 基于 lease，TTL 是秒级
 
-因此 Etcd 的 `DefaultTTL` 和 `WithTTL(...)` 都必须满足：
+因此 Redis 会拒绝亚毫秒 `DefaultTTL` 和 `WithTTL(...)`，而 Etcd 的两类 TTL 都必须满足：
 
 - 至少 `1*time.Second`
 - 必须是整秒，例如 `5*time.Second`
@@ -113,12 +118,17 @@ return updateInventory(ctx, productID)
 
 常见错误包括：
 
+- `ErrInvalidConfig`：非 nil 配置无效；`ErrConfigNil` 和 `ErrInvalidTTL` 也可同时由 `errors.Is` 匹配到它
+- `ErrConnectorNil`：所需的 connector 缺失、未 `Connect` 或已关闭；该错误也匹配 `connector.ErrClientNil`
+- `ErrInvalidKey`：key 是空字符串
 - `ErrLockAlreadyHeld`：当前 `Locker` 已在本地持有同一个 key
 - `ErrLockNotHeld`：尝试释放一个当前 `Locker` 没持有的锁
 - `ErrOwnershipLost`：远端锁已经不属于当前持有者
-- `ErrInvalidTTL`：TTL 非法，常见于 Etcd 子秒级 TTL
+- `ErrInvalidTTL`：TTL 非法，例如 Redis 亚毫秒 TTL 或 Etcd 子秒/非整秒 TTL
 
-业务代码通常只需要区分“锁冲突”“所有权丢失”和“底层异常”三类场景。
+业务代码应使用 `errors.Is`，不要匹配错误字符串。
+
+`Config` 的公开字段同时提供 JSON、YAML 和 `mapstructure` tag，可以直接作为 `config.Loader.Unmarshal` / `UnmarshalKey` 的目标。
 
 ## 日志与资源释放
 

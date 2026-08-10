@@ -1,0 +1,9 @@
+version: v1
+lint:
+  use:
+    - STANDARD
+  except:
+    # These internal examples retain their existing protobuf package names and
+    # wire identities while their Go import paths move under internal/.
+    - PACKAGE_DIRECTORY_MATCH
+    - PACKAGE_VERSION_SUFFIX

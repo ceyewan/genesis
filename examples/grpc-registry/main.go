@@ -14,7 +14,7 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	pb "github.com/ceyewan/genesis/examples/grpc-registry/proto"
+	pb "github.com/ceyewan/genesis/examples/grpc-registry/internal/proto"
 	"github.com/ceyewan/genesis/registry"
 )
 

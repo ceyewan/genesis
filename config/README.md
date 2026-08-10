@@ -56,6 +56,10 @@ if err := loader.Unmarshal(&cfg); err != nil {
 }
 ```
 
+`Load` 会在各加载阶段之间检查 `ctx`。如果调用在完成前被取消，它返回
+`context.Canceled` 或 `context.DeadlineExceeded`，并保留上一份已成功加载的快照。
+传入 nil context 等同于 `context.Background()`。
+
 ## 热更新
 
 `Load` 只负责加载配置，不会自动启动文件监听。第一次调用 `Watch` 时，组件才会启动内部 watcher，因此推荐的调用顺序是先 `Load`，再 `Watch`：
@@ -117,6 +121,10 @@ config/
 | `app.debug` | `GENESIS_APP_DEBUG` |
 
 规则是：将 key 中的 `.` 和 `-` 替换为 `_`，转成大写，再加上前缀。
+
+`Unmarshal` 和 `UnmarshalKey` 会依据目标结构体的字段标签识别环境变量。环境变量
+只覆盖对应的叶子字段；同一对象中来自基础配置或环境特定配置文件的其他字段仍会
+保留。反序列化使用临时合并视图，不会向 Loader 已加载的配置快照写入永久 override。
 
 ## 推荐用法
 

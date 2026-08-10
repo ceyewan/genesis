@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc/serviceconfig"
 
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/testkit"
+	"github.com/ceyewan/genesis/internal/testkit"
 )
 
 // setupEtcdConn 设置 Etcd 连接
@@ -838,7 +838,7 @@ func TestResolverPushesEmptyState(t *testing.T) {
 		registry:    &etcdRegistry{logger: testkit.NewLogger()},
 		serviceName: "empty-state-test",
 		cc:          cc,
-		localCache:  map[string]resolver.Address{},
+		localCache:  map[resolverCacheKey]resolver.Address{},
 	}
 
 	r.pushStateLocked()
@@ -853,8 +853,8 @@ func TestResolverPutReplacesInstanceEndpoints(t *testing.T) {
 		serviceName: "endpoint-update-test",
 		cc:          cc,
 		initialized: true,
-		localCache: map[string]resolver.Address{
-			"instance-1_127.0.0.1:9000": {Addr: "127.0.0.1:9000"},
+		localCache: map[resolverCacheKey]resolver.Address{
+			{instanceID: "instance-1", addr: "127.0.0.1:9000"}: {Addr: "127.0.0.1:9000"},
 		},
 	}
 
@@ -866,6 +866,24 @@ func TestResolverPutReplacesInstanceEndpoints(t *testing.T) {
 
 	require.NotNil(t, cc.lastState)
 	require.Equal(t, []resolver.Address{{Addr: "127.0.0.1:9001", ServerName: "endpoint-update-test"}}, cc.lastState.Addresses)
+}
+
+func TestResolverEventsDoNotCollideOnInstanceIDPrefixes(t *testing.T) {
+	cc := &testResolverClientConn{}
+	r := &etcdResolver{
+		registry:    &etcdRegistry{logger: testkit.NewLogger()},
+		serviceName: "prefix-collision-test",
+		cc:          cc,
+		initialized: true,
+		localCache: map[resolverCacheKey]resolver.Address{
+			{instanceID: "api", addr: "127.0.0.1:9000"}:      {Addr: "127.0.0.1:9000"},
+			{instanceID: "api_blue", addr: "127.0.0.1:9001"}: {Addr: "127.0.0.1:9001"},
+		},
+	}
+
+	r.handleEvent(ServiceEvent{Type: EventTypeDelete, Service: &ServiceInstance{ID: "api"}})
+
+	require.Equal(t, []resolver.Address{{Addr: "127.0.0.1:9001"}}, cc.lastState.Addresses)
 }
 
 func TestRegisterRechecksClosedStateInsideCriticalSection(t *testing.T) {

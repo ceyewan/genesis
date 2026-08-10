@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,7 +81,7 @@ func TestConfig(t *testing.T) {
 		t.Run("空驱动", func(t *testing.T) {
 			cfg := &Config{}
 			err := cfg.validate()
-			require.Error(t, err)
+			require.ErrorIs(t, err, ErrInvalidConfig)
 		})
 
 		t.Run("不支持的驱动", func(t *testing.T) {
@@ -229,6 +230,15 @@ func TestOptions(t *testing.T) {
 // ============================================================
 
 func TestMQ_Publish(t *testing.T) {
+	t.Run("空 topic 返回分类错误", func(t *testing.T) {
+		transport := &mockTransport{}
+		q := newMQ(transport, clog.Discard(), metrics.Discard())
+
+		err := q.Publish(context.Background(), "", []byte("test data"))
+		require.ErrorIs(t, err, ErrInvalidConfig)
+		require.False(t, transport.publishCalled)
+	})
+
 	t.Run("发布成功", func(t *testing.T) {
 		transport := &mockTransport{}
 		mq := newMQ(transport, clog.Discard(), metrics.Discard())
@@ -281,6 +291,26 @@ func TestMQ_Publish(t *testing.T) {
 // ============================================================
 
 func TestMQ_Subscribe(t *testing.T) {
+	t.Run("空 topic 返回分类错误", func(t *testing.T) {
+		transport := &mockTransport{}
+		q := newMQ(transport, clog.Discard(), metrics.Discard())
+
+		sub, err := q.Subscribe(context.Background(), "", func(Message) error { return nil })
+		require.ErrorIs(t, err, ErrInvalidConfig)
+		require.Nil(t, sub)
+		require.False(t, transport.subscribeCalled)
+	})
+
+	t.Run("nil Handler 返回分类错误", func(t *testing.T) {
+		transport := &mockTransport{}
+		q := newMQ(transport, clog.Discard(), metrics.Discard())
+
+		sub, err := q.Subscribe(context.Background(), "test.subject", nil)
+		require.ErrorIs(t, err, ErrInvalidConfig)
+		require.Nil(t, sub)
+		require.False(t, transport.subscribeCalled)
+	})
+
 	t.Run("订阅成功", func(t *testing.T) {
 		transport := &mockTransport{}
 		mq := newMQ(transport, clog.Discard(), metrics.Discard())
@@ -444,6 +474,20 @@ func TestMQ_Close(t *testing.T) {
 	})
 }
 
+func TestMQCloseDoesNotCloseBorrowedConnector(t *testing.T) {
+	conn := &mockRedisConnector{}
+	q, err := New(
+		&Config{Driver: DriverRedisStream},
+		WithRedisConnector(conn),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, q.Close())
+	require.NoError(t, q.Close())
+	require.Zero(t, conn.closeCalls.Load())
+	require.NotNil(t, conn.GetClient())
+}
+
 func TestMQ_DrainConcurrent(t *testing.T) {
 	t.Parallel()
 
@@ -487,6 +531,21 @@ func TestMQ_AutoAckBehavior(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, testMsg.ackCalled, "成功时应该调用 Ack")
 		require.False(t, testMsg.nakCalled)
+	})
+
+	t.Run("Ack 失败返回错误并记录消费失败", func(t *testing.T) {
+		ackErr := errors.New("ack failed")
+		testMsg := &mockMessage{ackError: ackErr}
+		meter := newConsumeRecordingMeter()
+		m := &mq{logger: clog.Discard(), meter: meter, driver: DriverNATSJetStream}
+		wrapped := m.wrapHandler("test.topic", func(Message) error {
+			return nil
+		}, subscribeOptions{AutoAck: true})
+
+		err := wrapped(testMsg)
+		require.ErrorIs(t, err, ackErr)
+		require.True(t, testMsg.ackCalled)
+		require.Equal(t, []string{"error"}, meter.recordedStatuses())
 	})
 
 	t.Run("AutoAck 模式 Handler 失败时自动 Nak", func(t *testing.T) {
@@ -601,6 +660,7 @@ func TestDefaultOptions(t *testing.T) {
 		require.Empty(t, opts.QueueGroup)
 		require.Empty(t, opts.DurableName)
 		require.Equal(t, 0, opts.MaxInflight)
+		require.False(t, opts.batchSizeSet)
 	})
 }
 
@@ -688,6 +748,7 @@ func (m *mockSubscription) Done() <-chan struct{} {
 type mockMessage struct {
 	ackCalled bool
 	nakCalled bool
+	ackError  error
 }
 
 func (m *mockMessage) Context() context.Context {
@@ -708,7 +769,7 @@ func (m *mockMessage) Headers() Headers {
 
 func (m *mockMessage) Ack() error {
 	m.ackCalled = true
-	return nil
+	return m.ackError
 }
 
 func (m *mockMessage) Nak() error {
@@ -726,13 +787,16 @@ func (m *mockMessage) ID() string {
 }
 
 // mockNATSConnector 是 NATSConnector 的 mock 实现
-type mockNATSConnector struct{}
+type mockNATSConnector struct {
+	closeCalls atomic.Int32
+}
 
 func (m *mockNATSConnector) Connect(ctx context.Context) error {
 	return nil
 }
 
 func (m *mockNATSConnector) Close() error {
+	m.closeCalls.Add(1)
 	return nil
 }
 
@@ -753,13 +817,16 @@ func (m *mockNATSConnector) GetClient() *nats.Conn {
 }
 
 // mockRedisConnector 是 RedisConnector 的 mock 实现
-type mockRedisConnector struct{}
+type mockRedisConnector struct {
+	closeCalls atomic.Int32
+}
 
 func (m *mockRedisConnector) Connect(ctx context.Context) error {
 	return nil
 }
 
 func (m *mockRedisConnector) Close() error {
+	m.closeCalls.Add(1)
 	return nil
 }
 
@@ -790,6 +857,48 @@ type mockMessageNakNotSupported struct {
 
 func (m *mockMessageNakNotSupported) Nak() error {
 	return ErrNotSupported
+}
+
+type consumeRecordingMeter struct {
+	metrics.Meter
+	mu       sync.Mutex
+	statuses []string
+}
+
+func newConsumeRecordingMeter() *consumeRecordingMeter {
+	return &consumeRecordingMeter{Meter: metrics.Discard()}
+}
+
+func (m *consumeRecordingMeter) Counter(name, desc string, opts ...metrics.MetricOption) (metrics.Counter, error) {
+	if name == MetricConsumeTotal {
+		return consumeRecordingCounter{meter: m}, nil
+	}
+	return m.Meter.Counter(name, desc, opts...)
+}
+
+func (m *consumeRecordingMeter) recordedStatuses() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.statuses...)
+}
+
+type consumeRecordingCounter struct {
+	meter *consumeRecordingMeter
+}
+
+func (c consumeRecordingCounter) Inc(ctx context.Context, labels ...metrics.Label) {
+	c.Add(ctx, 1, labels...)
+}
+
+func (c consumeRecordingCounter) Add(_ context.Context, _ float64, labels ...metrics.Label) {
+	for _, label := range labels {
+		if label.Key == LabelStatus {
+			c.meter.mu.Lock()
+			c.meter.statuses = append(c.meter.statuses, label.Value)
+			c.meter.mu.Unlock()
+			return
+		}
+	}
 }
 
 // newMQ 创建一个用于测试的 MQ 实例

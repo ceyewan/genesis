@@ -53,7 +53,7 @@ func TestMemoryStoreConcurrentClose(t *testing.T) {
 func TestIdempotencyCloseDoesNotOwnRedisStore(t *testing.T) {
 	t.Parallel()
 
-	component := newIdempotency(&Config{}, &nonClosingStore{}, nil)
+	component := newIdempotency(&Config{}, &nonClosingStore{})
 	require.NoError(t, component.Close())
 }
 
@@ -63,7 +63,7 @@ func TestIdempotencyClassifiesWrappedResultMiss(t *testing.T) {
 	component := newIdempotency(&Config{
 		DefaultTTL: time.Minute,
 		LockTTL:    time.Minute,
-	}, &wrappedMissStore{}, nil)
+	}, &wrappedMissStore{})
 
 	result, err := component.Execute(t.Context(), "execute", func(context.Context) (any, error) {
 		return "ok", nil

@@ -10,6 +10,8 @@ import (
 	"github.com/ceyewan/genesis/clog"
 )
 
+const rateLimitExceededMessage = "ratelimit: rate limit exceeded"
+
 // ========================================
 // 类型定义 (Type Definitions)
 // ========================================
@@ -72,7 +74,7 @@ func (c *grpcLimiterConfig) check(ctx context.Context, fullMethod string) (allow
 	limit := c.limitFunc(ctx, fullMethod)
 
 	// 无效限流规则，放行
-	if limit.Rate <= 0 || limit.Burst <= 0 {
+	if !limit.valid() {
 		return false, true, nil
 	}
 
@@ -142,7 +144,7 @@ func UnaryServerInterceptorWithOptions(
 		if passThrough || allowed {
 			return handler(ctx, req)
 		}
-		return nil, status.Error(codes.ResourceExhausted, ErrRateLimitExceeded.Error())
+		return nil, status.Error(codes.ResourceExhausted, rateLimitExceededMessage)
 	}
 }
 
@@ -194,7 +196,7 @@ func UnaryClientInterceptorWithOptions(
 		if passThrough || allowed {
 			return invoker(ctx, method, req, reply, cc, opts...)
 		}
-		return status.Error(codes.ResourceExhausted, ErrRateLimitExceeded.Error())
+		return status.Error(codes.ResourceExhausted, rateLimitExceededMessage)
 	}
 }
 
@@ -233,7 +235,7 @@ func StreamServerInterceptorWithOptions(
 		if passThrough || allowed {
 			return handler(srv, stream)
 		}
-		return status.Error(codes.ResourceExhausted, ErrRateLimitExceeded.Error())
+		return status.Error(codes.ResourceExhausted, rateLimitExceededMessage)
 	}
 }
 
@@ -268,7 +270,7 @@ func StreamClientInterceptorWithOptions(
 		if passThrough || allowed {
 			return streamer(ctx, desc, cc, method, opts...)
 		}
-		return nil, status.Error(codes.ResourceExhausted, ErrRateLimitExceeded.Error())
+		return nil, status.Error(codes.ResourceExhausted, rateLimitExceededMessage)
 	}
 }
 

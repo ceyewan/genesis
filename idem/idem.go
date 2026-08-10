@@ -5,6 +5,7 @@
 //   - 同一 key 的成功结果会被缓存，后续请求直接复用
 //   - 同一 key 的并发执行会被锁保护，避免并发穿透
 //   - 业务执行失败不会缓存结果，后续允许重试
+//   - 超过配置结果上限的成功结果会返回但不缓存，后续调用可能再次执行
 //
 // 当前组件提供四个入口：
 //   - Execute：手动幂等执行，适合业务逻辑直接调用
@@ -14,6 +15,10 @@
 //
 // 组件同时支持 Redis 和 Memory 两种后端。Redis 适合分布式环境，Memory 适合单机、
 // 本地开发和测试。
+//
+// 对多租户或多主体入口，组件不会猜测认证身份。调用方必须通过
+// WithHTTPIdentityScopeFunc 或 WithGRPCIdentityScopeFunc 从已经验证的上下文中提供
+// 稳定作用域，避免不同身份复用同一客户端 key 和缓存结果。
 package idem
 
 import (
@@ -21,7 +26,6 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/xerrors"
 
 	"github.com/gin-gonic/gin"
@@ -34,10 +38,11 @@ import (
 
 // Idempotency 幂等性组件核心接口
 //
-// 支持三种使用方式：
+// 支持四种使用方式：
 // 1. Execute: 手动调用，适合业务层直接使用
-// 2. GinMiddleware: Gin 框架中间件，自动处理 HTTP 请求幂等性
-// 3. UnaryServerInterceptor: gRPC 一元拦截器，处理单次 RPC 调用幂等性
+// 2. Consume: 消息消费去重
+// 3. GinMiddleware: Gin 框架中间件，自动处理 HTTP 请求幂等性
+// 4. UnaryServerInterceptor: gRPC 一元拦截器，处理单次 RPC 调用幂等性
 type Idempotency interface {
 	// Close 停止组件拥有的后台任务。可并发重复调用。
 	// Redis 后端不拥有连接，因此 Close 不会关闭注入的 Redis connector。
@@ -52,12 +57,13 @@ type Idempotency interface {
 	//
 	// 参数：
 	//   - ctx: 上下文，用于取消和超时控制
-	//   - key: 幂等性键，全局唯一标识这次操作
+	//   - key: 幂等性键，全局唯一标识这次操作；默认最长 256 字节
 	//   - fn: 业务逻辑函数，只在第一次请求时执行
 	//
 	// 返回：
 	//   - 执行结果或缓存的结果。为保证首次执行与缓存命中的类型一致，返回值会经过同一套 JSON 编解码规范化。
-	//   - 错误：ErrKeyEmpty、上下文错误、锁丢失错误等
+	//   - 序列化结果超过 WithMaxResultBytes 时仍返回规范化结果，但不缓存；后续同 key 可能再次执行。
+	//   - 错误：ErrKeyEmpty、ErrKeyTooLong、ErrStoreCapacity、上下文错误、锁丢失错误等
 	Execute(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error)
 
 	// Consume 用于消息消费的幂等处理
@@ -69,7 +75,7 @@ type Idempotency interface {
 	//
 	// 返回：
 	//   - executed: 是否执行了 fn
-	//   - 错误：ErrKeyEmpty, ErrConcurrentRequest 等
+	//   - 错误：ErrKeyEmpty、ErrKeyTooLong、ErrConcurrentRequest、ErrStoreCapacity 等
 	Consume(ctx context.Context, key string, ttl time.Duration, fn func(ctx context.Context) error) (executed bool, err error)
 
 	// GinMiddleware 创建 Gin 框架中间件
@@ -86,7 +92,7 @@ type Idempotency interface {
 	//   3. 如果未命中，执行 handler 并按缓存策略缓存响应
 	//
 	// 参数：
-	//   - opts: 中间件选项，可自定义请求头名称等
+	//   - opts: 中间件选项，可自定义请求头名称、缓存策略、可信身份作用域和 keyed request body 上限
 	//
 	// 返回 Gin 原生的 HandlerFunc，可直接传给 router.Use/POST 等方法。
 	GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc
@@ -105,7 +111,7 @@ type Idempotency interface {
 	//   4. 如果未命中，执行 RPC handler 并按缓存策略缓存成功响应
 	//
 	// 参数：
-	//   - opts: 拦截器选项，可自定义 metadata 键名称等
+	//   - opts: 拦截器选项，可自定义 metadata 键名称、缓存策略和可信身份作用域
 	//
 	// 返回：
 	//   - gRPC 一元服务端拦截器
@@ -126,11 +132,13 @@ type Idempotency interface {
 //
 // 参数：
 //   - cfg: 幂等性配置，不可为 nil
-//   - opts: 可选配置，如 WithLogger(), WithRedisConnector()
+//   - opts: 可选配置，如 WithLogger、WithRedisConnector、WithMaxKeyBytes、
+//     WithMaxResultBytes 和 WithMemoryMaxEntries
 //
 // 返回：
 //   - Idempotency 组件实例
-//   - 错误：缺少必要连接器或配置非法
+//   - 配置错误匹配 ErrInvalidConfig；nil config 还匹配 ErrConfigNil
+//   - Redis connector 缺失或未 Connect 时同时匹配 ErrConnectorNil 和 connector.ErrClientNil
 //
 // 使用示例：
 //
@@ -153,9 +161,17 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 	}
 
 	// 应用选项
-	opt := options{}
+	opt := options{
+		maxKeyBytes:      defaultMaxKeyBytes,
+		maxResultBytes:   defaultMaxResultBytes,
+		memoryMaxEntries: defaultMemoryMaxEntries,
+	}
 	for _, o := range opts {
 		o(&opt)
+	}
+	limits := componentLimits{
+		maxKeyBytes:    opt.maxKeyBytes,
+		maxResultBytes: opt.maxResultBytes,
 	}
 
 	// 派生 Logger（添加 component 字段）
@@ -164,16 +180,16 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 		logger = logger.With(clog.String("component", "idem"))
 	}
 	if opt.store != nil {
-		return newIdempotency(cfg, opt.store, logger), nil
+		return newIdempotencyWithLimits(cfg, opt.store, logger, limits), nil
 	}
 
 	switch cfg.Driver {
 	case DriverRedis:
 		if opt.redisConn == nil {
-			return nil, xerrors.New("idem: redis connector is required, use WithRedisConnector")
+			return nil, xerrors.Wrap(ErrConnectorNil, "idem: redis connector is required, use WithRedisConnector")
 		}
 		if opt.redisConn.GetClient() == nil {
-			return nil, xerrors.Wrap(connector.ErrClientNil, "idem: redis connector is not connected")
+			return nil, xerrors.Wrap(ErrConnectorNil, "idem: redis connector is not connected")
 		}
 		if logger != nil {
 			logger.Info("creating idem component",
@@ -182,7 +198,7 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 				clog.Duration("default_ttl", cfg.DefaultTTL),
 				clog.Duration("lock_ttl", cfg.LockTTL))
 		}
-		return newIdempotency(cfg, newRedisStore(opt.redisConn, cfg.Prefix), logger), nil
+		return newIdempotencyWithLimits(cfg, newRedisStore(opt.redisConn, cfg.Prefix), logger, limits), nil
 	case DriverMemory:
 		if logger != nil {
 			logger.Info("creating idem component",
@@ -191,8 +207,9 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 				clog.Duration("default_ttl", cfg.DefaultTTL),
 				clog.Duration("lock_ttl", cfg.LockTTL))
 		}
-		return newIdempotency(cfg, newMemoryStore(cfg.Prefix), logger), nil
+		store := newMemoryStoreWithLimit(cfg.Prefix, opt.memoryMaxEntries)
+		return newIdempotencyWithLimits(cfg, store, logger, limits), nil
 	default:
-		return nil, xerrors.New("idem: unsupported driver: " + string(cfg.Driver))
+		return nil, xerrors.Wrap(ErrInvalidConfig, "idem: unsupported driver: "+string(cfg.Driver))
 	}
 }

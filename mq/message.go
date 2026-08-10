@@ -89,6 +89,14 @@ type Message interface {
 	ID() string
 }
 
+// ProgressMessage 是长耗时消息处理的可选心跳能力。
+//
+// NATS JetStream 消息实现该接口；InProgress 会重置服务端 AckWait 计时器。
+// Redis Stream 消息不实现它。调用方应对 Message 做类型断言，不要假设所有驱动都支持。
+type ProgressMessage interface {
+	InProgress() error
+}
+
 // Handler 消息处理函数
 //
 // 设计说明：只接收 Message 参数，通过 msg.Context() 获取上下文，

@@ -12,8 +12,9 @@
 // - 脚本使用 Redis `TIME` 作为统一时钟，避免多节点本地时钟漂移破坏限流精度。
 // - `Wait` 不是分布式能力，调用会返回 `ErrNotSupported`。
 //
-// Gin 中间件和 gRPC 拦截器默认采用 `fail_open`，即限流器内部异常时放行业务请求；
-// 如果希望把限流器异常视为保护失败，可切换到 `fail_closed`。
+// Gin 中间件和 gRPC 拦截器在省略策略时默认采用 `fail_open`，即限流器内部
+// 异常时放行业务请求；如果希望把限流器异常视为保护失败，可切换到
+// `fail_closed`。显式但未知的策略按 fail-closed 处理。
 //
 // 基本用法：
 //
@@ -41,6 +42,7 @@ package ratelimit
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
@@ -56,6 +58,10 @@ import (
 type Limit struct {
 	Rate  float64 // 令牌生成速率（每秒生成多少个令牌）
 	Burst int     // 令牌桶容量（突发最大请求数）
+}
+
+func (l Limit) valid() bool {
+	return l.Rate > 0 && !math.IsNaN(l.Rate) && !math.IsInf(l.Rate, 0) && l.Burst > 0
 }
 
 // ErrorPolicy 定义限流检查出错时的处理策略。
@@ -75,9 +81,10 @@ func normalizeErrorPolicy(policy ErrorPolicy) ErrorPolicy {
 	case ErrorPolicyFailClosed:
 		return ErrorPolicyFailClosed
 	default:
-		// Middleware constructors cannot return configuration errors. Unknown values
-		// therefore use the documented safe compatibility default.
-		return ErrorPolicyFailOpen
+		// Middleware constructors cannot report configuration errors. Treat an
+		// explicit but unknown value as fail-closed so a typo cannot silently
+		// disable a caller's hard-protection policy.
+		return ErrorPolicyFailClosed
 	}
 }
 
@@ -127,28 +134,32 @@ const (
 // Config 限流组件统一配置
 type Config struct {
 	// Driver 限流模式: "standalone" | "distributed"
-	Driver DriverType `json:"driver" yaml:"driver"`
+	Driver DriverType `json:"driver" yaml:"driver" mapstructure:"driver"`
 
 	// Standalone 单机限流配置
-	Standalone *StandaloneConfig `json:"standalone" yaml:"standalone"`
+	Standalone *StandaloneConfig `json:"standalone" yaml:"standalone" mapstructure:"standalone"`
 
 	// Distributed 分布式限流配置
-	Distributed *DistributedConfig `json:"distributed" yaml:"distributed"`
+	Distributed *DistributedConfig `json:"distributed" yaml:"distributed" mapstructure:"distributed"`
 }
 
 // StandaloneConfig 单机限流配置
 type StandaloneConfig struct {
 	// CleanupInterval 清理过期限流器的间隔（默认：1 分钟）
-	CleanupInterval time.Duration `json:"cleanup_interval" yaml:"cleanup_interval"`
+	CleanupInterval time.Duration `json:"cleanup_interval" yaml:"cleanup_interval" mapstructure:"cleanup_interval"`
 
 	// IdleTimeout 限流器空闲超时时间（默认：5 分钟）
-	IdleTimeout time.Duration `json:"idle_timeout" yaml:"idle_timeout"`
+	IdleTimeout time.Duration `json:"idle_timeout" yaml:"idle_timeout" mapstructure:"idle_timeout"`
+
+	// MaxKeys 限制单实例缓存的 key + Limit 组合数（默认：10000）。
+	// 达到上限后，新的组合返回 ErrKeyLimitExceeded。
+	MaxKeys int `json:"max_keys" yaml:"max_keys" mapstructure:"max_keys"`
 }
 
 // DistributedConfig 分布式限流配置
 type DistributedConfig struct {
 	// Prefix Redis Key 前缀（默认："ratelimit:"）
-	Prefix string `json:"prefix" yaml:"prefix"`
+	Prefix string `json:"prefix" yaml:"prefix" mapstructure:"prefix"`
 }
 
 func (c *Config) setDefaults() {
@@ -174,18 +185,18 @@ func (c *Config) validate() error {
 		return ErrConfigNil
 	}
 	if c.Driver == "" {
-		return xerrors.New("ratelimit: driver is required")
+		return xerrors.Wrap(ErrInvalidConfig, "driver is required")
 	}
 	switch c.Driver {
 	case DriverStandalone:
-		if c.Standalone.CleanupInterval < 0 || c.Standalone.IdleTimeout < 0 {
-			return xerrors.New("ratelimit: cleanup_interval and idle_timeout must not be negative")
+		if c.Standalone.CleanupInterval < 0 || c.Standalone.IdleTimeout < 0 || c.Standalone.MaxKeys < 1 {
+			return xerrors.Wrap(ErrInvalidConfig, "cleanup_interval and idle_timeout must not be negative, max_keys must be positive")
 		}
 		return nil
 	case DriverDistributed:
 		return nil
 	default:
-		return xerrors.New("ratelimit: unsupported driver: " + string(c.Driver))
+		return xerrors.Wrap(ErrInvalidConfig, "unsupported driver: "+string(c.Driver))
 	}
 }
 
@@ -198,6 +209,9 @@ func (c *StandaloneConfig) setDefaults() {
 	}
 	if c.IdleTimeout == 0 {
 		c.IdleTimeout = 5 * time.Minute
+	}
+	if c.MaxKeys == 0 {
+		c.MaxKeys = 10000
 	}
 }
 
@@ -318,6 +332,6 @@ func New(cfg *Config, opts ...Option) (Limiter, error) {
 		}
 		return newDistributed(cfg.Distributed, o.redisConn, logger, o.meter)
 	default:
-		return nil, xerrors.New("ratelimit: unsupported driver: " + string(cfg.Driver))
+		return nil, xerrors.Wrap(ErrInvalidConfig, "unsupported driver: "+string(cfg.Driver))
 	}
 }

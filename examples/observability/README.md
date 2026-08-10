@@ -42,14 +42,14 @@ docker compose up -d --build
 
 服务启动后：
 
-- **Gateway (HTTP)**: http://localhost:8080
+- **Gateway (HTTP)**: <http://localhost:8080>
 - **Gateway Callback (gRPC)**: localhost:9091
 - **Logic (gRPC)**: localhost:9092
 - **NATS**: localhost:4222
-- **Prometheus**: http://localhost:9090
-- **Grafana**: http://localhost:3000
-- **Tempo (Ready)**: http://localhost:3200/ready（启动后前 ~15s 可能返回 503，随后变为 `ready`）
-- **Loki**: http://localhost:3100
+- **Prometheus**: <http://localhost:9090>
+- **Grafana**: <http://localhost:3000>
+- **Tempo (Ready)**: <http://localhost:3200/ready>（启动后前 ~15s 可能返回 503，随后变为 `ready`）
+- **Loki**: <http://localhost:3100>
 
 > 提示：`docker compose ps` 可以查看所有服务是否健康启动。
 
@@ -146,7 +146,7 @@ LOAD_MAX_VUS=4000 \
 
 ## 如何验证
 
-打开 **Grafana** (http://localhost:3000)：
+打开 **Grafana** (<http://localhost:3000>)：
 
 ## 三大支柱：能干嘛、怎么看
 
@@ -207,8 +207,8 @@ LOAD_MAX_VUS=4000 \
 - `gorm.Create`：DB 写入
 - `mq.publish orders.created`：发布消息（Producer span）
 - `mq.consume orders.created`：消费消息（Consumer span）
-    - 本示例默认使用 **child-of** 串成单条 Trace，便于在 Tempo/Grafana 中直接看到完整瀑布图
-    - 如果你要适配批消费/多消费者组/重试等异步场景，可切换为 **Span Link** 模式
+  - 本示例默认使用 **child-of** 串成单条 Trace，便于在 Tempo/Grafana 中直接看到完整瀑布图
+  - 如果你要适配批消费/多消费者组/重试等异步场景，可切换为 **Span Link** 模式
 - `task.handle_order_created`：消费者内部业务处理
 - `proto.GatewayCallbackService/PushResult`：task → gateway 回调（gRPC client/server）
 

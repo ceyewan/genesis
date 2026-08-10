@@ -19,26 +19,26 @@ const (
 // Config 幂等性组件配置
 type Config struct {
 	// Driver 后端类型: "redis" | "memory" (默认 "redis")
-	Driver DriverType `json:"driver" yaml:"driver"`
+	Driver DriverType `json:"driver" yaml:"driver" mapstructure:"driver"`
 
 	// Prefix Redis Key 前缀，默认 "idem:"
 	// 例如："myapp:idem:" 将使用 "myapp:idem:{key}" 作为存储键
-	Prefix string `json:"prefix" yaml:"prefix"`
+	Prefix string `json:"prefix" yaml:"prefix" mapstructure:"prefix"`
 
 	// DefaultTTL 幂等记录有效期，默认 24h
 	// 超过此时间后，缓存的结果将被清理，后续相同请求将重新执行
-	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
+	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl" mapstructure:"default_ttl"`
 
 	// LockTTL 处理过程中的锁超时时间，默认 30s
 	// 防止业务逻辑崩溃导致死锁，超时后锁自动释放
-	LockTTL time.Duration `json:"lock_ttl" yaml:"lock_ttl"`
+	LockTTL time.Duration `json:"lock_ttl" yaml:"lock_ttl" mapstructure:"lock_ttl"`
 
 	// WaitTimeout 等待结果的最长时间，默认 0（仅受 ctx 影响）
 	// 当未获取到锁时，将阻塞等待结果或锁可用
-	WaitTimeout time.Duration `json:"wait_timeout" yaml:"wait_timeout"`
+	WaitTimeout time.Duration `json:"wait_timeout" yaml:"wait_timeout" mapstructure:"wait_timeout"`
 
 	// WaitInterval 等待结果的轮询间隔，默认 50ms
-	WaitInterval time.Duration `json:"wait_interval" yaml:"wait_interval"`
+	WaitInterval time.Duration `json:"wait_interval" yaml:"wait_interval" mapstructure:"wait_interval"`
 }
 
 func (c *Config) setDefaults() {
@@ -67,21 +67,21 @@ func (c *Config) validate() error {
 		return ErrConfigNil
 	}
 	if c.DefaultTTL < 0 {
-		return xerrors.New("idem: default_ttl must be greater than or equal to 0")
+		return xerrors.Wrap(ErrInvalidConfig, "idem: default_ttl must be greater than or equal to 0")
 	}
 	if c.LockTTL < 0 {
-		return xerrors.New("idem: lock_ttl must be greater than or equal to 0")
+		return xerrors.Wrap(ErrInvalidConfig, "idem: lock_ttl must be greater than or equal to 0")
 	}
 	if c.WaitTimeout < 0 {
-		return xerrors.New("idem: wait_timeout must be greater than or equal to 0")
+		return xerrors.Wrap(ErrInvalidConfig, "idem: wait_timeout must be greater than or equal to 0")
 	}
 	if c.WaitInterval < 0 {
-		return xerrors.New("idem: wait_interval must be greater than or equal to 0")
+		return xerrors.Wrap(ErrInvalidConfig, "idem: wait_interval must be greater than or equal to 0")
 	}
 	switch c.Driver {
 	case DriverRedis, DriverMemory:
 		return nil
 	default:
-		return xerrors.New("idem: unsupported driver: " + string(c.Driver))
+		return xerrors.Wrap(ErrInvalidConfig, "idem: unsupported driver: "+string(c.Driver))
 	}
 }

@@ -114,7 +114,7 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 		return nil, xerrors.Wrapf(ErrInvalidConfig, "unknown driver: %s", cfg.Driver)
 	}
 	if gormDB == nil {
-		return nil, xerrors.Wrapf(ErrConnectorNotReady, "%s connector returned a nil client", cfg.Driver)
+		return nil, newConnectorNotReadyError(cfg.Driver)
 	}
 
 	// 配置 GORM logger

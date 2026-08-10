@@ -33,6 +33,9 @@ func (m *mq) Publish(ctx context.Context, topic string, data []byte, opts ...Pub
 	if m.closed.Load() {
 		return ErrClosed
 	}
+	if topic == "" {
+		return xerrors.Wrap(ErrInvalidConfig, "publish topic is empty")
+	}
 
 	// 应用选项
 	o := defaultPublishOptions()
@@ -54,6 +57,12 @@ func (m *mq) Publish(ctx context.Context, topic string, data []byte, opts ...Pub
 func (m *mq) Subscribe(ctx context.Context, topic string, handler Handler, opts ...SubscribeOption) (Subscription, error) {
 	if m.closed.Load() {
 		return nil, ErrClosed
+	}
+	if topic == "" {
+		return nil, xerrors.Wrap(ErrInvalidConfig, "subscribe topic is empty")
+	}
+	if handler == nil {
+		return nil, xerrors.Wrap(ErrInvalidConfig, "subscribe handler is nil")
 	}
 
 	// 应用选项
@@ -156,24 +165,30 @@ func (m *mq) shutdownSubscriptions(ctx context.Context, graceful bool) error {
 
 // wrapHandler 包装 Handler，添加统一的指标、日志和自动确认逻辑
 func (m *mq) wrapHandler(topic string, handler Handler, opts subscribeOptions) Handler {
-	return func(msg Message) error {
+	return func(msg Message) (resultErr error) {
+		msgCtx := msg.Context()
 		start := time.Now()
 		// 执行用户 Handler
-		err := handler(msg)
-		// 在 handler 执行后记录指标，才能带上处理结果
-		m.recordConsumeMetrics(msg.Context(), topic, err)
-		m.recordHandleDuration(msg.Context(), topic, time.Since(start))
+		resultErr = handler(msg)
+		m.recordHandleDuration(msgCtx, topic, time.Since(start))
+
+		// AutoAck 的 Ack 结果也是消费结果的一部分。延迟到确认逻辑结束后记录，
+		// 避免 Handler 成功但 Ack 失败时误报 success。
+		defer func() {
+			m.recordConsumeMetrics(msgCtx, topic, resultErr)
+		}()
 
 		// 自动确认逻辑（统一在上层处理）
 		if opts.AutoAck {
-			if err == nil {
+			if resultErr == nil {
 				if ackErr := msg.Ack(); ackErr != nil {
 					m.logger.Error("auto ack failed",
 						clog.String("topic", topic),
 						clog.String("msg_id", msg.ID()),
 						clog.Error(ackErr),
 					)
-					return ackErr
+					resultErr = ackErr
+					return resultErr
 				}
 			} else {
 				// Handler 返回错误时调用 Nak 触发重新投递
@@ -184,11 +199,12 @@ func (m *mq) wrapHandler(topic string, handler Handler, opts subscribeOptions) H
 						clog.String("msg_id", msg.ID()),
 						clog.Error(nakErr),
 					)
-					return errors.Join(err, nakErr)
+					resultErr = errors.Join(resultErr, nakErr)
+					return resultErr
 				}
 			}
 		}
-		return err
+		return resultErr
 	}
 }
 

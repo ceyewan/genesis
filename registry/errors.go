@@ -3,6 +3,9 @@ package registry
 import "github.com/ceyewan/genesis/xerrors"
 
 var (
+	// ErrInvalidConfig 表示 registry 配置无效。
+	ErrInvalidConfig = xerrors.New("registry: invalid config")
+
 	// ErrServiceNotFound 服务未找到
 	ErrServiceNotFound = xerrors.New("service not found")
 

@@ -80,8 +80,10 @@ if err := multi.Set(ctx, "user:1001", user, 10*time.Minute); err != nil {
 ## TTL 与错误语义
 
 - `Set(..., ttl > 0)` / `Expire(..., ttl > 0)`：使用显式 TTL。
-- `Set(..., ttl <= 0)` / `Expire(..., ttl <= 0)`：使用组件配置中的 `DefaultTTL`。
+- `Set(..., ttl == 0)` / `Expire(..., ttl == 0)`：使用组件配置中的 `DefaultTTL`。
+- `ttl < 0`：返回 `ErrInvalidTTL`，不会写入或修改缓存。
 - `Get`、`HGet`、`ZScore` 等未命中时返回 `ErrMiss`。
+- `HGetAll` 的目标必须是 `*map[string]T`；目标类型无效时返回 `ErrInvalidDestination`。
 - `Has` 不返回 `ErrMiss`，而是通过布尔值表达存在性。
 - `Expire` 返回 `(bool, error)`，其中 `bool=false` 表示 key 不存在。
 
@@ -94,7 +96,7 @@ if err := multi.Set(ctx, "user:1001", user, 10*time.Minute); err != nil {
 | `Driver` | `DistributedDriverType` | `"redis"` | 后端驱动类型，当前仅支持 `"redis"` |
 | `KeyPrefix` | `string` | `""` | 全局 key 前缀，用于多租户或命名空间隔离 |
 | `Serializer` | `string` | `"json"` | 序列化器，支持 `"json"` 和 `"msgpack"` |
-| `DefaultTTL` | `time.Duration` | `24h` | `ttl<=0` 时的兜底 TTL |
+| `DefaultTTL` | `time.Duration` | `24h` | `ttl=0` 时的兜底 TTL |
 
 ### LocalConfig
 
@@ -103,7 +105,7 @@ if err := multi.Set(ctx, "user:1001", user, 10*time.Minute); err != nil {
 | `Driver` | `LocalDriverType` | `"otter"` | 后端驱动类型，当前仅支持 `"otter"` |
 | `MaxEntries` | `int` | `10000` | 缓存最大条目数，超出后 LRU 淘汰 |
 | `Serializer` | `string` | `"json"` | 序列化器，支持 `"json"` 和 `"msgpack"` |
-| `DefaultTTL` | `time.Duration` | `1h` | `ttl<=0` 时的兜底 TTL |
+| `DefaultTTL` | `time.Duration` | `1h` | `ttl=0` 时的兜底 TTL |
 
 JSON 与 MessagePack 不是可直接互换的线上编码。切换 `Serializer` 时必须清理旧缓存，或同时切换 `KeyPrefix`/版本；否则新实例可能无法解码旧值。自定义编码通过 `cache.WithSerializer` 注入，并承担同样的版本迁移责任。
 

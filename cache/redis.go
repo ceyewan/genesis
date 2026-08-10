@@ -29,7 +29,7 @@ func newRedis(conn connector.RedisConnector, cfg *DistributedConfig, injected se
 		return nil, ErrRedisConnectorRequired
 	}
 	if cfg == nil {
-		return nil, xerrors.New("cache: distributed config is nil")
+		return nil, xerrors.Wrap(ErrInvalidConfig, "distributed config is nil")
 	}
 	client := conn.GetClient()
 	if client == nil {
@@ -147,19 +147,22 @@ func (c *redisCache) HGet(ctx context.Context, key, field string, dest any) erro
 }
 
 func (c *redisCache) HGetAll(ctx context.Context, key string, destMap any) error {
-	result, err := c.client.HGetAll(ctx, c.getKey(key)).Result()
-	if err != nil {
-		return err
-	}
-
 	v := reflect.ValueOf(destMap)
-	if v.Kind() != reflect.Pointer {
-		return xerrors.New("destMap must be a pointer")
+	if !v.IsValid() || v.Kind() != reflect.Pointer || v.IsNil() {
+		return xerrors.Wrap(ErrInvalidDestination, "destMap must be a non-nil pointer")
 	}
 	v = v.Elem()
 
 	if v.Kind() != reflect.Map {
-		return xerrors.New("destMap must be a pointer to a map")
+		return xerrors.Wrap(ErrInvalidDestination, "destMap must point to a map")
+	}
+	if v.Type().Key() != reflect.TypeFor[string]() {
+		return xerrors.Wrap(ErrInvalidDestination, "destMap must have string keys")
+	}
+
+	result, err := c.client.HGetAll(ctx, c.getKey(key)).Result()
+	if err != nil {
+		return err
 	}
 
 	if v.IsNil() {

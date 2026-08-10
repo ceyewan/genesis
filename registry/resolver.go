@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 
@@ -84,7 +85,7 @@ func (b *etcdResolverBuilder) Build(target resolver.Target, cc resolver.ClientCo
 		cc:          cc,
 		ctx:         ctx,
 		cancel:      cancel,
-		localCache:  make(map[string]resolver.Address),
+		localCache:  make(map[resolverCacheKey]resolver.Address),
 	}
 
 	// 启动 resolver
@@ -108,12 +109,20 @@ type etcdResolver struct {
 	cc          resolver.ClientConn
 	ctx         context.Context
 	cancel      context.CancelFunc
-	localCache  map[string]resolver.Address // instanceID -> Address
+	localCache  map[resolverCacheKey]resolver.Address
 	cacheMu     sync.RWMutex
 	initialized bool
 	lifecycleMu sync.Mutex
 	closed      bool
 	workers     sync.WaitGroup
+}
+
+// resolverCacheKey keeps instance identity separate from its endpoint. String
+// concatenation makes prefix-based deletion ambiguous for otherwise valid IDs
+// such as "api" and "api_blue".
+type resolverCacheKey struct {
+	instanceID string
+	addr       string
 }
 
 // start 启动 resolver
@@ -161,13 +170,13 @@ func (r *etcdResolver) initializeCache(ctx context.Context) {
 	defer r.cacheMu.Unlock()
 
 	// 清空并重建缓存
-	r.localCache = make(map[string]resolver.Address)
+	r.localCache = make(map[resolverCacheKey]resolver.Address)
 	for _, instance := range instances {
 		for _, endpoint := range instance.Endpoints {
 			addr := parseGRPCEndpoint(endpoint)
 			if addr != "" {
 				// 使用 instanceID 作为 key，一个实例可能有多个 endpoint
-				key := instance.ID + "_" + addr
+				key := resolverCacheKey{instanceID: instance.ID, addr: addr}
 				r.localCache[key] = resolver.Address{
 					Addr:       addr,
 					ServerName: instance.Name,
@@ -200,14 +209,14 @@ func (r *etcdResolver) handleEvent(event ServiceEvent) {
 		// 服务注册或更新。PUT 表示该实例的完整当前状态，必须先移除旧地址，
 		// 否则 endpoint 变化后旧地址会永久残留在 resolver cache 中。
 		for key := range r.localCache {
-			if strings.HasPrefix(key, event.Service.ID+"_") {
+			if key.instanceID == event.Service.ID {
 				delete(r.localCache, key)
 			}
 		}
 		for _, endpoint := range event.Service.Endpoints {
 			addr := parseGRPCEndpoint(endpoint)
 			if addr != "" {
-				key := event.Service.ID + "_" + addr
+				key := resolverCacheKey{instanceID: event.Service.ID, addr: addr}
 				r.localCache[key] = resolver.Address{
 					Addr:       addr,
 					ServerName: event.Service.Name,
@@ -223,7 +232,7 @@ func (r *etcdResolver) handleEvent(event ServiceEvent) {
 		// 服务注销，删除该实例的所有 endpoint
 		deleted := 0
 		for key := range r.localCache {
-			if strings.HasPrefix(key, event.Service.ID+"_") {
+			if key.instanceID == event.Service.ID {
 				delete(r.localCache, key)
 				deleted++
 			}
@@ -244,6 +253,12 @@ func (r *etcdResolver) pushStateLocked() {
 	for _, addr := range r.localCache {
 		addrs = append(addrs, addr)
 	}
+	sort.Slice(addrs, func(i, j int) bool {
+		if addrs[i].Addr == addrs[j].Addr {
+			return addrs[i].ServerName < addrs[j].ServerName
+		}
+		return addrs[i].Addr < addrs[j].Addr
+	})
 
 	if len(addrs) == 0 {
 		r.registry.logger.Warn("no available service instances in resolver cache",

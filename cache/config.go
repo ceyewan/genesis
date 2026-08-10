@@ -23,44 +23,44 @@ const (
 // DistributedConfig 分布式缓存配置。
 type DistributedConfig struct {
 	// Driver 后端类型，目前仅支持 redis。
-	Driver DistributedDriverType `json:"driver" yaml:"driver"`
+	Driver DistributedDriverType `json:"driver" yaml:"driver" mapstructure:"driver"`
 
 	// KeyPrefix 全局 Key 前缀。
-	KeyPrefix string `json:"key_prefix" yaml:"key_prefix"`
+	KeyPrefix string `json:"key_prefix" yaml:"key_prefix" mapstructure:"key_prefix"`
 
 	// Serializer 序列化器类型："json" | "msgpack"。
-	Serializer string `json:"serializer" yaml:"serializer"`
+	Serializer string `json:"serializer" yaml:"serializer" mapstructure:"serializer"`
 
 	// DefaultTTL 默认 TTL，当 Set 或 Expire 传入 ttl=0 时使用。负值非法。默认 24 小时。
-	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
+	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl" mapstructure:"default_ttl"`
 }
 
 // LocalConfig 本地缓存配置。
 type LocalConfig struct {
 	// Driver 后端类型，目前仅支持 otter。
-	Driver LocalDriverType `json:"driver" yaml:"driver"`
+	Driver LocalDriverType `json:"driver" yaml:"driver" mapstructure:"driver"`
 
 	// MaxEntries 缓存最大条目数。
-	MaxEntries int `json:"max_entries" yaml:"max_entries"`
+	MaxEntries int `json:"max_entries" yaml:"max_entries" mapstructure:"max_entries"`
 
 	// Serializer 序列化器类型："json" | "msgpack"。
-	Serializer string `json:"serializer" yaml:"serializer"`
+	Serializer string `json:"serializer" yaml:"serializer" mapstructure:"serializer"`
 
 	// DefaultTTL 默认 TTL，当 Set 或 Expire 传入 ttl=0 时使用。负值非法。默认 1 小时。
-	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
+	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl" mapstructure:"default_ttl"`
 }
 
 // MultiConfig 多级缓存配置。
 type MultiConfig struct {
 	// LocalTTL 写入本地缓存时使用的 TTL。0 表示跟随写入 TTL。
-	LocalTTL time.Duration `json:"local_ttl" yaml:"local_ttl"`
+	LocalTTL time.Duration `json:"local_ttl" yaml:"local_ttl" mapstructure:"local_ttl"`
 
 	// BackfillTTL 远程回填本地缓存时使用的 TTL，默认 1 分钟。
-	BackfillTTL time.Duration `json:"backfill_ttl" yaml:"backfill_ttl"`
+	BackfillTTL time.Duration `json:"backfill_ttl" yaml:"backfill_ttl" mapstructure:"backfill_ttl"`
 
 	// FailOpenOnLocalError 本地缓存异常时是否继续访问远程缓存。默认 true。
 	// 使用指针以区分"未设置"（nil）和"显式设置为 false"。
-	FailOpenOnLocalError *bool `json:"fail_open_on_local_error" yaml:"fail_open_on_local_error"`
+	FailOpenOnLocalError *bool `json:"fail_open_on_local_error" yaml:"fail_open_on_local_error" mapstructure:"fail_open_on_local_error"`
 }
 
 func (c *DistributedConfig) setDefaults() {
@@ -80,7 +80,7 @@ func (c *DistributedConfig) setDefaults() {
 
 func (c *DistributedConfig) validate() error {
 	if c == nil {
-		return xerrors.New("cache: distributed config is nil")
+		return xerrors.Wrap(ErrInvalidConfig, "distributed config is nil")
 	}
 	switch c.Driver {
 	case DriverRedis:
@@ -89,7 +89,7 @@ func (c *DistributedConfig) validate() error {
 		}
 		return nil
 	default:
-		return xerrors.New("cache: unsupported distributed driver: " + string(c.Driver))
+		return xerrors.Wrap(ErrInvalidConfig, "unsupported distributed driver: "+string(c.Driver))
 	}
 }
 
@@ -113,19 +113,19 @@ func (c *LocalConfig) setDefaults() {
 
 func (c *LocalConfig) validate() error {
 	if c == nil {
-		return xerrors.New("cache: local config is nil")
+		return xerrors.Wrap(ErrInvalidConfig, "local config is nil")
 	}
 	switch c.Driver {
 	case DriverOtter:
 		if c.MaxEntries < 0 {
-			return xerrors.New("cache: max_entries must be positive")
+			return xerrors.Wrap(ErrInvalidConfig, "max_entries must be positive")
 		}
 		if c.DefaultTTL < 0 {
 			return ErrInvalidTTL
 		}
 		return nil
 	default:
-		return xerrors.New("cache: unsupported local driver: " + string(c.Driver))
+		return xerrors.Wrap(ErrInvalidConfig, "unsupported local driver: "+string(c.Driver))
 	}
 }
 

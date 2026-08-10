@@ -1,6 +1,16 @@
+<!-- markdownlint-disable-file MD013 -->
+
 # Genesis v1 API and lifecycle decisions
 
-This document freezes the cross-package rules published as `v1.0.0-rc.1`. The exhaustive symbol surface is in [v1-api-inventory.md](./v1-api-inventory.md).
+The immutable `v1.0.0-rc.1` symbol baseline is stored in
+[api-baselines/v1.0.0-rc.1.md](./api-baselines/v1.0.0-rc.1.md). This document
+describes the v1 contract plus reviewed RC2 candidate refinements; the current
+candidate surface is generated in [v1-api-inventory.md](./v1-api-inventory.md),
+and machine-reviewed RC1 exceptions are explicit in
+[v1-api-compat-allowlist.md](./v1-api-compat-allowlist.md). Their approved RC2
+replacements are locked independently in
+[v1-api-compat-expected.md](./v1-api-compat-expected.md), so a reviewed change
+cannot silently drift a second time.
 
 ## Constructor contract
 
@@ -18,13 +28,20 @@ Connector construction never performs network I/O. `Connect` establishes and val
 
 ## Time and TTL contract
 
-Public durations and TTLs use `time.Duration`. Zero means “use the documented default” or “no expiry” only where the field or method explicitly says so. Negative durations are invalid. Etcd leases are second-granularity and reject values below one second; Redis ID allocator leases support millisecond precision.
+Public durations and TTLs use `time.Duration`. Zero means “use the documented default” or “no expiry” only where the field or method explicitly says so. Negative durations are invalid. Etcd leases are second-granularity and reject values below one second; Redis ID allocator leases support millisecond precision. Redis dlock TTLs are also millisecond-granularity and reject values below one millisecond rather than allowing renewal to issue an immediate-expiry command.
+
+`idem.New` classifies every non-nil configuration failure as `idem.ErrInvalidConfig`; a nil config preserves `idem.ErrConfigNil` and also matches the broad class. A missing or unconnected Redis dependency matches both `idem.ErrConnectorNil` and `connector.ErrClientNil`.
 
 `idgen.SequencerConfig.MaxValue` is an exhaustion boundary. `Next` and `NextBatch` return `ErrSequenceExhausted` atomically and leave the stored value unchanged; sequences never reset or wrap.
 
 ## Error contract
 
 Exported sentinel errors remain usable through `errors.Is`. Wrapped dependency failures preserve their cause. Constructors identify the invalid field or missing dependency. Context cancellation and dependency sentinels are classified with `errors.Is`/`errors.As`, not direct equality.
+
+RC1-exported but unreachable sentinels remain as deprecated source-compatibility
+names in RC2. No implementation starts returning them merely to justify their
+existence: `cache.ErrNotSupported`, `mq.ErrSubscriptionClosed`, and
+`ratelimit.ErrRateLimitExceeded` are compatibility aliases only.
 
 `idgen.UUID` returns `(string, error)`. Entropy-source failures are never converted to an empty string, panic, or silent fallback.
 
@@ -47,7 +64,13 @@ Exported sentinel errors remain usable through `errors.Is`. Wrapped dependency f
 
 Concurrent trace, metrics, and registry shutdown callers wait with their own contexts. The first short-lived caller cannot permanently abort cleanup: one internal five-second cleanup task continues, while each caller may stop waiting independently. Redis Stream Drain stops broker reads without canceling an active handler context; at deadline it cancels the handler context and returns, but Go cannot forcibly terminate a handler that ignores context cancellation.
 
-`dlock.Locker.Lost(key)` is the minimum ownership-loss signal for v1. A normal unlock closes the channel without a value; renewal/session loss sends `ErrOwnershipLost` and then closes it. Failed remote unlock retains local state so the caller may retry with a new context. Genesis does not issue fencing tokens, so irreversible downstream writes still require a version/CAS fence.
+`dlock.Locker.Lost(key)` is the minimum ownership-loss signal for v1. A normal unlock closes the channel without a value; renewal/session loss sends `ErrOwnershipLost` and then closes it. Callers obtain this channel immediately after acquisition; that channel remains valid independently of the Locker's bounded recent lost-key diagnostic history. Failed remote unlock retains local state so the caller may retry with a new context. Empty keys return `ErrInvalidKey`. Genesis does not issue fencing tokens, so irreversible downstream writes still require a version/CAS fence.
+
+An Etcd Locker reserves each key locally before entering the distributed
+acquisition protocol. Concurrent acquisition of the same key through one
+Locker returns `ErrLockAlreadyHeld`; different keys remain independent. This
+prevents two mutex objects sharing one session lease from treating themselves
+as the same Etcd owner and deleting each other's lock key.
 
 `idgen.Allocator.KeepAlive` retains its channel model: an error value means ownership was lost; clean channel closure means caller cancellation or Stop. `Stop() error` joins the keepalive task and reports token/lease release failures instead of swallowing them.
 
@@ -55,6 +78,7 @@ Concurrent trace, metrics, and registry shutdown callers wait with their own con
 
 - Auth is a local HS256 access/refresh JWT component. Issuer, audience, expiry, signing algorithm and token type are enforced. Machine identities use standard `Subject`, roles and namespaced `Extra` claims; OAuth2/OIDC, revocation and a machine-identity directory are outside this module.
 - MQ owns transport acknowledgement, redelivery, durability, queue-group, backpressure, reconnect and drain behavior. Business retry classification and DLQ payload/topic policy remain application concerns.
+- JetStream `ProgressMessage` is an optional capability rather than a new method on every `Message`. Long-running handlers may call `InProgress` before `Ack`/`Nak`; Redis messages do not implement it. `WithBatchSize` controls the current JetStream subscription's pull buffer, while `WithMaxInflight` controls the shared durable consumer's cluster-wide `MaxAckPending`.
 - Redis Stream consumer groups and JetStream durable consumers provide the persistent at-least-once path. Redis broadcast has no server-side acknowledgement/re-delivery guarantee. New subscriptions start from retained history by default; `FromLatest` and `FromID` make another initial position explicit.
 - JetStream queue-group and durable identities are scoped by topic because one Genesis stream can contain several topics; the same logical name on different topics creates independent consumers.
 - Registry Watch emits a linearizable initial snapshot before changes. Unexpected lease loss is reported through `LeaseFailures`.
@@ -64,7 +88,20 @@ Concurrent trace, metrics, and registry shutdown callers wait with their own con
 
 ## Package stability
 
-All importable non-example packages in this module, including `testkit`, are part of the v1 review surface and are listed in the API inventory. `testkit` is stable test support, not production runtime API. Generated packages under `examples` are examples and are not versioned as reusable application contracts. No current runtime package is marked experimental, split into another module, or removed for v1.
+The approved RC2 surface keeps `dlock` and `idem` in the root v1 module;
+`dlock` is an extended package with the same SemVer responsibility as the
+consumer-validated core. Repository-only `testkit` moved to
+`internal/testkit`, and all four generated example-proto packages moved under
+their owning example's `internal/proto` tree. External consumers must own their
+test fixtures and protobuf schemas instead of importing these implementation
+assets.
+
+The two zero-logic trace HTTP wrappers were removed; callers use
+`otelhttp.NewHandler` and `otelhttp.NewTransport` directly. The immutable RC1
+declarations removed by these decisions are listed exactly in
+`v1-api-compat-removals.md`. The compatibility gate rejects stale, nonexistent,
+disguised-replacement, or overlapping removal entries, so internalization
+cannot be hidden by merely regenerating the current inventory.
 
 `mq` transport implementations are intentionally package-internal. The pre-v1 exported `mq.Transport` name was removed because its methods depended on unexported option-state types and external packages could not implement it. Applications extend MQ behavior through `Middleware` and the public option constructors; adding third-party broker drivers requires a future explicit public driver contract rather than depending on the internal transport interface.
 
@@ -74,9 +111,14 @@ Genesis v1 intentionally binds the following third-party public types: `slog.Att
 
 Registry's resolver registration and the OpenTelemetry trace/metrics providers remain process-global by design. Applications initialize one production instance during bootstrap. Tests that replace global state must not run such initialization in parallel and must call Shutdown. A shutdown only resets the global provider if it still points at the instance being closed, so closing an older instance cannot erase a newer provider.
 
-No-op methods are retained only where they encode a stable ownership/capability rule: borrower `Close` methods never close injected connectors, discard implementations satisfy the same interfaces, and `clog.Flush` is a no-op for synchronous slog handlers but remains an extension point for buffered handlers. Unreachable sentinels and options with no implementation are removed before v1 rather than frozen as placeholders.
+No-op methods are retained only where they encode a stable ownership/capability rule: borrower `Close` methods never close injected connectors, discard implementations satisfy the same interfaces, and `clog.Flush` is a no-op for synchronous slog handlers but remains an extension point for buffered handlers. New unreachable sentinels and options are not added. Names already published in RC1 remain deprecated until a separately reviewed breaking release.
 
 Breaker keys are bounded by `Config.MaxKeys` (default 1024); exceeding it returns `ErrKeyLimitExceeded` rather than growing memory without limit. `WithFallback` returns a real replacement `(any, error)`, `WithFailureClassifier` controls the generic error failure boundary, and `WithMeter` emits execution, rejection, and state metrics. Key labels are therefore restricted to the same configured low-cardinality set.
+
+Standalone rate-limit keys are bounded by `StandaloneConfig.MaxKeys` (default
+10000). A new key beyond the bound returns `ErrKeyLimitExceeded`; existing keys
+continue to work. Cleanup and request admission share one lifecycle lock so an
+active bucket cannot be deleted and recreated behind a concurrent request.
 
 Allocator and Sequencer drivers use the typed `idgen.DriverType` constants. Allocator's default `MaxID` is 32 so it composes with the default multi-datacenter generator layout; users of single-datacenter mode may explicitly raise it to 1024. `ParseGeneratorID` rejects negative IDs and unknown modes instead of silently choosing multi-datacenter parsing.
 
@@ -86,4 +128,17 @@ Metrics HTTP exposure has an explicit `ListenAddress`, classifiable `ErrInvalidC
 
 `config.Loader.Load` builds and validates a new snapshot before publishing it. Environment-only keys are materialized for both root underscore tags and dotted nested structs so `Get` and `Unmarshal` observe the same values.
 
-Cache JSON/MessagePack changes are not wire-compatible. Deployments must invalidate old entries or change `KeyPrefix`; custom serializers are injected with `cache.WithSerializer`. HTTP and gRPC idempotency keys are scoped by endpoint/full method and stored with a deterministic request fingerprint. Reusing a key for a different request returns `idem.ErrKeyConflict`; result commit and lock deletion are atomic and require the current ownership token.
+File and environment sources merge at schema-discovered leaves. An environment
+override for one nested field does not hide sibling fields loaded from a file,
+and unmarshalling never writes permanent highest-priority overrides back into
+the Loader.
+
+Cache JSON/MessagePack changes are not wire-compatible. Deployments must invalidate old entries or change `KeyPrefix`; custom serializers are injected with `cache.WithSerializer`. HTTP and gRPC idempotency keys are scoped by endpoint/full method and stored with a deterministic request fingerprint. Reusing a key for a different request returns `idem.ErrKeyConflict`; result commit and lock deletion are atomic and require the current ownership token. Built-in stores also atomically confirm that no completed result exists before creating the next processing lock, and the shared execution path rechecks after every lock attempt for third-party Store compatibility.
+
+Idempotency resource bounds are additive options rather than serialized `Config` fields. Raw keys default to 256 bytes, stored results and HTTP response capture to 1 MiB, keyed HTTP request bodies to 1 MiB, and the built-in Memory store to 10000 logical keys. Oversized successful results are returned but deliberately not cached, so a later or already-waiting caller may execute again after the current lock is released. Memory capacity is checked before business execution; an accepted lock reserves the matching result commit slot. HTTP maps request-body overflow to 413 and store capacity to 503; gRPC maps capacity to `ResourceExhausted`.
+
+Multi-tenant HTTP/gRPC entry points must configure
+`WithHTTPIdentityScopeFunc` / `WithGRPCIdentityScopeFunc` from authenticated
+context. The scope is hash-bound to both storage key and fingerprint; once the
+callback is configured, an empty scope or extraction error fails closed rather
+than falling back to a cross-identity cache domain.

@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -57,6 +58,7 @@ func TestNew_MissingDriver(t *testing.T) {
 	limiter, err := New(cfg)
 
 	require.Error(t, err, "New should return error when driver is missing")
+	require.ErrorIs(t, err, ErrInvalidConfig)
 	require.Nil(t, limiter, "Limiter should be nil when driver is missing")
 }
 
@@ -65,6 +67,7 @@ func TestNew_UnsupportedDriver(t *testing.T) {
 	limiter, err := New(cfg)
 
 	require.Error(t, err)
+	require.ErrorIs(t, err, ErrInvalidConfig)
 	require.Nil(t, limiter)
 }
 
@@ -89,9 +92,10 @@ func TestNewRejectsNegativeStandaloneDurations(t *testing.T) {
 	for _, standalone := range []*StandaloneConfig{
 		{CleanupInterval: -time.Second},
 		{IdleTimeout: -time.Second},
+		{MaxKeys: -1},
 	} {
 		limiter, err := New(&Config{Driver: DriverStandalone, Standalone: standalone})
-		require.Error(t, err)
+		require.ErrorIs(t, err, ErrInvalidConfig)
 		require.Nil(t, limiter)
 	}
 }
@@ -128,6 +132,18 @@ func TestLimit_Struct(t *testing.T) {
 
 	require.Equal(t, float64(10.5), limit.Rate)
 	require.Equal(t, 20, limit.Burst)
+}
+
+func TestConfigFieldsHaveMapstructureTags(t *testing.T) {
+	for _, typ := range []reflect.Type{
+		reflect.TypeFor[Config](),
+		reflect.TypeFor[StandaloneConfig](),
+		reflect.TypeFor[DistributedConfig](),
+	} {
+		for field := range typ.Fields() {
+			require.NotEmptyf(t, field.Tag.Get("mapstructure"), "%s.%s", typ.Name(), field.Name)
+		}
+	}
 }
 
 // ============================================================

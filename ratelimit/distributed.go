@@ -73,6 +73,7 @@ type distributedLimiter struct {
 	// 指标
 	allowedCounter metrics.Counter
 	deniedCounter  metrics.Counter
+	errorCounter   metrics.Counter
 	closed         atomic.Bool
 }
 
@@ -108,6 +109,7 @@ func newDistributed(
 	if meter != nil {
 		l.allowedCounter, _ = meter.Counter(MetricAllowed, "Number of allowed requests")
 		l.deniedCounter, _ = meter.Counter(MetricDenied, "Number of denied requests")
+		l.errorCounter, _ = meter.Counter(MetricErrors, "Number of limiter operation errors")
 	}
 
 	if logger != nil {
@@ -123,7 +125,12 @@ func (l *distributedLimiter) Allow(ctx context.Context, key string, limit Limit)
 }
 
 // AllowN 尝试获取 N 个令牌
-func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit, n int) (bool, error) {
+func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit, n int) (allowed bool, err error) {
+	defer func() {
+		if err != nil {
+			recordLimiterError(ctx, l.errorCounter, "distributed")
+		}
+	}()
 	if l.closed.Load() {
 		return false, ErrLimiterClosed
 	}
@@ -131,7 +138,7 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 		return false, ErrKeyEmpty
 	}
 
-	if limit.Rate <= 0 || limit.Burst <= 0 {
+	if !limit.valid() {
 		return false, ErrInvalidLimit
 	}
 
@@ -159,7 +166,7 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 		return false, xerrors.New("invalid lua script result")
 	}
 
-	allowed, ok := resultSlice[0].(int64)
+	allowedValue, ok := resultSlice[0].(int64)
 	if !ok {
 		return false, xerrors.New("invalid allowed value")
 	}
@@ -169,7 +176,7 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 		remaining = 0
 	}
 
-	isAllowed := allowed == 1
+	isAllowed := allowedValue == 1
 
 	// 记录指标
 	if isAllowed {
@@ -207,7 +214,12 @@ func (l *distributedLimiter) buildKey(key string, limit Limit) string {
 
 // Wait 阻塞等待直到获取 1 个令牌
 // 注意：分布式模式不支持 Wait 操作
-func (l *distributedLimiter) Wait(ctx context.Context, key string, limit Limit) error {
+func (l *distributedLimiter) Wait(ctx context.Context, key string, limit Limit) (err error) {
+	defer func() {
+		if err != nil {
+			recordLimiterError(ctx, l.errorCounter, "distributed")
+		}
+	}()
 	if l.closed.Load() {
 		return ErrLimiterClosed
 	}

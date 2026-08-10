@@ -1,6 +1,7 @@
 package mq
 
 import (
+	"math"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
@@ -168,9 +169,7 @@ func WithRetry(cfg RetryConfig, logger clog.Logger) Middleware {
 	if cfg.MaxBackoff <= 0 || cfg.MaxBackoff < cfg.InitialBackoff {
 		cfg.MaxBackoff = max(defaults.MaxBackoff, cfg.InitialBackoff)
 	}
-	if cfg.Multiplier <= 1.0 {
-		cfg.Multiplier = defaults.Multiplier
-	}
+	cfg.Multiplier = normalizeRetryMultiplier(cfg.Multiplier, defaults.Multiplier)
 	if logger == nil {
 		logger = clog.Discard()
 	}
@@ -214,12 +213,30 @@ func WithRetry(cfg RetryConfig, logger clog.Logger) Middleware {
 				}
 
 				// 计算下次退避时间
-				backoff = min(time.Duration(float64(backoff)*cfg.Multiplier), cfg.MaxBackoff)
+				backoff = nextRetryBackoff(backoff, cfg.Multiplier, cfg.MaxBackoff)
 			}
 
 			return err
 		}
 	}
+}
+
+func nextRetryBackoff(current time.Duration, multiplier float64, maximum time.Duration) time.Duration {
+	scaled := float64(current) * multiplier
+	// Saturate before converting back to time.Duration. Converting an
+	// out-of-range float first can wrap to a negative duration and bypass the
+	// configured maximum.
+	if scaled >= float64(maximum) {
+		return maximum
+	}
+	return time.Duration(scaled)
+}
+
+func normalizeRetryMultiplier(multiplier, fallback float64) float64 {
+	if math.IsNaN(multiplier) || math.IsInf(multiplier, 0) || multiplier <= 1.0 {
+		return fallback
+	}
+	return multiplier
 }
 
 // WithLogging 创建日志中间件

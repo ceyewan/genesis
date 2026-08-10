@@ -129,18 +129,44 @@ type MultiError struct {
 }
 
 func (m *MultiError) Error() string {
-	if len(m.Errors) == 0 {
+	if m == nil {
 		return "no errors"
 	}
-	if len(m.Errors) == 1 {
-		return m.Errors[0].Error()
+
+	var first error
+	n := 0
+	for _, err := range m.Errors {
+		if err == nil {
+			continue
+		}
+		if first == nil {
+			first = err
+		}
+		n++
 	}
-	return fmt.Sprintf("%v (and %d more errors)", m.Errors[0], len(m.Errors)-1)
+
+	switch n {
+	case 0:
+		return "no errors"
+	case 1:
+		return first.Error()
+	default:
+		return fmt.Sprintf("%v (and %d more errors)", first, n-1)
+	}
 }
 
-// Unwrap 返回内部错误切片，供 errors.Is / errors.As 遍历匹配。
+// Unwrap 返回非 nil 错误的副本，供 errors.Is / errors.As 遍历匹配。
 func (m *MultiError) Unwrap() []error {
-	return m.Errors
+	if m == nil {
+		return nil
+	}
+	errs := make([]error, 0, len(m.Errors))
+	for _, err := range m.Errors {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
 }
 
 // Combine 将多个错误合并为一个。

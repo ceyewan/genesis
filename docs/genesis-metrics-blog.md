@@ -1,3 +1,5 @@
+<!-- markdownlint-disable-file MD013 -->
+
 # Genesis metrics：全局指标组件的设计与取舍
 
 Genesis `metrics` 是 Genesis 的 L0 基础组件，核心职责是提供统一的指标创建能力、Prometheus 暴露端点，以及 HTTP / gRPC 服务端 RED 指标封装。它面向微服务和组件库场景，重点解决 OpenTelemetry 指标初始化、全局 `MeterProvider` 管理、指标标签约定和常见服务端埋点复用的问题。这篇文章不只介绍 `metrics` 怎么用，更重点说明它为什么这样设计、适合什么场景，以及它和直接使用 OpenTelemetry Metrics API 之间的取舍。

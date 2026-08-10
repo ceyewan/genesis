@@ -79,7 +79,7 @@ func GinMiddleware(limiter Limiter, opts *GinMiddlewareOptions) gin.HandlerFunc 
 
 		// 获取限流规则
 		limit := limitFunc(c)
-		if limit.Rate <= 0 || limit.Burst <= 0 {
+		if !limit.valid() {
 			// 无效的限流规则，放行
 			c.Next()
 			return
@@ -100,7 +100,7 @@ func GinMiddleware(limiter Limiter, opts *GinMiddlewareOptions) gin.HandlerFunc 
 					clog.Error(err))
 			}
 			if errorPolicy == ErrorPolicyFailClosed {
-				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
 					"error": "rate limiter unavailable",
 				})
 				return

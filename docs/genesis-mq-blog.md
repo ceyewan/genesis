@@ -1,3 +1,5 @@
+<!-- markdownlint-disable-file MD013 -->
+
 # Genesis mq：统一入口的持久化消息组件设计与实现
 
 Genesis `mq` 是业务层（L2）的消息队列组件。它面向的核心问题是：微服务中不同团队或场景分别依赖 NATS JetStream 或 Redis Stream，连接管理、消息确认、重试、死信等横切逻辑被反复实现，且与具体中间件深度耦合。`mq` 的目标不是"把所有 MQ 都抽象成行为一致的接口"，而是提供一个**统一的接入方式**，让业务代码与底层驱动解耦，让 Retry、Logging、Recover 等横切逻辑可以跨驱动复用。
@@ -82,9 +84,9 @@ JetStream 和 Redis Stream 各有独立的配置块，只在对应驱动下生�
 
 真正跨驱动可统一描述的能力：`Publish`、`Subscribe`、`Ack()`、`Headers`、`QueueGroup`（用于竞争消费，但在不同驱动上映射不同）、AutoAck / ManualAck 模式。这些能力在 JetStream 和 Redis Stream 上都能使用，但语义映射并不完全相同。
 
-不稳定统一的能力：`Nak()` 在 Redis 下返回 `ErrNotSupported`；`BatchSize` 对 JetStream 当前无效（push 模式）；`MaxInflight` 只对 JetStream 有意义。这类能力不能继续伪装成"所有驱动都支持"，否则调用方会依赖一个实际上不工作的功能。
+不稳定统一的能力：`Nak()` 在 Redis 下返回 `ErrNotSupported`；`BatchSize` 在 Redis 映射读取 `COUNT`，在 JetStream 映射当前订阅实例的 `PullMaxMessages`；`MaxInflight` 只对 JetStream 有意义，并映射共享 durable 的全局 `MaxAckPending`。这类能力必须明确驱动映射，否则调用方会误把实例级缓冲和集群级背压当成同一个旋钮。
 
-这个区分不是文字游戏，而是影响调用方决策：如果你的错误处理依赖 Nak 立即重投，不要用 Redis Stream；如果你需要精确的 BatchSize 控制，不要使用 JetStream 当前的 push 模式。
+这个区分不是文字游戏，而是影响调用方决策：如果你的错误处理依赖 Nak 立即重投，不要用 Redis Stream；如果多个实例共享 JetStream durable，不要把单实例 worker 数直接写入 `MaxInflight`，应使用 `BatchSize` 控制每个实例的本地预取。
 
 ### 4.2 Nak 的边界
 
@@ -119,7 +121,7 @@ JetStream 的 `Nak` 会触发消息立即重新投递给该 consumer。Redis Str
 
 ### 5.1 分层结构
 
-```
+```text
 MQ 对外接口（impl.go）
   └── Transport 内部接口
         ├── natsJetStreamTransport
@@ -141,7 +143,7 @@ XAUTOCLAIM 的游标持续推进，避免每次从 `0-0` 全量扫描 Pending �
 
 ### 5.4 JetStream 生命周期
 
-JetStream 订阅使用 `consumer.Consume()`（push 模式）。返回的 `jetStreamSubscription` 在后台启动一个 goroutine，监听 `ctx.Done()`，触发时调用 `cons.Stop()` 并等待 `cons.Closed()`，最后关闭 `done` channel。这保证 `<-sub.Done()` 在 JetStream 内部完全停止消费后才返回，不会提前释放。
+JetStream 订阅使用 pull consumer 的 `consumer.Consume()` 连续拉取模式。返回的 `jetStreamSubscription` 在后台启动一个 goroutine，监听 `ctx.Done()`，触发时调用 `cons.Stop()` 并等待 `cons.Closed()`，最后关闭 `done` channel。这保证 `<-sub.Done()` 在 JetStream 内部完全停止消费后才返回，不会提前释放。
 
 ---
 
@@ -151,9 +153,9 @@ JetStream 订阅使用 `consumer.Consume()`（push 模式）。返回的 `jetStr
 
 NATS Core 是 fire-and-forget 语义：没有持久化，没有 Ack，消费者离线时消息丢失。这与 `mq` 组件提供持久化消息能力的定位不符。给调用方一个"看起来一样但可能悄悄丢消息"的驱动，风险大于价值。NATS Core 适合直接用 NATS SDK 处理实时通知场景，不适合进入 `mq` 的抽象层。
 
-### 6.2 为什么 BatchSize 在 JetStream 下无效
+### 6.2 BatchSize 与 MaxInflight 为什么必须分开
 
-JetStream 当前使用 `consumer.Consume()`——push 模式，服务端主动推送消息，不需要客户端主动 fetch。`BatchSize` 的语义是"单次 fetch 多少条"，在 push 模式下没有对应的调优点。要让 BatchSize 生效需要切换为 `consumer.Fetch(n)` 主动拉取模式，代价是消费循环需要由组件自己驱动，实现复杂度上升。当前选择 push 模式，BatchSize 在注释中明确标注对 JetStream 无效，不做静默假装生效。
+JetStream 的 `consumer.Consume()` 底层仍是连续 pull。显式 `WithBatchSize(n)` 会传给 `PullMaxMessages(n)`，只约束当前订阅实例的拉取缓存；`WithMaxInflight(n)` 则写入 durable consumer 的 `MaxAckPending`，约束所有共享实例的未确认总量。前者用于单副本内存与 AckWait 风险控制，后者用于集群级背压，不能互相替代。未显式设置 `BatchSize` 时保留 NATS SDK 默认值，避免 RC2 静默改变已有 JetStream 消费吞吐。
 
 ### 6.3 Drain 与 Close
 
@@ -203,7 +205,7 @@ Recover 放在最外层：Handler panic 时，panic 会穿透 Retry 层被 Recov
 
 **误区二：用 `WithDurable` 做 Redis 的持久化订阅**。Redis 持久化订阅的载体是 Consumer Group，用 `WithQueueGroup` 创建 group 后进度才会被持久化。`WithDurable` 在 Redis 下只是给消费者实例命名，不影响进度持久化。
 
-**误区三：不关闭订阅直接关闭 MQ**。`mq.Close()` 不会主动取消已有订阅。在服务退出时，建议先调用所有 `sub.Unsubscribe()`，等待 `<-sub.Done()` 后再调用 `q.Close()`，确保消费循环干净退出，不丢失已接收但未处理的消息。
+**误区三：认为关闭 MQ 会顺带关闭 Connector**。`mq.Close()` 会主动取消已有订阅并等待消费循环退出，但 MQ 只借用注入的 Connector，不拥有底层连接。应用仍需单独关闭 Connector，并按“先 MQ、后 Connector”的顺序释放资源。
 
 ---
 

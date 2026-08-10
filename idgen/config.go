@@ -31,18 +31,21 @@ const (
 	DriverEtcd DriverType = "etcd"
 )
 
-// GeneratorConfig ID 生成器配置 (Snowflake)
+// GeneratorConfig ID 生成器配置 (Snowflake)。
+//
+// 同一 ID 碰撞域内，每个存活的 Generator 必须使用唯一的
+// (Mode, DatacenterID, WorkerID) 组合；Generator 实例之间不会共享序列状态。
 type GeneratorConfig struct {
 	// Mode 位布局模式，默认 "multi_dc"。
-	Mode GeneratorMode `yaml:"mode" json:"mode"`
+	Mode GeneratorMode `mapstructure:"mode" yaml:"mode" json:"mode"`
 
 	// WorkerID 工作节点 ID。
 	// single_dc 模式范围 [0, 1023]，multi_dc 模式范围 [0, 31]。
-	WorkerID int64 `yaml:"worker_id" json:"worker_id"`
+	WorkerID int64 `mapstructure:"worker_id" yaml:"worker_id" json:"worker_id"`
 
 	// DatacenterID 数据中心 ID。
 	// single_dc 模式下必须为 0，multi_dc 模式范围 [0, 31]。
-	DatacenterID int64 `yaml:"datacenter_id" json:"datacenter_id"`
+	DatacenterID int64 `mapstructure:"datacenter_id" yaml:"datacenter_id" json:"datacenter_id"`
 }
 
 func (c *GeneratorConfig) setDefaults() {
@@ -79,19 +82,19 @@ func (c *GeneratorConfig) validate() error {
 // SequencerConfig 序列号生成器配置
 type SequencerConfig struct {
 	// Driver 后端类型，默认 DriverRedis。Sequencer 当前只支持 Redis。
-	Driver DriverType `yaml:"driver" json:"driver"`
+	Driver DriverType `mapstructure:"driver" yaml:"driver" json:"driver"`
 
 	// KeyPrefix 键前缀
-	KeyPrefix string `yaml:"key_prefix" json:"key_prefix"`
+	KeyPrefix string `mapstructure:"key_prefix" yaml:"key_prefix" json:"key_prefix"`
 
 	// Step 步长，默认为 1
-	Step int64 `yaml:"step" json:"step"`
+	Step int64 `mapstructure:"step" yaml:"step" json:"step"`
 
 	// MaxValue 最大值限制；下一次分配超过该值时返回 ErrSequenceExhausted（0 表示不限制）。
-	MaxValue int64 `yaml:"max_value" json:"max_value"`
+	MaxValue int64 `mapstructure:"max_value" yaml:"max_value" json:"max_value"`
 
 	// TTL 键过期时间，0 表示永不过期。
-	TTL time.Duration `yaml:"ttl" json:"ttl"`
+	TTL time.Duration `mapstructure:"ttl" yaml:"ttl" json:"ttl"`
 }
 
 func (c *SequencerConfig) setDefaults() {
@@ -124,16 +127,16 @@ func (c *SequencerConfig) validate() error {
 // AllocatorConfig WorkerID 分配器配置
 type AllocatorConfig struct {
 	// Driver 后端类型: DriverRedis | DriverEtcd。
-	Driver DriverType `yaml:"driver" json:"driver"`
+	Driver DriverType `mapstructure:"driver" yaml:"driver" json:"driver"`
 
 	// KeyPrefix 键前缀，默认 "genesis:idgen:worker"
-	KeyPrefix string `yaml:"key_prefix" json:"key_prefix"`
+	KeyPrefix string `mapstructure:"key_prefix" yaml:"key_prefix" json:"key_prefix"`
 
 	// MaxID 最大 ID 范围 [0, maxID)，默认 32，可直接与默认 multi_dc Generator 组合。
-	MaxID int `yaml:"max_id" json:"max_id"`
+	MaxID int `mapstructure:"max_id" yaml:"max_id" json:"max_id"`
 
 	// TTL 租约 TTL，默认 30 秒。etcd 驱动要求至少 1 秒。
-	TTL time.Duration `yaml:"ttl" json:"ttl"`
+	TTL time.Duration `mapstructure:"ttl" yaml:"ttl" json:"ttl"`
 }
 
 func (c *AllocatorConfig) setDefaults() {

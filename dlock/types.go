@@ -18,17 +18,17 @@ const (
 // Config 组件静态配置
 type Config struct {
 	// Driver 选择使用的后端 (redis | etcd)
-	Driver DriverType `json:"driver" yaml:"driver"`
+	Driver DriverType `json:"driver" yaml:"driver" mapstructure:"driver"`
 
 	// Prefix 锁 Key 的全局前缀，例如 "dlock:"
-	Prefix string `json:"prefix" yaml:"prefix"`
+	Prefix string `json:"prefix" yaml:"prefix" mapstructure:"prefix"`
 
 	// DefaultTTL 默认锁超时时间
 	// Redis 会启动 Watchdog 自动续期；Etcd 使用 Session KeepAlive 自动续期。
-	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl"`
+	DefaultTTL time.Duration `json:"default_ttl" yaml:"default_ttl" mapstructure:"default_ttl"`
 
 	// RetryInterval 加锁重试间隔 (仅 Lock 模式有效)
-	RetryInterval time.Duration `json:"retry_interval" yaml:"retry_interval"`
+	RetryInterval time.Duration `json:"retry_interval" yaml:"retry_interval" mapstructure:"retry_interval"`
 }
 
 func (c *Config) setDefaults() {
@@ -48,21 +48,21 @@ func (c *Config) validate() error {
 		return ErrConfigNil
 	}
 	if c.Driver == "" {
-		return xerrors.New("dlock: driver is required")
+		return xerrors.Wrap(ErrInvalidConfig, "driver is required")
 	}
 	if c.DefaultTTL < 0 || c.RetryInterval < 0 {
 		return xerrors.Wrap(ErrInvalidTTL, "default_ttl and retry_interval must not be negative")
 	}
 	switch c.Driver {
-	case DriverRedis, DriverEtcd:
-		if c.Driver == DriverEtcd {
-			if err := validateEtcdTTL(c.DefaultTTL); err != nil {
-				return err
-			}
+	case DriverRedis:
+		if err := validateRedisTTL(c.DefaultTTL); err != nil {
+			return err
 		}
 		return nil
+	case DriverEtcd:
+		return validateEtcdTTL(c.DefaultTTL)
 	default:
-		return xerrors.New("dlock: unsupported driver: " + string(c.Driver))
+		return xerrors.Wrap(ErrInvalidConfig, "unsupported driver: "+string(c.Driver))
 	}
 }
 
@@ -71,6 +71,7 @@ type Locker interface {
 	// Lock 阻塞式加锁
 	// 成功返回 nil，失败返回错误
 	// 如果上下文取消，返回 context.Canceled 或 context.DeadlineExceeded
+	// 空字符串 key 返回 ErrInvalidKey。
 	//
 	// opts 支持的选项:
 	//   - WithTTL(duration): 设置锁的超时时间
@@ -80,6 +81,7 @@ type Locker interface {
 	// 成功获取锁返回 true, nil
 	// 锁已被占用返回 false, nil
 	// 发生错误返回 false, err
+	// 空字符串 key 返回 false, ErrInvalidKey。
 	//
 	// opts 支持的选项:
 	//   - WithTTL(duration): 设置锁的超时时间
@@ -87,13 +89,16 @@ type Locker interface {
 
 	// Unlock 释放锁
 	// 只有锁的持有者才能成功释放
+	// 空字符串 key 返回 ErrInvalidKey。
 	Unlock(ctx context.Context, key string) error
 
 	// Lost reports asynchronous ownership loss for a held key. The channel
 	// yields ErrOwnershipLost once and then closes if renewal/session ownership
 	// is lost. A normal Unlock closes the channel without a value. Call Lost
 	// immediately after acquiring the lock and monitor it for the whole critical
-	// section.
+	// section. An empty key yields ErrInvalidKey and closes the channel. Lookup
+	// history after ownership loss is bounded; a channel obtained while the lock
+	// is live remains valid even if that diagnostic history is later evicted.
 	Lost(key string) <-chan error
 
 	// Close 关闭 Locker 的持有状态。

@@ -21,6 +21,13 @@ func resolveLockTTL(defaultTTL time.Duration, opts ...LockOption) (time.Duration
 	return options.TTL, nil
 }
 
+func validateRedisTTL(ttl time.Duration) error {
+	if ttl < time.Millisecond {
+		return xerrors.Wrap(ErrInvalidTTL, "redis ttl must be at least 1ms")
+	}
+	return nil
+}
+
 func validateEtcdTTL(ttl time.Duration) error {
 	if ttl < time.Second {
 		return xerrors.Wrap(ErrInvalidTTL, "etcd ttl must be at least 1s")

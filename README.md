@@ -9,6 +9,9 @@ tag 指向 `ec5ad2c31fb4adce2bd42529e3d7fbfe92b23aa7`。后续测试和文档提
 
 Genesis 提供一组可以直接组合的基础设施与治理组件，目标不是接管应用，而是把日志、配置、连接管理、缓存、分布式锁、消息、认证、限流、熔断、注册发现等通用能力沉淀成统一积木。
 
+最低支持 Go `1.26.0`。CI 同时使用最低版本和当前固定补丁版本
+`1.26.5` 验证编译、测试与发布证据；消费者不应依赖本机更高版本才能通过。
+
 项目的核心约束只有三条：
 
 - 显式依赖注入，不使用运行时 DI 容器。
@@ -91,6 +94,8 @@ go test -race -count=1 ./...
 make lint
 make modernize
 make modernize-check
+make api-inventory-check
+make api-compat-check
 
 # 文档
 go doc -all ./<component>
@@ -102,7 +107,8 @@ make example-<component>
 
 ## 测试约束
 
-- 优先使用 `testkit` 提供的容器化 helper，例如 `testkit.NewRedisContainerClient(t)`、`testkit.NewMySQLDB(t)`。
+- 仓库内测试优先使用 `internal/testkit` 提供的容器化 helper，例如
+  `testkit.NewRedisContainerClient(t)`、`testkit.NewMySQLDB(t)`。外部项目维护自己的 fixture。
 - 集成测试通过 `testcontainers` 自动拉起依赖，不要在测试前手动执行 `make up`。
 - 测试断言使用 `require`，不要新增 `assert`。
 
@@ -112,8 +118,10 @@ make example-<component>
 - [组件文档审计规范](docs/component-doc-audit-guide.md)
 - [组件设计文档索引](docs/README.md)
 - [示例索引](examples/README.md)
-- [测试指南](testkit/README.md)
+- [仓库内部测试指南](internal/testkit/README.md)
 - [v1.0.0-rc.1 契约加固与消费者风险清单](docs/v1-rc1-contract-hardening.md)
+- [v1 后端与工具链兼容矩阵](docs/v1-compatibility.md)
+- [v1 安全与依赖治理政策](docs/v1-security-and-dependencies.md)
 
 ## License
 

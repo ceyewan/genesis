@@ -17,6 +17,7 @@ package breaker
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
@@ -81,27 +82,27 @@ func (s State) String() string {
 type Config struct {
 	// MaxKeys 限制单个 Breaker 实例缓存的熔断 key 数，默认 1024。
 	// 超过限制的新 key 返回 ErrKeyLimitExceeded，防止高基数输入导致无界内存增长。
-	MaxKeys int `json:"max_keys" yaml:"max_keys"`
+	MaxKeys int `json:"max_keys" yaml:"max_keys" mapstructure:"max_keys"`
 
 	// MaxRequests 半开状态下允许通过的最大请求数（默认：1）
 	// 用于探测服务是否恢复
-	MaxRequests uint32 `json:"max_requests" yaml:"max_requests"`
+	MaxRequests uint32 `json:"max_requests" yaml:"max_requests" mapstructure:"max_requests"`
 
 	// Interval 闭合状态下的统计周期（默认：0，不清空统计）
 	// 设置后会按周期重置闭合状态下的统计计数
-	Interval time.Duration `json:"interval" yaml:"interval"`
+	Interval time.Duration `json:"interval" yaml:"interval" mapstructure:"interval"`
 
 	// Timeout 打开状态持续时间（默认：60s）
 	// 超时后进入半开状态进行探测
-	Timeout time.Duration `json:"timeout" yaml:"timeout"`
+	Timeout time.Duration `json:"timeout" yaml:"timeout" mapstructure:"timeout"`
 
 	// FailureRatio 失败率阈值（默认：0.6，即 60%）
 	// 当失败率超过此值时触发熔断
-	FailureRatio float64 `json:"failure_ratio" yaml:"failure_ratio"`
+	FailureRatio float64 `json:"failure_ratio" yaml:"failure_ratio" mapstructure:"failure_ratio"`
 
 	// MinimumRequests 触发熔断的最小请求数（默认：10）
 	// 请求数少于此值时不会触发熔断
-	MinimumRequests uint32 `json:"minimum_requests" yaml:"minimum_requests"`
+	MinimumRequests uint32 `json:"minimum_requests" yaml:"minimum_requests" mapstructure:"minimum_requests"`
 }
 
 // validate 验证配置并设置默认值（内部使用）。
@@ -127,7 +128,7 @@ func (c *Config) validate() error {
 	if c.FailureRatio == 0 {
 		c.FailureRatio = 0.6
 	}
-	if c.FailureRatio <= 0 || c.FailureRatio > 1 {
+	if math.IsNaN(c.FailureRatio) || c.FailureRatio <= 0 || c.FailureRatio > 1 {
 		return xerrors.Wrap(ErrInvalidConfig, "failure_ratio must be within (0, 1]")
 	}
 	if c.MinimumRequests == 0 {

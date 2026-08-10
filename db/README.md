@@ -121,10 +121,14 @@ err := database.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
 var (
     ErrInvalidConfig               = xerrors.New("db: invalid config")
     ErrMySQLConnectorRequired      = xerrors.New("db: mysql connector is required")
-    ErrPostgreSQLConnectorRequired = xerrors.New("db: postgresql connector is required")
-    ErrSQLiteConnectorRequired     = xerrors.New("db: sqlite connector is required")
-)
+	    ErrPostgreSQLConnectorRequired = xerrors.New("db: postgresql connector is required")
+	    ErrSQLiteConnectorRequired     = xerrors.New("db: sqlite connector is required")
+	    ErrConnectorNotReady           = xerrors.New("db: connector is not ready")
+	    ErrNilTransaction              = xerrors.New("db: transaction function is nil")
+	)
 ```
+
+注入尚未 `Connect` 或已经关闭的 connector 时，`New` 返回的错误会同时匹配 `db.ErrConnectorNotReady` 和 `connector.ErrClientNil`，调用方可以保留 DB 语义或按统一依赖错误分类。
 
 ## 测试
 

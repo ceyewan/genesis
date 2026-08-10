@@ -11,9 +11,11 @@ import (
 
 // idem 幂等性组件实现（非导出）
 type idem struct {
-	cfg    *Config
-	store  Store
-	logger clog.Logger
+	cfg            *Config
+	store          Store
+	logger         clog.Logger
+	maxKeyBytes    int
+	maxResultBytes int
 }
 
 type closableStore interface {
@@ -22,12 +24,40 @@ type closableStore interface {
 
 const processedMarker = "1"
 
+const (
+	defaultMaxKeyBytes      = 256
+	defaultMaxResultBytes   = 1 << 20
+	defaultMemoryMaxEntries = 10_000
+	defaultHTTPMaxBodyBytes = 1 << 20
+	unlockCleanupTimeout    = 5 * time.Second
+)
+
+type componentLimits struct {
+	maxKeyBytes    int
+	maxResultBytes int
+}
+
 // newIdempotency 创建幂等性组件实例（内部函数）
-func newIdempotency(cfg *Config, store Store, logger clog.Logger) Idempotency {
+func newIdempotency(cfg *Config, store Store) Idempotency {
+	return newIdempotencyWithLimits(cfg, store, nil, componentLimits{
+		maxKeyBytes:    defaultMaxKeyBytes,
+		maxResultBytes: defaultMaxResultBytes,
+	})
+}
+
+func newIdempotencyWithLimits(cfg *Config, store Store, logger clog.Logger, limits componentLimits) Idempotency {
+	if limits.maxKeyBytes <= 0 {
+		limits.maxKeyBytes = defaultMaxKeyBytes
+	}
+	if limits.maxResultBytes <= 0 {
+		limits.maxResultBytes = defaultMaxResultBytes
+	}
 	return &idem{
-		cfg:    cfg,
-		store:  store,
-		logger: logger,
+		cfg:            cfg,
+		store:          store,
+		logger:         logger,
+		maxKeyBytes:    limits.maxKeyBytes,
+		maxResultBytes: limits.maxResultBytes,
 	}
 }
 
@@ -42,6 +72,9 @@ func (i *idem) Close() error {
 func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error) {
 	if key == "" {
 		return nil, ErrKeyEmpty
+	}
+	if err := i.validateRawKey(key); err != nil {
+		return nil, err
 	}
 
 	cachedResult, token, locked, err := i.loadResultOrAcquireLock(ctx, key, decodeJSONResult)
@@ -63,7 +96,7 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 		if lockReleased {
 			return
 		}
-		if err := i.store.Unlock(ctx, key, token); err != nil && i.logger != nil {
+		if err := i.unlockForCleanup(ctx, key, token); err != nil && i.logger != nil {
 			i.logger.Error("failed to unlock after execution failure", clog.Error(err), clog.String("key", key))
 		}
 	}()
@@ -94,6 +127,15 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 	if err != nil {
 		return nil, err
 	}
+	if len(resultBytes) > i.maxResultBytes {
+		if i.logger != nil {
+			i.logger.Warn("skip caching oversized idem result",
+				clog.String("key", key),
+				clog.Int("result_bytes", len(resultBytes)),
+				clog.Int("max_result_bytes", i.maxResultBytes))
+		}
+		return normalizedResult, nil
+	}
 
 	// 保存结果
 	if err := i.store.SetResult(ctx, key, resultBytes, i.cfg.DefaultTTL, token); err != nil {
@@ -116,6 +158,9 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 	if key == "" {
 		return false, ErrKeyEmpty
 	}
+	if err := i.validateRawKey(key); err != nil {
+		return false, err
+	}
 
 	if ttl <= 0 {
 		ttl = i.cfg.DefaultTTL
@@ -135,12 +180,18 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 		return false, err
 	}
 
-	token, locked, err := i.store.Lock(ctx, key, i.cfg.LockTTL)
+	_, cached, token, locked, err := i.lockAndDoubleCheckResult(ctx, key)
 	if err != nil {
 		if i.logger != nil {
 			i.logger.Error("failed to acquire consume lock", clog.Error(err), clog.String("key", key))
 		}
 		return false, err
+	}
+	if cached {
+		if i.logger != nil {
+			i.logger.Debug("idem consume hit after lock check", clog.String("key", key))
+		}
+		return false, nil
 	}
 	if !locked {
 		if i.logger != nil {
@@ -154,7 +205,7 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 		if lockReleased {
 			return
 		}
-		if err := i.store.Unlock(ctx, key, token); err != nil && i.logger != nil {
+		if err := i.unlockForCleanup(ctx, key, token); err != nil && i.logger != nil {
 			i.logger.Error("failed to unlock after consume failure", clog.Error(err), clog.String("key", key))
 		}
 	}()
@@ -191,6 +242,24 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 	}
 
 	return true, nil
+}
+
+func (i *idem) validateRawKey(key string) error {
+	if len(key) <= i.maxKeyBytes {
+		return nil
+	}
+	return xerrors.Wrapf(
+		ErrKeyTooLong,
+		"idem: key is %d bytes; maximum is %d",
+		len(key),
+		i.maxKeyBytes,
+	)
+}
+
+func (i *idem) unlockForCleanup(parent context.Context, key string, token LockToken) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), unlockCleanupTimeout)
+	defer cancel()
+	return i.store.Unlock(cleanupCtx, key, token)
 }
 
 type cachedResultDecoder func(cached []byte, logger clog.Logger, key string) (any, error)
@@ -244,9 +313,12 @@ func (i *idem) waitForResultOrLock(ctx context.Context, key string) ([]byte, Loc
 			return nil, "", false, err
 		}
 
-		token, locked, err := i.store.Lock(waitCtx, key, i.cfg.LockTTL)
+		cached, resultFound, token, locked, err := i.lockAndDoubleCheckResult(waitCtx, key)
 		if err != nil {
 			return nil, "", false, err
+		}
+		if resultFound {
+			return cached, "", false, nil
 		}
 		if locked {
 			return nil, token, true, nil
@@ -263,6 +335,49 @@ func (i *idem) waitForResultOrLock(ctx context.Context, key string) ([]byte, Loc
 			interval = min(interval*2, maxInterval)
 		}
 	}
+}
+
+// lockAndDoubleCheckResult closes the result-miss-to-lock race. Built-in
+// stores commit a result and release its lock atomically. A caller that read a
+// miss immediately before that commit may therefore acquire the next lock
+// even though a completed result already exists. Reading once more after the
+// lock attempt gives that transition a linearization point:
+//   - if Lock succeeds, a completed result wins and the fresh lock is released;
+//   - if Lock fails, the second read distinguishes a just-completed request
+//     from one that is still processing.
+//
+// resultFound is separate from result because a custom Store may use an empty
+// byte slice as a valid Consume marker.
+func (i *idem) lockAndDoubleCheckResult(ctx context.Context, key string) (result []byte, resultFound bool, token LockToken, locked bool, err error) {
+	token, locked, err = i.store.Lock(ctx, key, i.cfg.LockTTL)
+	if err != nil {
+		return nil, false, "", false, err
+	}
+
+	var getErr error
+	result, getErr = i.store.GetResult(ctx, key)
+	if getErr == nil {
+		if locked {
+			if unlockErr := i.store.Unlock(ctx, key, token); unlockErr != nil {
+				return nil, false, "", false, xerrors.Wrap(unlockErr, "idem: release redundant lock after result appeared")
+			}
+		}
+		return result, true, "", false, nil
+	}
+	if xerrors.Is(getErr, ErrResultNotFound) {
+		return nil, false, token, locked, nil
+	}
+
+	if locked {
+		unlockErr := i.store.Unlock(ctx, key, token)
+		if unlockErr != nil {
+			return nil, false, "", false, xerrors.Combine(
+				getErr,
+				xerrors.Wrap(unlockErr, "idem: release lock after result recheck failed"),
+			)
+		}
+	}
+	return nil, false, "", false, getErr
 }
 
 func (i *idem) withWaitTimeout(ctx context.Context) (context.Context, context.CancelFunc) {

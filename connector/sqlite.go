@@ -21,6 +21,19 @@ type sqliteConnector struct {
 	mu      sync.RWMutex
 }
 
+type sqlPingerCloser interface {
+	PingContext(context.Context) error
+	Close() error
+}
+
+func pingAndCloseOnFailure(ctx context.Context, db sqlPingerCloser) error {
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return err
+	}
+	return nil
+}
+
 // NewSQLite 创建 SQLite 连接器
 // 注意：实际连接在调用 Connect() 时建立
 func NewSQLite(cfg *SQLiteConfig, opts ...Option) (SQLiteConnector, error) {
@@ -72,7 +85,7 @@ func (c *sqliteConnector) Connect(ctx context.Context) error {
 		return wrapConnectorCause(ErrConnection, err, "sqlite connector[%s]: failed to get db instance", c.cfg.Name)
 	}
 
-	if err := sqlDB.PingContext(ctx); err != nil {
+	if err := pingAndCloseOnFailure(ctx, sqlDB); err != nil {
 		c.logger.Error("failed to ping sqlite", clog.Error(err))
 		return wrapConnectorCause(ErrConnection, err, "sqlite connector[%s]: ping failed", c.cfg.Name)
 	}

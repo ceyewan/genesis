@@ -206,54 +206,54 @@ func (m *mockDistributed) Expire(ctx context.Context, key string, ttl time.Durat
 
 func (m *mockDistributed) Close() error { return nil }
 func (m *mockDistributed) HSet(ctx context.Context, key, field string, value any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockDistributed) HGet(ctx context.Context, key, field string, dest any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockDistributed) HGetAll(ctx context.Context, key string, destMap any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockDistributed) HDel(ctx context.Context, key string, fields ...string) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockDistributed) HIncrBy(ctx context.Context, key, field string, increment int64) (int64, error) {
-	return 0, ErrNotSupported
+	return 0, errMockOperationUnsupported
 }
 
 func (m *mockDistributed) ZAdd(ctx context.Context, key string, score float64, member any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockDistributed) ZRem(ctx context.Context, key string, members ...any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockDistributed) ZScore(ctx context.Context, key string, member any) (float64, error) {
-	return 0, ErrNotSupported
+	return 0, errMockOperationUnsupported
 }
 
 func (m *mockDistributed) ZRange(ctx context.Context, key string, start, stop int64, destSlice any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockDistributed) ZRevRange(ctx context.Context, key string, start, stop int64, destSlice any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockDistributed) ZRangeByScore(ctx context.Context, key string, min, max float64, destSlice any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockDistributed) MGet(ctx context.Context, keys []string, destSlice any) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 
 func (m *mockDistributed) MSet(ctx context.Context, items map[string]any, ttl time.Duration) error {
-	return ErrNotSupported
+	return errMockOperationUnsupported
 }
 func (m *mockDistributed) RawClient() *redis.Client { return nil }

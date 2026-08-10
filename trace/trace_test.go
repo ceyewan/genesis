@@ -3,11 +3,13 @@ package trace
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -114,17 +116,20 @@ func TestInitValidatesConfig(t *testing.T) {
 	}{
 		{name: "nil config", cfg: nil},
 		{name: "missing service name", cfg: &Config{Endpoint: "localhost:4317", Sampler: 1}},
+		{name: "blank service name", cfg: &Config{ServiceName: "  ", Endpoint: "localhost:4317", Sampler: 1}},
 		{name: "missing endpoint", cfg: &Config{ServiceName: "svc", Sampler: 1}},
+		{name: "blank endpoint", cfg: &Config{ServiceName: "svc", Endpoint: "\t", Sampler: 1}},
 		{name: "invalid sampler low", cfg: &Config{ServiceName: "svc", Endpoint: "localhost:4317", Sampler: -0.1}},
 		{name: "invalid sampler high", cfg: &Config{ServiceName: "svc", Endpoint: "localhost:4317", Sampler: 1.1}},
+		{name: "invalid sampler NaN", cfg: &Config{ServiceName: "svc", Endpoint: "localhost:4317", Sampler: math.NaN()}},
 		{name: "invalid batcher", cfg: &Config{ServiceName: "svc", Endpoint: "localhost:4317", Sampler: 1, Batcher: "weird"}},
 		{name: "negative exporter timeout", cfg: &Config{ServiceName: "svc", Endpoint: "localhost:4317", Sampler: 1, ExporterTimeout: -time.Second}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := Init(tt.cfg); err == nil {
-				t.Fatalf("Init() error = nil, want validation error")
+			if _, err := Init(tt.cfg); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Init() error = %v, want ErrInvalidConfig", err)
 			}
 		})
 	}
@@ -169,6 +174,20 @@ func TestDiscardInstallsGlobalTracingState(t *testing.T) {
 	if resetProvider == afterProvider {
 		t.Fatalf("global tracer provider was not reset after shutdown")
 	}
+}
+
+func TestInjectNilCarrierIsNoopForValidSpan(t *testing.T) {
+	previous := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { otel.SetTextMapPropagator(previous) })
+
+	spanContext := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+		TraceID:    oteltrace.TraceID{1},
+		SpanID:     oteltrace.SpanID{1},
+		TraceFlags: oteltrace.FlagsSampled,
+	})
+	ctx := oteltrace.ContextWithSpanContext(context.Background(), spanContext)
+	Inject(ctx, nil)
 }
 
 func TestInitCopiesConfigAndShutdownIsConcurrentIdempotent(t *testing.T) {

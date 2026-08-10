@@ -17,7 +17,7 @@ type LockOption func(*lockOptions)
 //
 // 需要注意：
 //
-//   - Redis 支持原生 time.Duration 精度
+//   - Redis 的最小 TTL 为 1 毫秒，更短的值返回 ErrInvalidTTL
 //   - Etcd 的 TTL 基于 lease，必须至少 1 秒且为整秒，否则返回 ErrInvalidTTL
 //
 // 使用示例:

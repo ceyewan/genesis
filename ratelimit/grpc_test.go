@@ -616,6 +616,18 @@ func TestGRPCLimiterConfig(t *testing.T) {
 		require.False(t, passThrough)
 	})
 
+	t.Run("check 方法 - 未知错误策略 fail-closed", func(t *testing.T) {
+		errorLimiter := &errorLimiter{err: errors.New("limiter error")}
+		cfg := newGRPCLimiterConfig(errorLimiter, nil, func(context.Context, string) Limit {
+			return Limit{Rate: 10, Burst: 10}
+		}, &GRPCInterceptorOptions{ErrorPolicy: ErrorPolicy("fail_clsoed")})
+
+		allowed, passThrough, err := cfg.check(context.Background(), "/test/Method")
+		require.Error(t, err)
+		require.False(t, allowed)
+		require.False(t, passThrough)
+	})
+
 	t.Run("check 方法 - 请求被允许", func(t *testing.T) {
 		limiter := &sequenceLimiter{allowed: []bool{true}}
 		cfg := newGRPCLimiterConfig(limiter, nil, func(ctx context.Context, fullMethod string) Limit {

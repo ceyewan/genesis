@@ -27,7 +27,7 @@
 - `trace`
 - `xerrors`
 
-`testkit` 属于测试辅助包，不是正式生产组件。它需要遵守 `go doc` 与 README 规范，但默认不要求补齐组件 blog；除非后续明确决定将其提升为需要长期维护设计文章的正式组件。
+`internal/testkit` 属于仓库内部测试辅助包，不是正式生产组件或公共 module API。它需要遵守 `go doc` 与 README 规范，但不要求补齐组件 blog。
 
 ---
 
@@ -102,7 +102,7 @@ blog 不应复述全部 API，也不应逐文件讲源码，更不能使用宣�
 
 ## 5 README 审计要求
 
-每个正式组件和 `testkit` 都必须有 README。README 的推荐结构允许微调，但通常应包含以下部分：
+每个正式组件和 `internal/testkit` 都必须有 README。README 的推荐结构允许微调，但通常应包含以下部分：
 
 1. 组件定位。
 2. 快速开始。
@@ -232,7 +232,7 @@ blog 重点检查项如下：
 - L2-A 组：`cache`、`idgen`
 - L2-B 组：`dlock`、`idem`、`mq`
 - L3 组：`auth`、`ratelimit`、`breaker`、`registry`
-- 测试组：`testkit`
+- 测试组：`internal/testkit`
 
 这种拆分方式兼顾了层级相近性、文档风格一致性和文件写入冲突控制。
 

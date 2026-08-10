@@ -735,6 +735,89 @@ func TestLoaderEnvOnlyUnmarshalPreservesUnderscoresInNestedField(t *testing.T) {
 	require.Equal(t, 42, database.MaxOpenConns)
 }
 
+func TestLoaderEnvOnlyUnmarshalKeyScalar(t *testing.T) {
+	t.Setenv("ENV_ONLY_KEY_PORT", "5432")
+
+	loader, err := New(&Config{Paths: []string{t.TempDir()}, EnvPrefix: "ENV_ONLY_KEY"})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, loader.Close()) })
+	require.NoError(t, loader.Load(context.Background()))
+
+	var port int
+	require.NoError(t, loader.UnmarshalKey("port", &port))
+	require.Equal(t, 5432, port)
+}
+
+func TestLoaderUnmarshalMergesEnvironmentLeafWithFileSiblings(t *testing.T) {
+	t.Setenv("MIXED_UNMARSHAL_IDGEN_GENERATOR_WORKER_ID", "42")
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
+idgen:
+  generator:
+    mode: standalone
+    worker_id: 7
+`), 0o600))
+
+	loader, err := New(&Config{
+		Name:      "config",
+		Paths:     []string{dir},
+		FileType:  "yaml",
+		EnvPrefix: "MIXED_UNMARSHAL",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, loader.Close()) })
+	require.NoError(t, loader.Load(context.Background()))
+	settingsBefore := loader.Get("idgen")
+
+	var got struct {
+		IDGen struct {
+			Generator struct {
+				Mode     string `mapstructure:"mode"`
+				WorkerID int64  `mapstructure:"worker_id"`
+			} `mapstructure:"generator"`
+		} `mapstructure:"idgen"`
+	}
+	require.NoError(t, loader.Unmarshal(&got))
+	require.Equal(t, "standalone", got.IDGen.Generator.Mode)
+	require.Equal(t, int64(42), got.IDGen.Generator.WorkerID)
+	require.Equal(t, settingsBefore, loader.Get("idgen"), "Unmarshal must not mutate loader state")
+}
+
+func TestLoaderUnmarshalKeyMergesEnvironmentLeafWithFileSiblings(t *testing.T) {
+	t.Setenv("MIXED_UNMARSHAL_KEY_IDGEN_GENERATOR_WORKER_ID", "42")
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
+idgen:
+  generator:
+    mode: standalone
+    worker_id: 7
+`), 0o600))
+
+	loader, err := New(&Config{
+		Name:      "config",
+		Paths:     []string{dir},
+		FileType:  "yaml",
+		EnvPrefix: "MIXED_UNMARSHAL_KEY",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, loader.Close()) })
+	require.NoError(t, loader.Load(context.Background()))
+	settingsBefore := loader.Get("idgen")
+
+	var got struct {
+		Generator struct {
+			Mode     string `mapstructure:"mode"`
+			WorkerID int64  `mapstructure:"worker_id"`
+		} `mapstructure:"generator"`
+	}
+	require.NoError(t, loader.UnmarshalKey("idgen", &got))
+	require.Equal(t, "standalone", got.Generator.Mode)
+	require.Equal(t, int64(42), got.Generator.WorkerID)
+	require.Equal(t, settingsBefore, loader.Get("idgen"), "UnmarshalKey must not mutate loader state")
+}
+
 func TestLoaderFailedLoadKeepsLastGoodSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -757,4 +840,36 @@ func TestLoaderFailedLoadKeepsLastGoodSnapshot(t *testing.T) {
 	if got := loader.Get("app.name"); got != "good" {
 		t.Fatalf("last good app.name = %v, want good", got)
 	}
+}
+
+func TestLoaderLoadHonorsCanceledContextWithoutCommittingSnapshot(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("app:\n  name: canceled\n"), 0o600))
+
+	loader, err := New(&Config{Paths: []string{dir}})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, loader.Close()) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, loader.Load(ctx), context.Canceled)
+
+	_, err = loader.Watch(context.Background(), "app.name")
+	require.ErrorIs(t, err, ErrNotLoaded)
+}
+
+func TestLoaderLoadAcceptsNilContext(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("app:\n  name: ready\n"), 0o600))
+
+	loader, err := New(&Config{Paths: []string{dir}})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, loader.Close()) })
+
+	require.NoError(t, loader.Load(nil)) //nolint:staticcheck // Nil context behavior is the contract under test.
+	require.Equal(t, "ready", loader.Get("app.name"))
 }

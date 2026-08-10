@@ -62,11 +62,12 @@ type subscribeOptions struct {
 
 	// BatchSize 批量拉取大小
 	// Redis Stream: XREADGROUP COUNT / XREAD COUNT 参数
-	// JetStream: 当前实现使用 consumer.Consume() 推送模式，此参数无效
-	BatchSize int
+	// JetStream: consumer.Consume 的 PullMaxMessages（仅显式设置时生效）
+	BatchSize    int
+	batchSizeSet bool
 
 	// MaxInflight 最大在途消息数
-	// JetStream: MaxAckPending
+	// JetStream: durable consumer 全局 MaxAckPending
 	MaxInflight int
 
 	// StartID controls the initial retained-message position for a newly created
@@ -168,19 +169,20 @@ func WithDurable(name string) SubscribeOption {
 //
 // 驱动支持情况：
 //   - Redis Stream：有效，对应 XREADGROUP COUNT / XREAD COUNT 参数。
-//   - JetStream：当前实现使用 consumer.Consume() 推送模式，此参数无效。
+//   - JetStream：对应当前订阅实例的 PullMaxMessages，不会改写共享 durable。
 func WithBatchSize(size int) SubscribeOption {
 	return func(o *subscribeOptions) {
 		if size > 0 {
 			o.BatchSize = size
+			o.batchSizeSet = true
 		}
 	}
 }
 
 // WithMaxInflight 设置最大在途消息数
 //
-// 限制未确认消息的数量，用于背压控制。
-// 仅 JetStream 有效（对应 MaxAckPending）。
+// 限制共享 durable consumer 的未确认消息总数，用于集群级背压控制。
+// 仅 JetStream 有效（对应 MaxAckPending）；同一 durable 的所有订阅实例共享该值。
 func WithMaxInflight(n int) SubscribeOption {
 	return func(o *subscribeOptions) {
 		if n > 0 {

@@ -28,19 +28,31 @@ func newRedisStore(redisConn connector.RedisConnector, prefix string) Store {
 // Lock 尝试获取锁（标记处理中）
 func (rs *redisStore) Lock(ctx context.Context, key string, ttl time.Duration) (LockToken, bool, error) {
 	lockKey := rs.prefix + key + lockSuffix
+	resultKey := rs.prefix + key + resultSuffix
 
 	token, err := newLockToken()
 	if err != nil {
 		return "", false, err
 	}
+	ttlMs := ttl.Milliseconds()
+	if ttlMs <= 0 {
+		ttlMs = int64(time.Second / time.Millisecond)
+	}
 
-	// 使用 SET NX 原子操作获取锁
-	result, err := rs.client.GetClient().SetNX(ctx, lockKey, string(token), ttl).Result()
+	// 在同一段 Lua 中检查已完成结果并尝试抢锁，避免结果已经发布后又
+	// 短暂创建一个新的 processing 锁。
+	result, err := redisLockScript.Run(
+		ctx,
+		rs.client.GetClient(),
+		[]string{lockKey, resultKey},
+		string(token),
+		ttlMs,
+	).Int64()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		return "", false, xerrors.Wrap(err, "failed to acquire lock")
 	}
 
-	if !result {
+	if result == 0 {
 		return "", false, nil
 	}
 
@@ -143,6 +155,15 @@ func (rs *redisStore) DeleteResult(ctx context.Context, key string) error {
 }
 
 var (
+	redisLockScript = redis.NewScript(`
+if redis.call("EXISTS", KEYS[2]) == 1 then
+	return 0
+end
+if redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2], "NX") then
+	return 1
+end
+return 0
+`)
 	redisUnlockScript = redis.NewScript(`
 if redis.call("GET", KEYS[1]) == ARGV[1] then
 	return redis.call("DEL", KEYS[1])

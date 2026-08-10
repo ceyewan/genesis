@@ -46,10 +46,10 @@ type HTTPServerMetrics struct {
 // NewHTTPServerMetrics 创建可重用的 HTTP 服务器指标
 func NewHTTPServerMetrics(m Meter, cfg *HTTPServerMetricsConfig) (*HTTPServerMetrics, error) {
 	if m == nil {
-		return nil, xerrors.New("meter is nil")
+		return nil, xerrors.Wrap(ErrInvalidConfig, "meter is nil")
 	}
 	if cfg == nil {
-		return nil, xerrors.New("config is nil")
+		return nil, xerrors.Wrap(ErrInvalidConfig, "config is nil")
 	}
 
 	service := strings.TrimSpace(cfg.Service)

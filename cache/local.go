@@ -24,12 +24,13 @@ type localCache struct {
 	serializer serializer.Serializer
 	defaultTTL time.Duration
 	logger     clog.Logger
+	mutationMu sync.Mutex
 	closeOnce  sync.Once
 }
 
 func newLocal(cfg *LocalConfig, injected serializer.Serializer, logger clog.Logger) (Local, error) {
 	if cfg == nil {
-		return nil, xerrors.New("cache: local config is nil")
+		return nil, xerrors.Wrap(ErrInvalidConfig, "local config is nil")
 	}
 
 	s := injected
@@ -73,6 +74,8 @@ func (c *localCache) Set(ctx context.Context, key string, value any, ttl time.Du
 		ttl = c.defaultTTL
 	}
 	// 单次 Set 同时写入数据与 TTL，避免两步操作之间的竞态。
+	c.mutationMu.Lock()
+	defer c.mutationMu.Unlock()
 	c.cache.Set(key, localEntry{data: data, ttl: ttl})
 	return nil
 }
@@ -86,6 +89,8 @@ func (c *localCache) Get(ctx context.Context, key string, dest any) error {
 }
 
 func (c *localCache) Delete(ctx context.Context, key string) error {
+	c.mutationMu.Lock()
+	defer c.mutationMu.Unlock()
 	c.cache.Invalidate(key)
 	return nil
 }
@@ -99,6 +104,8 @@ func (c *localCache) Expire(ctx context.Context, key string, ttl time.Duration) 
 	if ttl < 0 {
 		return false, ErrInvalidTTL
 	}
+	c.mutationMu.Lock()
+	defer c.mutationMu.Unlock()
 	existing, ok := c.cache.GetIfPresent(key)
 	if !ok {
 		return false, nil

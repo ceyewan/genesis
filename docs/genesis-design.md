@@ -5,6 +5,7 @@
 Genesis 是一个 Go 微服务组件库，不是框架，也不试图替用户接管应用生命周期。
 
 它当前的总体设计已经稳定在四个长期约束上：
+
 - 依赖显式创建与注入，不使用运行时 DI 容器。
 - 组件按治理、业务、基础设施和基础能力四层组织，但包结构保持扁平。
 - 连接器拥有底层资源，业务组件借用资源并围绕能力建模。
@@ -65,7 +66,7 @@ genesis/
 ├── mq/
 ├── ratelimit/
 ├── registry/
-├── testkit/
+├── internal/testkit/
 ├── trace/
 └── xerrors/
 ```
@@ -122,11 +123,11 @@ Genesis 经过这一轮系统审计后，对组件设计形成了几条更具体
 
 `auth` 当前是双 JWT 令牌模型，并保留 Gin 集成。`ratelimit` 采用单机与 Redis 分布式双模式，分布式路径基于 Redis 时间。`breaker` 是带场景错误分类的轻量熔断器。`registry` 则明确成单进程单 active registry 的 Etcd 注册发现组件，并把 gRPC resolver 的 endpoint 模型收紧成 gRPC-only。
 
-## 7. 测试体系与 testkit
+## 7. 测试体系与 internal/testkit
 
 Genesis 的测试策略强调一条很实际的原则：集成测试必须贴近真实依赖，但不应该要求开发者先手动启动一整套本地环境。
 
-因此 `testkit` 被定位成测试辅助包，而不是生产代码依赖。它当前提供三类能力：
+因此 `internal/testkit` 被定位成仓库内部测试辅助包，而不是公共 module API 或生产代码依赖。它当前提供三类能力：
 
 - `NewKit`、`NewLogger`、`NewMeter`、`NewContext`、`NewID` 这类通用 helper。
 - 基于 `testcontainers` 的容器化依赖启动能力，例如 Redis、MySQL、PostgreSQL、Etcd、NATS、Kafka。
@@ -137,7 +138,7 @@ Genesis 的测试策略强调一条很实际的原则：集成测试必须贴近
 - 集成测试优先使用 `testkit.NewRedisContainerClient(t)`、`testkit.NewMySQLDB(t)` 这类 helper。
 - 不要为了跑测试手动执行 `make up`；`make up` 只服务于 examples。
 - 测试断言统一使用 `require`。
-- 可复用的测试工具应当沉淀到 `testkit`，而不是散落在各组件测试里。
+- Genesis 仓库内可复用的测试工具应当沉淀到 `internal/testkit`，而不是散落在各组件测试里；外部项目维护自己的 fixture。
 
 ## 8. 文档体系
 

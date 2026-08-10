@@ -53,14 +53,18 @@ conn, err := grpc.NewClient(
 | `MaxRequests` | `uint32` | `1` | 半开状态允许通过的最大探测请求数。 |
 | `Interval` | `time.Duration` | `0` | 闭合状态下统计计数的重置周期，`0` 表示不自动重置。 |
 | `Timeout` | `time.Duration` | `60s` | 打开状态持续时间，到期后进入半开状态。 |
-| `FailureRatio` | `float64` | `0.6` | 熔断触发失败率阈值，必须在 `(0, 1]` 内。 |
+| `FailureRatio` | `float64` | `0.6` | 熔断触发失败率阈值，必须是 `(0, 1]` 内的有限数值。 |
 | `MinimumRequests` | `uint32` | `10` | 触发熔断前所需的最小采样请求数。 |
 
-`breaker.New` 会对配置做基础校验。当前会拒绝负数 `Interval`、负数 `Timeout` 以及不在 `(0, 1]` 范围内的 `FailureRatio`。
+`breaker.New` 会对配置做基础校验。当前会拒绝负数 `Interval`、负数 `Timeout` 以及非有限数值或不在 `(0, 1]` 范围内的 `FailureRatio`。
 
 ## Fallback 语义
 
 `WithFallback` 只会在 breaker 已经拒绝执行请求时触发，包括打开状态直接拒绝，以及半开状态下探测请求数超过 `MaxRequests`。它返回的 `(any, error)` 会原样成为 `Execute` 的结果，因此可以返回缓存对象，也可以改写拒绝错误。fallback 不会在被保护函数已经执行并失败时触发。
+
+在 gRPC interceptor 中，fallback 返回的非 nil 成功结果必须与 `reply` 类型兼容。protobuf
+响应会被复制到调用方传入的 reply；不兼容的结果返回 `codes.Internal`，不会伪装成一次
+成功但留下空响应。`WithKeyFunc(nil)` 保留默认的 `cc.Target()` key，不会产生 nil 调用。
 
 `MaxKeys` 是硬上限而不是淘汰策略：生产 key 应保持低基数且稳定，不能直接使用用户 ID、请求 ID 或原始 URL。
 

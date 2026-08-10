@@ -95,7 +95,21 @@ defer sub.Unsubscribe()
 | `Nak()` | 触发消息立即重投 | 返回 `ErrNotSupported`；消息留在 Pending，由 `XAUTOCLAIM` 超时后重认领 |
 | `NakWithDelay(d)` | 延迟 `d` 后重投 | 返回 `ErrNotSupported` |
 
-**默认是手动确认**（ManualAck）。`WithAutoAck()` 开启后，Handler 返回 error 自动调用 Nak；Redis 下的 `ErrNotSupported` 会被静默忽略，不记录为错误。
+**默认是手动确认**（ManualAck）。`WithAutoAck()` 开启后，Handler 返回 nil 时调用 Ack，只有 Ack 也成功才记录消费成功；Ack 失败会返回错误并记录失败。Handler 返回 error 时自动调用 Nak；Redis 下的 `ErrNotSupported` 会被静默忽略，不记录为额外错误。
+
+### 长任务心跳
+
+NATS JetStream 消息还提供可选的 `ProgressMessage` 能力。长任务可在处理期间定期调用 `InProgress()` 重置服务端 `AckWait`，避免任务仍在执行时被提前重投：
+
+```go
+if progress, ok := msg.(mq.ProgressMessage); ok {
+    if err := progress.InProgress(); err != nil {
+        return err
+    }
+}
+```
+
+`ProgressMessage` 没有加入基础 `Message` 接口；Redis Stream 消息不实现它。跨驱动代码必须使用类型断言。实际长任务应按小于 `AckWait` 的周期持续发送心跳，并在 Handler 返回前停止心跳 goroutine。
 
 ## 订阅选项
 
@@ -105,8 +119,8 @@ defer sub.Unsubscribe()
 | `WithAutoAck()` | 开启自动确认 | 两者 |
 | `WithManualAck()` | 手动确认（默认） | 两者 |
 | `WithDurable(name)` | 消费者实例名 | JetStream: 按 topic 隔离的 durable consumer 逻辑名（QueueGroup 为空时）；Redis: consumer name |
-| `WithBatchSize(n)` | 单次拉取大小，默认 10 | Redis 有效；JetStream 当前无效（push 模式） |
-| `WithMaxInflight(n)` | 最大在途消息数 | JetStream 对应 `MaxAckPending`；Redis 无对应 |
+| `WithBatchSize(n)` | 单次拉取/本地预取上限，默认 10 | Redis 对应读取 `COUNT`；JetStream 显式设置时对应实例级 `PullMaxMessages` |
+| `WithMaxInflight(n)` | 共享 durable 的集群级未确认总数 | JetStream 对应 `MaxAckPending`；Redis 无对应 |
 | `FromBeginning()` | 新建 consumer 从保留消息起点消费（默认） | 两者 |
 | `FromLatest()` | 新建 consumer 只消费订阅后到达的消息 | 两者 |
 | `FromID(id)` | 从显式后端位置开始；JetStream 使用 Genesis sequence ID | 两者，ID 格式不同 |
@@ -122,6 +136,7 @@ handler = mq.Chain(
 ```
 
 内置中间件：`WithRetry`、`WithLogging`、`WithRecover`、`WithDeadLetter`。
+`RetryConfig.Multiplier` 必须是大于 1 的有限数值；NaN、无穷或不大于 1 的值会归一化为默认值 `2.0`，避免退避时间溢出或退化成即时重试。
 
 ## 配置
 
@@ -156,12 +171,13 @@ var (
     ErrClosed             // Close 后调用 Publish/Subscribe 时返回
     ErrNotSupported       // 驱动不支持的操作（如 Redis 的 Nak）
     ErrInvalidConfig      // 配置校验失败
-    ErrSubscriptionClosed // 订阅已关闭
     ErrPanicRecovered     // WithRecover 捕获到 panic
 )
 ```
 
-`Drain(ctx)` 会停止新投递并等待已交付 Handler 完成；ctx 到期后强制停止。`Close()` 使用 5 秒默认上限执行立即停止。两者都可并发重复调用，生命周期开始关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`。
+空 Driver、空 topic 和 nil Handler 都返回可由 `errors.Is(err, ErrInvalidConfig)` 判断的错误。
+
+`Drain(ctx)` 会停止新投递并等待已交付 Handler 完成；ctx 到期后强制停止。`Close()` 使用 5 秒默认上限取消已有订阅并等待退出。两者都可并发重复调用，生命周期开始关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`。MQ 只借用注入的 Connector；关闭 MQ 不会关闭 Connector，连接生命周期仍由调用方负责。
 
 ## 测试
 

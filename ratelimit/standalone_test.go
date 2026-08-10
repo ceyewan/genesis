@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -99,13 +100,14 @@ func TestStandaloneLimiter_AllowN(t *testing.T) {
 	})
 
 	t.Run("AllowN 超过 Burst 应该被拒绝", func(t *testing.T) {
+		limit := Limit{Rate: 0.001, Burst: 10}
 		// 第一次消耗 5 个令牌
-		allowed, err := limiter.AllowN(ctx, "allown-test-2", Limit{Rate: 10, Burst: 10}, 5)
+		allowed, err := limiter.AllowN(ctx, "allown-test-2", limit, 5)
 		require.NoError(t, err)
 		require.True(t, allowed)
 
 		// 第二次请求 10 个令牌（总共需要 15 个，超过 burst=10）
-		allowed, err = limiter.AllowN(ctx, "allown-test-2", Limit{Rate: 10, Burst: 10}, 10)
+		allowed, err = limiter.AllowN(ctx, "allown-test-2", limit, 10)
 		require.NoError(t, err)
 		require.False(t, allowed, "超过 Burst 的请求应该被拒绝")
 	})
@@ -250,6 +252,20 @@ func TestStandaloneLimiter_EdgeCases(t *testing.T) {
 		require.False(t, allowed)
 		require.ErrorIs(t, err, ErrInvalidLimit)
 	})
+
+	for name, invalidRate := range map[string]float64{
+		"NaN Rate":     math.NaN(),
+		"positive Inf": math.Inf(1),
+		"negative Inf": math.Inf(-1),
+	} {
+		t.Run(name+" 应该返回错误", func(t *testing.T) {
+			limit := Limit{Rate: invalidRate, Burst: 1}
+			allowed, err := limiter.Allow(ctx, "non-finite-"+name, limit)
+			require.False(t, allowed)
+			require.ErrorIs(t, err, ErrInvalidLimit)
+			require.ErrorIs(t, limiter.Wait(ctx, "non-finite-"+name, limit), ErrInvalidLimit)
+		})
+	}
 
 	t.Run("浮点数 Rate 应该正常工作", func(t *testing.T) {
 		// Rate=0.1 表示每 10 秒生成 1 个令牌
@@ -411,6 +427,51 @@ func TestStandaloneLimiter_Cleanup(t *testing.T) {
 		}
 	})
 
+	t.Run("正在 Wait 的限流器不会被清理或绕过容量上限", func(t *testing.T) {
+		limiter, err := newStandalone(&StandaloneConfig{
+			CleanupInterval: 5 * time.Millisecond,
+			IdleTimeout:     20 * time.Millisecond,
+			MaxKeys:         1,
+		}, logger, nil)
+		require.NoError(t, err)
+		standalone := limiter.(*standaloneLimiter)
+		t.Cleanup(func() { require.NoError(t, standalone.Close()) })
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		limit := Limit{Rate: 5, Burst: 1}
+		allowed, err := standalone.Allow(ctx, "active-wait", limit)
+		require.NoError(t, err)
+		require.True(t, allowed)
+
+		waitDone := make(chan error, 1)
+		go func() {
+			waitDone <- standalone.Wait(ctx, "active-wait", limit)
+		}()
+		require.Eventually(t, func() bool {
+			standalone.limiterMu.Lock()
+			defer standalone.limiterMu.Unlock()
+			for _, wrapper := range standalone.limiters {
+				if wrapper.active > 0 {
+					return true
+				}
+			}
+			return false
+		}, 200*time.Millisecond, time.Millisecond)
+
+		// 跨过多轮 idle cleanup；活跃桶必须仍占用唯一容量槽。
+		time.Sleep(60 * time.Millisecond)
+		_, err = standalone.Allow(ctx, "other", limit)
+		require.ErrorIs(t, err, ErrKeyLimitExceeded)
+		require.NoError(t, <-waitDone)
+
+		// Wait 返回并再次空闲后，cleanup 才能释放容量。
+		require.Eventually(t, func() bool {
+			_, allowErr := standalone.Allow(ctx, "other", limit)
+			return allowErr == nil
+		}, 500*time.Millisecond, 5*time.Millisecond)
+	})
+
 	t.Run("活跃限流器不应该被清理", func(t *testing.T) {
 		limiter := newStandaloneLimiter(t,
 			withTestCleanupInterval(50*time.Millisecond),
@@ -513,6 +574,34 @@ func TestStandaloneLimiter_DifferentLimits(t *testing.T) {
 	})
 }
 
+func TestStandaloneLimiter_MaxKeys(t *testing.T) {
+	limiter, err := newStandalone(&StandaloneConfig{
+		CleanupInterval: time.Hour,
+		IdleTimeout:     time.Hour,
+		MaxKeys:         2,
+	}, clog.Discard(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, limiter.Close()) })
+	ctx := context.Background()
+	limit := Limit{Rate: 1, Burst: 1}
+
+	for _, key := range []string{"one", "two"} {
+		allowed, allowErr := limiter.Allow(ctx, key, limit)
+		require.NoError(t, allowErr)
+		require.True(t, allowed)
+	}
+
+	allowed, err := limiter.Allow(ctx, "three", limit)
+	require.False(t, allowed)
+	require.ErrorIs(t, err, ErrKeyLimitExceeded)
+
+	// 已登记组合仍可使用；同一业务 key 的另一条 Limit 则占新的容量槽。
+	_, err = limiter.Allow(ctx, "one", limit)
+	require.NoError(t, err)
+	_, err = limiter.Allow(ctx, "one", Limit{Rate: 2, Burst: 1})
+	require.ErrorIs(t, err, ErrKeyLimitExceeded)
+}
+
 // ============================================================
 // 限流精确性测试
 // ============================================================
@@ -546,16 +635,17 @@ func TestStandaloneLimiter_Precision(t *testing.T) {
 
 	t.Run("突发流量应该使用 Burst", func(t *testing.T) {
 		key := "burst-test"
+		limit := Limit{Rate: 0.001, Burst: 5}
 
 		// Burst=5 允许瞬间处理 5 个请求
 		for i := range 5 {
-			allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 5})
+			allowed, err := limiter.Allow(ctx, key, limit)
 			require.NoError(t, err)
 			require.True(t, allowed, "Burst 应该允许前 %d 个请求", i+1)
 		}
 
 		// 第 6 个请求应该被拒绝
-		allowed, err := limiter.Allow(ctx, key, Limit{Rate: 1, Burst: 5})
+		allowed, err := limiter.Allow(ctx, key, limit)
 		require.NoError(t, err)
 		require.False(t, allowed, "超过 Burst 的请求应该被拒绝")
 	})
@@ -572,16 +662,31 @@ func TestStandaloneConfig_SetDefaults(t *testing.T) {
 
 		require.Equal(t, 1*time.Minute, cfg.CleanupInterval)
 		require.Equal(t, 5*time.Minute, cfg.IdleTimeout)
+		require.Equal(t, 10000, cfg.MaxKeys)
 	})
 
 	t.Run("非零值不应该被覆盖", func(t *testing.T) {
 		cfg := &StandaloneConfig{
 			CleanupInterval: 5 * time.Second,
 			IdleTimeout:     30 * time.Second,
+			MaxKeys:         123,
 		}
 		cfg.setDefaults()
 
 		require.Equal(t, 5*time.Second, cfg.CleanupInterval)
 		require.Equal(t, 30*time.Second, cfg.IdleTimeout)
+		require.Equal(t, 123, cfg.MaxKeys)
 	})
+}
+
+func TestNewStandaloneRejectsInvalidConfigWithSentinel(t *testing.T) {
+	for _, cfg := range []*StandaloneConfig{
+		{CleanupInterval: -time.Second},
+		{IdleTimeout: -time.Second},
+		{MaxKeys: -1},
+	} {
+		limiter, err := newStandalone(cfg, clog.Discard(), nil)
+		require.Nil(t, limiter)
+		require.ErrorIs(t, err, ErrInvalidConfig)
+	}
 }

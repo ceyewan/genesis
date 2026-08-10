@@ -45,11 +45,16 @@ defer shutdown(context.Background())
 
 其中 `Batcher` 在默认配置里会设置为 `batch`，空字符串也等同于 `batch`。`immediate` 使用异步单条小批量，不会让 exporter 故障阻塞 `span.End`。`Headers` 可配置 OTLP 认证或路由头；`Insecure=false` 使用系统 TLS 信任。`ExportErrors` 的发送是非阻塞的，通道已满时会丢弃该次通知。
 
+`Init` 拒绝 nil 配置、空白的 `ServiceName` / `Endpoint`、越界或 NaN 的 `Sampler`、负数 `ExporterTimeout` 和未知 `Batcher`。这些错误都可通过 `errors.Is(err, trace.ErrInvalidConfig)` 分类。
+
 ## HTTP / gRPC 中间件
 
 `GinMiddleware` 和 `GRPCServerStatsHandler` 的作用不仅是记录 span，还会把活跃 Span 写入 `context.Context`。`clog.WithTraceContext()` 正是从这个 context 里提取 `trace_id` / `span_id` 注入日志——**如果不注册中间件，日志里的 trace_id 字段会静默为空，不报任何错误**。
 
-标准库 HTTP 使用 `HTTPHandler(handler, operation)` 包装服务端 handler，客户端把 `HTTPTransport(nil)` 配置到 `http.Client.Transport`。两者使用全局 W3C Trace Context/Baggage 传播器。
+标准库 HTTP 直接使用 OpenTelemetry 官方的 `otelhttp.NewHandler` 和
+`otelhttp.NewTransport`。Genesis 不再重复包装这两个函数，避免把特定
+`otelhttp.Option` 与 `*otelhttp.Transport` 版本固化进 Genesis v1 API。它们仍使用由
+`trace.Init` 安装的全局 W3C Trace Context/Baggage 传播器。
 
 完整的三步接入顺序：
 
@@ -116,6 +121,9 @@ consumeCtx, consumeSpan := trace.StartConsumerSpanFromHeaders(
 )
 defer consumeSpan.End()
 ```
+
+`Inject` 对 nil carrier 是安全的 no-op；需要传播时仍应传入可写的
+`map[string]string`，否则不会产生 `traceparent`。
 
 ## 生命周期
 

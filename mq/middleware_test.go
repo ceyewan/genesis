@@ -3,6 +3,7 @@ package mq
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -267,6 +268,19 @@ func TestWithRetryNegativeConfigStillExecutesOnce(t *testing.T) {
 	})
 	require.Error(t, handler(&mockMessage{}))
 	require.Equal(t, 1, calls)
+}
+
+func TestNormalizeRetryMultiplierRejectsNonFiniteValues(t *testing.T) {
+	const fallback = 2.0
+	for _, multiplier := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		require.Equal(t, fallback, normalizeRetryMultiplier(multiplier, fallback))
+	}
+	require.Equal(t, 3.0, normalizeRetryMultiplier(3, fallback))
+}
+
+func TestNextRetryBackoffSaturatesBeforeDurationConversion(t *testing.T) {
+	require.Equal(t, 5*time.Second, nextRetryBackoff(time.Second, math.MaxFloat64, 5*time.Second))
+	require.Equal(t, 2*time.Second, nextRetryBackoff(time.Second, 2, 5*time.Second))
 }
 
 func TestWithDeadLetterReturnsAckFailure(t *testing.T) {
