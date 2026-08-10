@@ -117,7 +117,7 @@ func newPublisher(apiURL, repository, token string, client *http.Client) (*publi
 		return nil, fmt.Errorf("invalid GITHUB_REPOSITORY %q", repository)
 	}
 	if token == "" {
-		return nil, errors.New("RELEASE_APP_TOKEN is empty")
+		return nil, errors.New("RELEASE_TOKEN is empty")
 	}
 	if client == nil {
 		return nil, errors.New("HTTP client is nil")

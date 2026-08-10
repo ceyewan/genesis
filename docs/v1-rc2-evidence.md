@@ -125,8 +125,8 @@ hosted exact-SHA evidence remain Pending.
 
 The release workflow binds one Genesis candidate SHA and the final pre-tag
 Resonance `main` tip. A dispatch consumer gate requires exact equality with the
-observed Resonance `origin/main`; `publish-tag` repeats the remote-tip equality
-check after environment approval. The tag-triggered defense run permits later
+observed Resonance `origin/main`; the local release owner repeats both remote-tip
+checks immediately before pushing the tag. The tag-triggered defense run permits later
 normal Resonance `main` advancement but still requires the bound SHA to remain
 an ancestor. The consumer artifact records the observed tip and check time. It
 also records `resonance-module-input.txt`, applies the unpublished Genesis
@@ -184,49 +184,39 @@ is the later protected `main` merge SHA.
 
 ## Release authority and security
 
-As of the 2026-08-09 candidate record, automatic publication remains disabled
-and the remote controls below are unverified. This dated statement must be
-replaced by current GitHub API evidence. Before setting
-`RELEASE_TAG_PUBLISH_ENABLED=true`, preserve API JSON proving all of the
-following:
+The release authority is the single maintainer's locally authenticated GitHub
+CLI identity. No dedicated GitHub App or persisted personal-token Actions secret
+is used. Current remote-control evidence must be re-read immediately before the
+tag operation:
 
-- a protected `release` environment with required reviewers, prevention of
-  self-review, and deployment restricted to protected `main` plus `v*` tag
-  runs; the workflow further limits prerelease publication to the exact RC2
-  tag;
-- an active `refs/tags/v*` ruleset restricting creation, update, and deletion;
-- a dedicated Release GitHub App as the ruleset's sole bypass actor, with only
-  `Contents: write`, `Actions: read`, `Administration: read`, and
-  `Attestations: read`, and with its private key available only through that
-  environment;
-- repository immutable releases enabled in advance by an administrator, with
-  API evidence preserved; and
-- the protected pre-tag run successfully downloading and hashing the four
-  upstream artifact ZIPs and release-evidence ZIP, then staging exactly those
-  five archives on the prerelease draft; and
-- the tag-triggered defense run preserving its own release-evidence ZIP as a
-  sixth asset whose durable filename binds its run, actual attempt, Actions
-  artifact ID, and SHA-256 before the exact-six draft is published immutable.
+- authenticated user: `ceyewan` (`id=73778222`) with repository admin access;
+- `release` environment: `id=19579197792`, required reviewer `ceyewan`,
+  `prevent_self_review=false`, custom deployment policies `main` (branch) and
+  `v*` (tag);
+- active tag ruleset: `id=20622053`, target `refs/tags/v*`, creation/update/
+  deletion restricted, with `ceyewan` as its only bypass actor;
+- repository immutable releases: `enabled=true`; and
+- CI token permissions: repository workflow remains `contents: read` and does
+  not store the local release token.
 
-| Control                     | Evidence                                      | Status   |
-| --------------------------- | --------------------------------------------- | -------- |
-| Release environment         | Pending API JSON                              | Pending  |
-| Tag ruleset                 | Pending API JSON                              | Pending  |
-| Dedicated Release App       | Pending installation/permission evidence      | Pending  |
-| Immutable releases          | Pending administrator/API evidence            | Pending  |
-| Durable evidence archive    | Pending immutable Release URL and six asset digests | Pending |
-| Publication enable variable | Must remain absent/false until the above pass | Disabled |
+| Control                  | Evidence                                      | Status     |
+| ------------------------ | --------------------------------------------- | ---------- |
+| Release environment      | GitHub API environment and policy JSON        | Configured |
+| Tag ruleset              | GitHub API ruleset `20622053` JSON             | Active     |
+| Release owner            | `gh auth status`, user and repository API JSON | Verified   |
+| Immutable releases       | Repository API reports `enabled=true`         | Enabled    |
+| Durable evidence archive | Immutable Release URL and six asset digests   | Pending tag publication |
 
-No networked `govulncheck` result is claimed. The release requires one of the
-auditable choices in
-[the security and dependency policy](./v1-security-and-dependencies.md): an
-approved pinned scan, an approved equivalent channel, or explicit release-owner
-risk acceptance.
+No networked `govulncheck` result is claimed. The release owner explicitly
+accepts that RC2 uses the pinned dependency policy, checksum verification,
+hosted tests, race tests, and consumer validation without adding a networked
+scanner result. This acceptance applies to RC2 only and must be reconsidered
+before stable v1.
 
 ## Tag publication evidence
 
-These values do not exist until the protected workflow publishes the tag. They
-prove immutable publication, not downstream module adoption:
+These values do not exist until the authenticated `gh` release owner publishes
+the tag. They prove immutable publication, not downstream module adoption:
 
 | Field                        | Value   |
 | ---------------------------- | ------- |

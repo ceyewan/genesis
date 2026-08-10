@@ -51,15 +51,16 @@ The RC2 evidence must name the scanner and exact version or the explicit risk
 acceptance, the database snapshot/date when applicable, every finding and its
 reachability disposition, and the Genesis/Resonance SHAs tested. Repository
 rulesets, protected environment configuration, immutable releases, and the
-dedicated Release App's least-privilege authority are separate supply-chain
-controls and must also be verified before tag publication.
+authenticated release-owner identity are separate supply-chain controls and
+must also be verified before tag publication. Genesis is maintained by one
+developer, so the release owner uses the locally authenticated `gh` identity;
+no personal token is persisted in Actions secrets.
 
-The App is limited to `Contents: write` and read-only Actions, Administration,
-and Attestations permissions. Before the immutable transition, the protected
-workflow must preserve the five pre-tag Actions archives and the tag-defense
-evidence archive as an exact-six Release asset set. Publication is not green
-until the REST API reports `immutable: true` for that exact set and the pinned
-GitHub CLI verifies the Release attestation.
+Before the immutable transition, the release owner must preserve the five
+pre-tag Actions archives and the tag-defense evidence archive as an exact-six
+Release asset set. Publication is not green until the REST API reports
+`immutable: true` for that exact set and GitHub CLI verifies the Release
+attestation.
 
 The tracked Stage 3 manifest contains content digests, not raw-bundle locators.
 Its validator does not fetch those bundles. The release-environment approval
