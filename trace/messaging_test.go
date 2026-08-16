@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
@@ -12,6 +13,27 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
+
+func TestMessagingAttributesUseCurrentSemanticConventionKeys(t *testing.T) {
+	t.Parallel()
+
+	attrs := messagingAttributes(MessagingMeta{
+		System:        MessagingSystemNATS,
+		Destination:   "orders.created",
+		Operation:     MessagingOperationPublish,
+		ConsumerGroup: "workers",
+	})
+	values := make(map[string]string, len(attrs))
+	for _, attr := range attrs {
+		values[string(attr.Key)] = attr.Value.AsString()
+	}
+
+	require.Equal(t, MessagingSystemNATS, values[AttrMessagingSystem])
+	require.Equal(t, "orders.created", values[AttrMessagingDestination])
+	require.Equal(t, MessagingOperationPublish, values[AttrMessagingOperation])
+	require.Equal(t, "send", values[AttrMessagingOperationType])
+	require.Equal(t, "workers", values[AttrMessagingConsumerGroup])
+}
 
 func setupTracerForTest(t *testing.T) (oteltrace.Tracer, *tracetest.SpanRecorder) {
 	t.Helper()

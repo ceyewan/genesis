@@ -18,7 +18,7 @@ graph LR
     User[用户/Curl] -->|HTTP POST| A[Service A: gateway]
     A -->|gRPC: CreateOrder| B[Service B: logic]
     B -->|"DB (SQLite)"| DB[(db)]
-    B -->|NATS Core: orders.created| MQ[NATS]
+    B -->|NATS JetStream: orders.created| MQ[NATS]
     MQ -->|Consume| C[Service C: task]
     C -->|gRPC: PushResult| A
 ```
@@ -89,6 +89,14 @@ curl -X POST http://localhost:8080/orders \
 - gateway 收到请求并转发到 logic
 - logic 落库后发布 NATS 消息
 - task 消费消息并通过 gRPC 把结果推回 gateway（到达 A 即算成功）
+
+也可以直接运行自动验收脚本。它会生成三条订单，并通过后端 API 检查三个 Prometheus target、HTTP/MQ 指标、Loki 三服务日志，以及 Tempo 中包含三个服务的完整 Trace：
+
+```bash
+./verify.sh
+```
+
+脚本依赖 `curl` 和 `jq`。请求数与等待次数可通过 `REQUEST_COUNT`、`POLL_ATTEMPTS` 调整；各服务 URL 也可通过 `GATEWAY_URL`、`GATEWAY_METRICS_URL`、`PROMETHEUS_URL`、`LOKI_URL`、`TEMPO_URL` 环境变量覆盖。
 
 压测（k6，默认带鉴权头）：
 
@@ -162,7 +170,7 @@ LOAD_MAX_VUS=4000 \
 **本示例提供什么**：
 
 - 业务 HTTP 指标（来自 `metrics` 组件 + 自定义直方图）：`http_request_duration_seconds_*`
-- MQ 组件内置指标（来自 `mq` 组件）：`mq_publish_total`、`mq_consume_total`、`mq_handle_duration_seconds_*`
+- MQ 组件内置指标（来自 `mq` 组件）：`mq.publish_total`、`mq.consume_total`、`mq.handle.duration_seconds_*`
 - Go runtime/进程指标（自动，无需手写）：`go_*`、`process_*`
 - 容器指标（cAdvisor）：`container_*`
 
@@ -180,12 +188,12 @@ LOAD_MAX_VUS=4000 \
 
 - HTTP QPS：`rate(http_request_duration_seconds_count[1m])`
 - HTTP P99：`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route))`
-- MQ QPS（按 subject）：`sum(rate({__name__="mq.consume_total"}[1m])) by (subject)`
-- MQ handler P99（按 subject）：`histogram_quantile(0.99, sum(rate({__name__="mq.handle.duration_seconds_bucket"}[5m])) by (le, subject))`
+- MQ QPS（按 topic）：`sum(rate({__name__="mq.consume_total"}[1m])) by (topic)`
+- MQ handler P99（按 topic）：`histogram_quantile(0.99, sum(rate({__name__="mq.handle.duration_seconds_bucket"}[5m])) by (le, topic))`
 - Go runtime：`go_goroutines` / `go_memstats_heap_alloc_bytes`
 - 容器 CPU：`rate(container_cpu_usage_seconds_total[1m])`
 
-> 注意：这里的 “MQ Latency” 指的是“消费端 handler 处理耗时分布”（`mq_handle_duration_seconds`），不是“消息在队列里排队多久”。队列等待（queue delay）在纯 NATS Core 场景通常更建议用队列系统/应用侧指标做衡量。
+> 注意：这里的 “MQ Latency” 指的是“消费端 handler 处理耗时分布”（`mq.handle.duration`），不是“消息在队列里排队多久”。队列等待（queue delay）应结合 JetStream 或应用侧指标衡量。
 
 ### B. 链路（Tracing）
 

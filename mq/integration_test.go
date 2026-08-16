@@ -438,6 +438,27 @@ func TestJetStreamAutoCreateConfigAndPublishAckIntegration(t *testing.T) {
 	require.Equal(t, uint64(1), streamInfo.State.Msgs)
 }
 
+func TestJetStreamAutoCreateOnPublishIntegration(t *testing.T) {
+	q := newJetStreamMQWithConfig(t, &JetStreamConfig{
+		AutoCreateStream: true,
+		Storage:          StreamStorageMemory,
+	})
+	ctx, cancel := testkit.NewContext(t, 10*time.Second)
+	defer cancel()
+	subject := uniqueSubject()
+
+	// 没有消费者先行创建 Stream 时，生产者也应能独立发布。
+	require.NoError(t, q.Publish(ctx, subject, []byte("publisher-created-stream")))
+
+	transport := q.(*mq).transport.(*natsJetStreamTransport)
+	stream, err := transport.js.Stream(ctx, transport.getStreamName(subject))
+	require.NoError(t, err)
+	info, err := stream.Info(ctx)
+	require.NoError(t, err)
+	require.Contains(t, info.Config.Subjects, subject)
+	require.Equal(t, uint64(1), info.State.Msgs)
+}
+
 func TestJetStreamMaxDeliverIntegration(t *testing.T) {
 	q := newJetStreamMQWithConfig(t, &JetStreamConfig{
 		AutoCreateStream: true,

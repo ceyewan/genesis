@@ -17,13 +17,19 @@
 ## 快速开始
 
 ```go
+logger, err := clog.New(clog.NewProdDefaultConfig(projectRoot))
+if err != nil {
+    return err
+}
+defer logger.Close()
+
 meter, err := metrics.New(&metrics.Config{
-    ServiceName: "my-service",
-    Version:     "v1.0.0",
+    ServiceName:   "my-service",
+    Version:       "v1.0.0",
 	ListenAddress: "127.0.0.1",
-    Port:        9090,
-    Path:        "/metrics",
-})
+    Port:          9090,
+    Path:          "/metrics",
+}, metrics.WithLogger(logger))
 if err != nil {
     return err
 }
@@ -41,12 +47,13 @@ counter.Inc(ctx, metrics.L("method", "GET"), metrics.L("status", "200"))
 `Config` 的关键行为有三点：
 
 - `ServiceName` 必填
-- `Version`、`InstanceID`、`Environment` 对应统一资源字段 `service.version`、`service.instance.id`、`deployment.environment`
+- `Version`、`InstanceID`、`Environment` 对应统一资源字段 `service.version`、`service.instance.id`、`deployment.environment.name`
 - `Port > 0` 且 `Path` 非空时，组件会启动 Prometheus HTTP 端点
 - `ListenAddress` 控制监听网卡；开发环境建议 `127.0.0.1`，生产环境按部署网络显式配置
-- 只要 `Port == 0` 或 `Path` 为空，就不会启动 HTTP 服务，只保留进程内指标能力；负端口返回配置错误
+- `Port == 0` 且 `Path` 为空时不启动 HTTP 服务；只配置其中一个会返回配置错误
 
 当前若 metrics HTTP 端口监听失败，`New()` 会直接返回错误，而不是在后台异步失败。
+`WithLogger` 可注入统一的应用 Logger；未注入时 metrics 内部日志静默丢弃，且组件不会关闭注入的 Logger。
 
 ## 服务端埋点
 

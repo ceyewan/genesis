@@ -19,11 +19,10 @@
 ## 快速开始
 
 ```go
-shutdown, err := trace.Init(&trace.Config{
-    ServiceName: "my-service",
-    Endpoint:    "localhost:4317",
-    Sampler:     1.0,
-})
+cfg := trace.DefaultConfig("my-service")
+cfg.Endpoint = "localhost:4317"
+cfg.Insecure = true // 本地明文 Collector；生产环境按部署配置 TLS
+shutdown, err := trace.Init(cfg)
 if err != nil {
     return err
 }
@@ -60,7 +59,12 @@ defer shutdown(context.Background())
 
 ```go
 // 1. 启动时初始化（安装全局 TracerProvider）
-shutdown, err := trace.Init(&trace.Config{ServiceName: "my-service", Endpoint: "localhost:4317"})
+shutdown, err := trace.Init(&trace.Config{
+    ServiceName: "my-service",
+    Endpoint:    "localhost:4317",
+    Sampler:     1,
+    Insecure:    true, // 本地明文 Collector；生产环境按部署配置 TLS
+})
 if err != nil { return err }
 defer shutdown(ctx)
 

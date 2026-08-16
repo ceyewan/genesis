@@ -47,6 +47,12 @@ func newNATSJetStreamTransport(conn connector.NATSConnector, cfg *JetStreamConfi
 
 // Publish 发布消息
 func (t *natsJetStreamTransport) Publish(ctx context.Context, topic string, data []byte, opts publishOptions) error {
+	if t.cfg.AutoCreateStream {
+		if err := t.ensureStream(ctx, topic); err != nil {
+			return xerrors.Wrapf(err, "ensure stream for %s failed", topic)
+		}
+	}
+
 	if len(opts.Headers) == 0 {
 		_, err := t.js.Publish(ctx, topic, data)
 		return err
@@ -192,32 +198,10 @@ func (t *natsJetStreamTransport) ensureStream(ctx context.Context, topic string)
 	// 检查 Stream 是否已存在
 	stream, err := t.js.Stream(ctx, streamName)
 	if err == nil {
-		// Stream 存在，检查是否需要添加新的 subject
-		info, infoErr := stream.Info(ctx)
-		if infoErr != nil {
-			return xerrors.Wrap(infoErr, "get stream info failed")
-		}
-
-		// 检查 topic 是否已在 subjects 中
-		for _, sub := range info.Config.Subjects {
-			if sub == topic || matchesWildcard(sub, topic) {
-				return nil // 已包含该 topic
-			}
-		}
-
-		// 需要添加新的 subject
-		// 重要：使用原有配置的全量拷贝，只修改 Subjects，避免其他配置（Storage/Retention/MaxMsgs等）被重置
-		updatedConfig := info.Config
-		updatedConfig.Subjects = append(updatedConfig.Subjects, topic)
-		_, err = t.js.UpdateStream(ctx, updatedConfig)
-		if err != nil {
-			return xerrors.Wrapf(err, "update stream %s to add subject %s failed", streamName, topic)
-		}
-		t.logger.Info("added subject to existing stream",
-			clog.String("stream", streamName),
-			clog.String("subject", topic),
-		)
-		return nil
+		return t.ensureStreamSubject(ctx, stream, streamName, topic)
+	}
+	if !xerrors.Is(err, jetstream.ErrStreamNotFound) {
+		return xerrors.Wrapf(err, "get stream %s failed", streamName)
 	}
 
 	// Stream 不存在，创建新 Stream
@@ -230,9 +214,48 @@ func (t *natsJetStreamTransport) ensureStream(ctx context.Context, topic string)
 		MaxBytes:  t.cfg.MaxBytes,
 		Replicas:  t.cfg.Replicas,
 	})
-	if err != nil && !strings.Contains(err.Error(), "already exists") {
+	if err == nil {
+		return nil
+	}
+	if !xerrors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
 		return err
 	}
+
+	// 另一个实例可能刚刚创建了同名 Stream。创建竞争的失败方仍需重新读取，
+	// 并确保新 Stream 包含自己当前使用的 subject。
+	stream, err = t.js.Stream(ctx, streamName)
+	if err != nil {
+		return xerrors.Wrapf(err, "get concurrently created stream %s failed", streamName)
+	}
+	return t.ensureStreamSubject(ctx, stream, streamName, topic)
+}
+
+func (t *natsJetStreamTransport) ensureStreamSubject(
+	ctx context.Context,
+	stream jetstream.Stream,
+	streamName string,
+	topic string,
+) error {
+	info, err := stream.Info(ctx)
+	if err != nil {
+		return xerrors.Wrap(err, "get stream info failed")
+	}
+	for _, subject := range info.Config.Subjects {
+		if subject == topic || matchesWildcard(subject, topic) {
+			return nil
+		}
+	}
+
+	// 使用原有配置的全量拷贝，只修改 Subjects，避免覆盖运维配置的保留策略。
+	updatedConfig := info.Config
+	updatedConfig.Subjects = append(updatedConfig.Subjects, topic)
+	if _, err := t.js.UpdateStream(ctx, updatedConfig); err != nil {
+		return xerrors.Wrapf(err, "update stream %s to add subject %s failed", streamName, topic)
+	}
+	t.logger.Info("Added subject to existing stream",
+		clog.String("stream", streamName),
+		clog.String("subject", topic),
+	)
 	return nil
 }
 

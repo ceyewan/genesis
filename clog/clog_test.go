@@ -103,6 +103,32 @@ func TestConfigurationErrorsRemainClassifiable(t *testing.T) {
 	}
 }
 
+func TestContextFieldOptionsAreValidated(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opt  Option
+	}{
+		{name: "nil key", opt: WithContextField(nil, "request_id")},
+		{name: "non-comparable key", opt: WithContextField([]string{"request_id"}, "request_id")},
+		{name: "blank field name", opt: WithContextField(contextKey("request_id"), "  ")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			logger, err := New(nil, tt.opt)
+			if logger != nil {
+				t.Fatal("New() logger must be nil for an invalid context field option")
+			}
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("New() error = %v, want ErrInvalidConfig", err)
+			}
+		})
+	}
+}
+
 func TestNewNilConfigMatchesEmptyConfig(t *testing.T) {
 	nilLogger, err := New(nil)
 	if err != nil {
@@ -171,7 +197,7 @@ func TestJSONResourceFieldsAndConfigCopy(t *testing.T) {
 	}
 	for key, want := range map[string]string{
 		"service.name": "logic", "service.version": "v1.0.0",
-		"service.instance.id": "logic-1", "deployment.environment": "test",
+		"service.instance.id": "logic-1", "deployment.environment.name": "test",
 	} {
 		if got := entry[key]; got != want {
 			t.Fatalf("%s = %v, want %q", key, got, want)

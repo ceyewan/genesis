@@ -17,8 +17,12 @@
 ## 快速开始
 
 ```go
+cfg := clog.NewProdDefaultConfig(projectRoot)
+cfg.ServiceName = "user-service"
+cfg.Version = "v1.0.0"
+
 logger, err := clog.New(
-    clog.NewProdDefaultConfig("genesis"),
+    cfg,
     clog.WithNamespace("user-service", "api"),
     clog.WithTraceContext(),
     clog.WithContextField("request_id", "request_id"),
@@ -28,7 +32,7 @@ if err != nil {
 }
 defer logger.Close()
 
-logger.Info("request started",
+logger.Info("Request started",
     clog.String("path", "/v1/users"),
     clog.String("method", "GET"),
 )
@@ -45,7 +49,7 @@ logger.Info("request started",
 | 错误结构 | 统一输出 `error={...}`，便于检索、索引和统计 |
 | 文件输出 | 只有 `New()` 创建的根 logger 持有底层文件句柄，调用方需要关闭根 logger |
 
-`Config.ServiceName`、`Version`、`InstanceID`、`Environment` 会稳定输出为 `service.name`、`service.version`、`service.instance.id`、`deployment.environment`。生产 JSON 日志建议与 trace/metrics 使用同一组值。
+`Config.ServiceName`、`Version`、`InstanceID`、`Environment` 会稳定输出为 `service.name`、`service.version`、`service.instance.id`、`deployment.environment.name`。生产 JSON 日志建议与 trace/metrics 使用同一组值。
 
 ## 默认配置
 
@@ -55,7 +59,7 @@ logger.Info("request started",
 - `Format=console`
 - `Output=stdout`
 
-如果需要显式的开发或生产默认值，请使用 `NewDevDefaultConfig(...)` 或 `NewProdDefaultConfig(...)`。
+如果需要显式的开发或生产默认值，请使用 `NewDevDefaultConfig(sourceRoot)` 或 `NewProdDefaultConfig(sourceRoot)`；参数用于裁剪调用源码路径，不是服务名。
 
 ## 推荐使用方式
 

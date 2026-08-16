@@ -30,7 +30,7 @@ import (
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
 // Discard 创建空操作的 Meter
@@ -45,23 +45,17 @@ func Discard() Meter {
 //
 // 当 Config 指定了 Port 和 Path 时，New 还会启动一个 Prometheus HTTP 暴露端点。
 // 若监听端口失败，New 会直接返回错误，而不是在后台异步失败。
-func New(cfg *Config) (Meter, error) {
+func New(cfg *Config, opts ...Option) (Meter, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	config := *cfg
 	cfg = &config
 
-	logger := defaultLogger()
+	options := applyOptions(opts...)
+	logger := options.logger
 
-	res, err := resource.New(context.Background(),
-		resource.WithAttributes(
-			semconv.ServiceNameKey.String(cfg.ServiceName),
-			semconv.ServiceVersionKey.String(cfg.Version),
-			attribute.String("service.instance.id", cfg.InstanceID),
-			attribute.String("deployment.environment", cfg.Environment),
-		),
-	)
+	res, err := resource.New(context.Background(), resource.WithAttributes(resourceAttributes(cfg)...))
 	if err != nil {
 		return nil, xerrors.Wrap(err, "create resource")
 	}
@@ -76,6 +70,13 @@ func New(cfg *Config) (Meter, error) {
 		sdkmetric.WithResource(res),
 	)
 
+	if cfg.EnableRuntime {
+		if err := runtime.Start(runtime.WithMeterProvider(mp)); err != nil {
+			_ = mp.Shutdown(context.Background())
+			return nil, xerrors.Wrap(err, "start runtime metrics")
+		}
+	}
+
 	var httpServer *http.Server
 	var httpDone chan struct{}
 	if cfg.Port > 0 && cfg.Path != "" {
@@ -85,7 +86,12 @@ func New(cfg *Config) (Meter, error) {
 			_ = mp.Shutdown(context.Background())
 			return nil, err
 		}
-		httpServer = &http.Server{Addr: addr, Handler: mux}
+		httpServer = &http.Server{
+			Addr:              addr,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       30 * time.Second,
+		}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			_ = mp.Shutdown(context.Background())
@@ -94,11 +100,11 @@ func New(cfg *Config) (Meter, error) {
 		httpDone = make(chan struct{})
 		go func() {
 			defer close(httpDone)
-			logger.Info("metrics server started",
+			logger.Info("Metrics server started",
 				clog.String("addr", ln.Addr().String()),
 				clog.String("path", cfg.Path))
 			if err := httpServer.Serve(ln); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
-				logger.Error("metrics server error", clog.Error(err))
+				logger.Error("Metrics server error", clog.Error(err))
 				if cfg.ServerErrors != nil {
 					select {
 					case cfg.ServerErrors <- err:
@@ -107,12 +113,6 @@ func New(cfg *Config) (Meter, error) {
 				}
 			}
 		}()
-	}
-
-	if cfg.EnableRuntime {
-		if err := runtime.Start(runtime.WithMeterProvider(mp)); err != nil {
-			logger.Error("runtime metrics start failed", clog.Error(err))
-		}
 	}
 
 	// Publish process-global state only after every fallible constructor step
@@ -130,6 +130,20 @@ func New(cfg *Config) (Meter, error) {
 		logger:       logger,
 		shutdownDone: make(chan struct{}),
 	}, nil
+}
+
+func resourceAttributes(cfg *Config) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{semconv.ServiceNameKey.String(cfg.ServiceName)}
+	if cfg.Version != "" {
+		attrs = append(attrs, semconv.ServiceVersionKey.String(cfg.Version))
+	}
+	if cfg.InstanceID != "" {
+		attrs = append(attrs, semconv.ServiceInstanceIDKey.String(cfg.InstanceID))
+	}
+	if cfg.Environment != "" {
+		attrs = append(attrs, semconv.DeploymentEnvironmentNameKey.String(cfg.Environment))
+	}
+	return attrs
 }
 
 func registerMetricsHandler(mux *http.ServeMux, pattern string, handler http.Handler) (err error) {
@@ -380,12 +394,4 @@ func writeLabelPart(b *strings.Builder, s string) {
 	b.WriteString(strconv.Itoa(len(s)))
 	b.WriteByte(':')
 	b.WriteString(s)
-}
-
-func defaultLogger() clog.Logger {
-	logger, err := clog.New(&clog.Config{Level: "info", Format: "console"})
-	if err != nil {
-		return clog.Discard()
-	}
-	return logger.WithNamespace("metrics")
 }

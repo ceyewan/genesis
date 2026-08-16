@@ -214,6 +214,6 @@ func (l *loggerImpl) setupBaseAttrs() {
 		l.baseAttrs = append(l.baseAttrs, slog.String("service.instance.id", l.config.InstanceID))
 	}
 	if l.config.Environment != "" {
-		l.baseAttrs = append(l.baseAttrs, slog.String("deployment.environment", l.config.Environment))
+		l.baseAttrs = append(l.baseAttrs, slog.String("deployment.environment.name", l.config.Environment))
 	}
 }

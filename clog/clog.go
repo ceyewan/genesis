@@ -24,6 +24,9 @@ func New(config *Config, opts ...Option) (Logger, error) {
 
 	// 应用选项
 	options := applyOptions(opts...)
+	if err := validateOptions(options); err != nil {
+		return nil, err
+	}
 
 	// 调用内部实现
 	return newLogger(config, options)

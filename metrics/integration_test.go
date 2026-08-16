@@ -2,66 +2,52 @@ package metrics
 
 import (
 	"context"
+	"io"
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestPrometheusIntegration 测试 Prometheus 集成
 func TestPrometheusIntegration(t *testing.T) {
-	// 使用测试端口避免冲突
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := listener.Addr().(*net.TCPAddr).Port
+	require.NoError(t, listener.Close())
+
 	cfg := &Config{
-		ServiceName: "test-service",
-		Version:     "v1.0.0",
-		Port:        0, // 让系统选择可用端口
-		Path:        "/metrics",
+		ServiceName:   "test-service",
+		Version:       "v1.0.0",
+		ListenAddress: "127.0.0.1",
+		Port:          port,
+		Path:          "/metrics",
 	}
 
 	meter, err := New(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create meter: %v", err)
-	}
+	require.NoError(t, err)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		meter.Shutdown(ctx)
+		require.NoError(t, meter.Shutdown(ctx))
 	}()
 
 	ctx := context.Background()
-
-	// 创建指标
-	counter, err := meter.Counter("http_requests_total", "HTTP 请求总数")
-	if err != nil {
-		t.Fatalf("Failed to create counter: %v", err)
-	}
-
-	gauge, err := meter.Gauge("memory_usage_bytes", "内存使用字节数")
-	if err != nil {
-		t.Fatalf("Failed to create gauge: %v", err)
-	}
-
-	histogram, err := meter.Histogram(
-		"request_duration_seconds",
-		"请求耗时（秒）",
-		WithUnit("seconds"),
-	)
-	if err != nil {
-		t.Fatalf("Failed to create histogram: %v", err)
-	}
-
-	// 记录一些数据
+	counter, err := meter.Counter("integration_requests", "Integration requests")
+	require.NoError(t, err)
 	counter.Inc(ctx, L("method", "GET"), L("status", "200"))
-	counter.Add(ctx, 5, L("method", "POST"), L("status", "201"))
 
-	gauge.Set(ctx, 1024*1024*100, L("type", "heap"))
-	gauge.Inc(ctx, L("node", "worker1"))
-	gauge.Dec(ctx, L("node", "worker2"))
-
-	histogram.Record(ctx, 0.123, L("endpoint", "/api/users"))
-	histogram.Record(ctx, 0.456, L("endpoint", "/api/orders"))
-	histogram.Record(ctx, 0.789, L("endpoint", "/api/products"))
-
-	// 等待一下让指标注册完成
-	time.Sleep(100 * time.Millisecond)
+	response, err := http.Get("http://127.0.0.1:" + strconv.Itoa(port) + "/metrics")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.True(t, strings.Contains(string(body), "integration_requests"), string(body))
 }
 
 // TestConcurrentMetricOperations 测试并发指标操作

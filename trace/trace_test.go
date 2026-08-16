@@ -190,6 +190,30 @@ func TestInjectNilCarrierIsNoopForValidSpan(t *testing.T) {
 	Inject(ctx, nil)
 }
 
+func TestShutdownDoesNotReplacePropagatorInstalledByCaller(t *testing.T) {
+	previousProvider := otel.GetTracerProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previousProvider)
+		otel.SetTextMapPropagator(previousPropagator)
+	})
+
+	tp := sdktrace.NewTracerProvider()
+	owned := &ownedTextMapPropagator{TextMapPropagator: propagation.TraceContext{}}
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(owned)
+	shutdown := newTracerShutdown(tp, owned)
+
+	callerPropagator := propagation.Baggage{}
+	otel.SetTextMapPropagator(callerPropagator)
+	if err := shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := otel.GetTextMapPropagator().(propagation.Baggage); !ok {
+		t.Fatalf("shutdown replaced caller propagator with %T", otel.GetTextMapPropagator())
+	}
+}
+
 func TestInitCopiesConfigAndShutdownIsConcurrentIdempotent(t *testing.T) {
 	cfg := DefaultConfig("svc")
 	cfg.Endpoint = "127.0.0.1:1"

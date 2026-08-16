@@ -16,7 +16,7 @@ type Config struct {
 	Version string `mapstructure:"version" json:"version" yaml:"version"`
 	// InstanceID 是 OTel service.instance.id。
 	InstanceID string `mapstructure:"instance_id" json:"instance_id" yaml:"instance_id"`
-	// Environment 是 OTel deployment.environment。
+	// Environment 是 OTel deployment.environment.name。
 	Environment string `mapstructure:"environment" json:"environment" yaml:"environment"`
 	// ListenAddress 是 Prometheus HTTP 端点的监听地址。
 	// 空值保持历史行为（监听所有网卡）；开发默认配置使用 127.0.0.1。
@@ -43,6 +43,9 @@ func (c *Config) validate() error {
 	}
 	if c.Path != "" && !strings.HasPrefix(c.Path, "/") {
 		return xerrors.Wrap(ErrInvalidConfig, "path must start with /")
+	}
+	if (c.Port == 0) != (c.Path == "") {
+		return xerrors.Wrap(ErrInvalidConfig, "port and path must both be set or both be disabled")
 	}
 	return nil
 }

@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
 // InstallLocalProvider 安装一个不导出数据的全局 TracerProvider，用于本地生成 TraceID。
@@ -39,10 +39,11 @@ func InstallLocalProvider(serviceName string) (func(context.Context) error, erro
 	)
 
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+	installedPropagator := &ownedTextMapPropagator{TextMapPropagator: propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},
-	))
+	)}
+	otel.SetTextMapPropagator(installedPropagator)
 
-	return newTracerShutdown(tp), nil
+	return newTracerShutdown(tp, installedPropagator), nil
 }
