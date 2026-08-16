@@ -1,6 +1,12 @@
 package clog
 
-import "bytes"
+import (
+	"bytes"
+	"reflect"
+	"strings"
+
+	"github.com/ceyewan/genesis/xerrors"
+)
 
 // ContextField 定义从 Context 中提取字段的规则
 type ContextField struct {
@@ -68,8 +74,25 @@ func applyOptions(opts ...Option) *options {
 	}
 
 	for _, opt := range opts {
-		opt(o)
+		if opt != nil {
+			opt(o)
+		}
 	}
 
 	return o
+}
+
+func validateOptions(o *options) error {
+	for _, field := range o.contextFields {
+		if field.Key == nil {
+			return xerrors.Wrap(ErrInvalidConfig, "context field key must not be nil")
+		}
+		if !reflect.TypeOf(field.Key).Comparable() {
+			return xerrors.Wrap(ErrInvalidConfig, "context field key must be comparable")
+		}
+		if strings.TrimSpace(field.FieldName) == "" {
+			return xerrors.Wrap(ErrInvalidConfig, "context field name must not be blank")
+		}
+	}
+	return nil
 }

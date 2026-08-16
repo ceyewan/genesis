@@ -253,9 +253,9 @@
       },
       "targets": [
         {
-          "expr": "sum(rate({__name__=\"mq.consume_total\"}[1m])) by (subject)",
+          "expr": "sum(rate({__name__=\"mq.consume_total\"}[1m])) by (topic)",
           "interval": "",
-          "legendFormat": "{{subject}}",
+          "legendFormat": "{{topic}}",
           "refId": "A"
         }
       ],
@@ -335,21 +335,21 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum(rate({__name__=\"mq.handle.duration_seconds_bucket\"}[5m])) by (le, subject))",
+          "expr": "histogram_quantile(0.99, sum(rate({__name__=\"mq.handle.duration_seconds_bucket\"}[5m])) by (le, topic))",
           "interval": "",
-          "legendFormat": "{{subject}} P99",
+          "legendFormat": "{{topic}} P99",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate({__name__=\"mq.handle.duration_seconds_bucket\"}[5m])) by (le, subject))",
+          "expr": "histogram_quantile(0.95, sum(rate({__name__=\"mq.handle.duration_seconds_bucket\"}[5m])) by (le, topic))",
           "interval": "",
-          "legendFormat": "{{subject}} P95",
+          "legendFormat": "{{topic}} P95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.90, sum(rate({__name__=\"mq.handle.duration_seconds_bucket\"}[5m])) by (le, subject))",
+          "expr": "histogram_quantile(0.90, sum(rate({__name__=\"mq.handle.duration_seconds_bucket\"}[5m])) by (le, topic))",
           "interval": "",
-          "legendFormat": "{{subject}} P90",
+          "legendFormat": "{{topic}} P90",
           "refId": "C"
         }
       ],

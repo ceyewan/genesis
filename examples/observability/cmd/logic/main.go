@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -26,10 +29,11 @@ import (
 )
 
 const (
-	grpcAddr     = ":9090"
-	natsEndpoint = "nats://localhost:4222"
-	sqlitePath   = "./examples/observability/logic.sqlite"
-	orderSubject = "orders.created"
+	grpcAddr        = ":9090"
+	natsEndpoint    = "nats://localhost:4222"
+	sqlitePath      = "./examples/observability/logic.sqlite"
+	orderSubject    = "orders.created"
+	shutdownTimeout = 10 * time.Second
 )
 
 func getenv(key, def string) string {
@@ -66,8 +70,7 @@ func (s *orderService) CreateOrder(ctx context.Context, req *proto.CreateOrderRe
 	)
 
 	orderID := "ORD-" + req.UserId + "-" + time.Now().Format("150405.000")
-
-	s.logger.InfoContext(ctx, "logic creating order",
+	s.logger.InfoContext(ctx, "Logic creating order",
 		clog.String("order_id", orderID),
 		clog.String("user_id", req.UserId),
 		clog.String("product_id", req.ProductId),
@@ -87,11 +90,7 @@ func (s *orderService) CreateOrder(ctx context.Context, req *proto.CreateOrderRe
 		return nil, err
 	}
 
-	ev := orderCreatedEvent{
-		OrderID:   orderID,
-		UserID:    req.UserId,
-		ProductID: req.ProductId,
-	}
+	ev := orderCreatedEvent{OrderID: orderID, UserID: req.UserId, ProductID: req.ProductId}
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return nil, xerrors.Wrap(err, "marshal event")
@@ -116,89 +115,127 @@ func (s *orderService) CreateOrder(ctx context.Context, req *proto.CreateOrderRe
 		return nil, xerrors.Wrap(err, "publish order event")
 	}
 
-	return &proto.CreateOrderResponse{
-		OrderId: orderID,
-		Status:  "CREATED",
-	}, nil
+	return &proto.CreateOrderResponse{OrderId: orderID, Status: "CREATED"}, nil
 }
 
 func main() {
-	ctx := context.Background()
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
 
-	obs, shutdowns, err := bootstrap.Init(ctx, "obs-logic", 9102)
+func run() (retErr error) {
+	appCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	obs, err := bootstrap.Init("obs-logic", 9102)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	for i := len(shutdowns) - 1; i >= 0; i-- {
-		defer func(fn bootstrap.Shutdown) { _ = fn(ctx) }(shutdowns[i])
-	}
+	defer func() {
+		if retErr != nil {
+			obs.Logger.Fatal("Logic stopped with error", clog.Error(retErr))
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		retErr = xerrors.Combine(retErr, obs.Shutdown(shutdownCtx))
+	}()
 
 	grpcMetrics, err := metrics.NewGRPCServerMetrics(obs.Meter, metrics.DefaultGRPCServerMetricsConfig("obs-logic"))
 	if err != nil {
-		fatalAndExit(obs.Logger, "create grpc metrics failed", clog.Error(err))
+		return xerrors.Wrap(err, "create grpc metrics")
 	}
 
 	natsConnCfg := &connector.NATSConfig{URL: getenv("NATS_URL", natsEndpoint)}
 	natsConn, err := connector.NewNATS(natsConnCfg, connector.WithLogger(obs.Logger))
 	if err != nil {
-		fatalAndExit(obs.Logger, "new nats connector failed", clog.Error(err))
+		return xerrors.Wrap(err, "new nats connector")
 	}
 	defer func() { _ = natsConn.Close() }()
-	if err := natsConn.Connect(ctx); err != nil {
-		fatalAndExit(obs.Logger, "connect nats failed", clog.Error(err))
+	if err := natsConn.Connect(appCtx); err != nil {
+		return xerrors.Wrap(err, "connect nats")
 	}
 
-	mqClient, err := mq.New(&mq.Config{Driver: mq.DriverNATSJetStream}, mq.WithNATSConnector(natsConn), mq.WithLogger(obs.Logger), mq.WithMeter(obs.Meter))
+	mqClient, err := mq.New(
+		&mq.Config{Driver: mq.DriverNATSJetStream, JetStream: &mq.JetStreamConfig{AutoCreateStream: true}},
+		mq.WithNATSConnector(natsConn),
+		mq.WithLogger(obs.Logger),
+		mq.WithMeter(obs.Meter),
+	)
 	if err != nil {
-		fatalAndExit(obs.Logger, "new mq failed", clog.Error(err))
+		return xerrors.Wrap(err, "new mq")
 	}
 	defer func() { _ = mqClient.Close() }()
 
-	sqliteConn, err := connector.NewSQLite(&connector.SQLiteConfig{Path: getenv("SQLITE_PATH", sqlitePath)}, connector.WithLogger(obs.Logger))
+	sqliteConn, err := connector.NewSQLite(
+		&connector.SQLiteConfig{Path: getenv("SQLITE_PATH", sqlitePath)},
+		connector.WithLogger(obs.Logger),
+	)
 	if err != nil {
-		fatalAndExit(obs.Logger, "new sqlite connector failed", clog.Error(err))
+		return xerrors.Wrap(err, "new sqlite connector")
 	}
 	defer func() { _ = sqliteConn.Close() }()
-	if err := sqliteConn.Connect(ctx); err != nil {
-		fatalAndExit(obs.Logger, "connect sqlite failed", clog.Error(err))
+	if err := sqliteConn.Connect(appCtx); err != nil {
+		return xerrors.Wrap(err, "connect sqlite")
 	}
 
-	database, err := db.New(&db.Config{Driver: "sqlite"},
+	database, err := db.New(
+		&db.Config{Driver: "sqlite"},
 		db.WithSQLiteConnector(sqliteConn),
 		db.WithLogger(obs.Logger),
 		db.WithTracer(otel.GetTracerProvider()),
 	)
 	if err != nil {
-		fatalAndExit(obs.Logger, "new db failed", clog.Error(err))
+		return xerrors.Wrap(err, "new db")
 	}
-
-	if err := database.DB(ctx).AutoMigrate(&order.Order{}); err != nil {
-		fatalAndExit(obs.Logger, "auto migrate failed", clog.Error(err))
+	if err := database.DB(appCtx).AutoMigrate(&order.Order{}); err != nil {
+		return xerrors.Wrap(err, "auto migrate")
 	}
 
 	lis, err := net.Listen("tcp", getenv("LOGIC_GRPC_ADDR", grpcAddr))
 	if err != nil {
-		fatalAndExit(obs.Logger, "listen grpc failed", clog.Error(err))
+		return xerrors.Wrap(err, "listen grpc")
 	}
+	defer func() { _ = lis.Close() }()
 
-	srv := grpc.NewServer(
+	server := grpc.NewServer(
 		grpc.StatsHandler(trace.GRPCServerStatsHandler()),
 		grpc.UnaryInterceptor(grpcMetrics.UnaryServerInterceptor()),
 	)
-	proto.RegisterOrderServiceServer(srv, &orderService{
-		logger: obs.Logger,
-		db:     database,
-		mq:     mqClient,
-	})
+	proto.RegisterOrderServiceServer(server, &orderService{logger: obs.Logger, db: database, mq: mqClient})
 
-	obs.Logger.Info("logic grpc listening", clog.String("addr", lis.Addr().String()))
-	if err := srv.Serve(lis); err != nil {
-		fatalAndExit(obs.Logger, "logic grpc serve failed", clog.Error(err))
+	serveErrors := make(chan error, 1)
+	go func() {
+		obs.Logger.Info("Logic grpc listening", clog.String("addr", lis.Addr().String()))
+		if serveErr := server.Serve(lis); serveErr != nil && !xerrors.Is(serveErr, grpc.ErrServerStopped) {
+			serveErrors <- xerrors.Wrap(serveErr, "serve logic grpc")
+		}
+	}()
+
+	select {
+	case <-appCtx.Done():
+		obs.Logger.Info("Logic shutdown requested")
+	case serveErr := <-serveErrors:
+		retErr = serveErr
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	return xerrors.Combine(retErr, stopGRPC(shutdownCtx, server))
 }
 
-func fatalAndExit(logger clog.Logger, msg string, fields ...clog.Field) {
-	logger.Fatal(msg, fields...)
-	_ = logger.Close()
-	os.Exit(1)
+func stopGRPC(ctx context.Context, server *grpc.Server) error {
+	done := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		server.Stop()
+		return xerrors.Wrap(ctx.Err(), "shutdown logic grpc")
+	}
 }

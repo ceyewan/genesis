@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +27,7 @@ const (
 	httpAddr         = ":8080"
 	callbackGRPCAddr = ":9091"
 	logicTarget      = "localhost:9090"
+	shutdownTimeout  = 10 * time.Second
 )
 
 func getenv(key, def string) string {
@@ -43,17 +47,11 @@ type callbackServer struct {
 	results map[string]string
 }
 
-func fatalAndExit(logger clog.Logger, msg string, fields ...clog.Field) {
-	logger.Fatal(msg, fields...)
-	_ = logger.Close()
-	os.Exit(1)
-}
-
 func (s *callbackServer) PushResult(ctx context.Context, req *proto.PushResultRequest) (*proto.PushResultResponse, error) {
 	if req.GetResult() == nil {
 		return nil, xerrors.New("missing result")
 	}
-	s.logger.InfoContext(ctx, "gateway received task result",
+	s.logger.InfoContext(ctx, "Gateway received task result",
 		clog.String("order_id", req.Result.OrderId),
 		clog.String("status", req.Result.Status),
 	)
@@ -69,26 +67,39 @@ func (s *callbackServer) PushResult(ctx context.Context, req *proto.PushResultRe
 }
 
 func main() {
-	ctx := context.Background()
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
 
-	obs, shutdowns, err := bootstrap.Init(ctx, "obs-gateway", 9101)
+func run() (retErr error) {
+	appCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	obs, err := bootstrap.Init("obs-gateway", 9101)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	for i := len(shutdowns) - 1; i >= 0; i-- {
-		defer func(fn bootstrap.Shutdown) { _ = fn(ctx) }(shutdowns[i])
-	}
+	defer func() {
+		if retErr != nil {
+			obs.Logger.Fatal("Gateway stopped with error", clog.Error(retErr))
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		retErr = xerrors.Combine(retErr, obs.Shutdown(shutdownCtx))
+	}()
 
 	httpMetricsCfg := metrics.DefaultHTTPServerMetricsConfig("obs-gateway")
 	httpMetricsCfg.RequestDurationName = "http_request_duration_seconds"
 	httpMetrics, err := metrics.NewHTTPServerMetrics(obs.Meter, httpMetricsCfg)
 	if err != nil {
-		fatalAndExit(obs.Logger, "create http metrics failed", clog.Error(err))
+		return xerrors.Wrap(err, "create http metrics")
 	}
 
 	grpcMetrics, err := metrics.NewGRPCServerMetrics(obs.Meter, metrics.DefaultGRPCServerMetricsConfig("obs-gateway"))
 	if err != nil {
-		fatalAndExit(obs.Logger, "create grpc metrics failed", clog.Error(err))
+		return xerrors.Wrap(err, "create grpc metrics")
 	}
 
 	logicConn, err := grpc.NewClient(
@@ -97,39 +108,33 @@ func main() {
 		grpc.WithStatsHandler(trace.GRPCClientStatsHandler()),
 	)
 	if err != nil {
-		fatalAndExit(obs.Logger, "connect logic failed", clog.Error(err))
+		return xerrors.Wrap(err, "create logic grpc client")
 	}
 	defer func() { _ = logicConn.Close() }()
 	logicClient := proto.NewOrderServiceClient(logicConn)
 
 	cbLis, err := net.Listen("tcp", getenv("GATEWAY_CALLBACK_GRPC_ADDR", callbackGRPCAddr))
 	if err != nil {
-		fatalAndExit(obs.Logger, "listen callback grpc failed", clog.Error(err))
+		return xerrors.Wrap(err, "listen callback grpc")
 	}
+	defer func() { _ = cbLis.Close() }()
 
 	cbSrv := grpc.NewServer(
 		grpc.StatsHandler(trace.GRPCServerStatsHandler()),
 		grpc.UnaryInterceptor(grpcMetrics.UnaryServerInterceptor()),
 	)
 	proto.RegisterGatewayCallbackServiceServer(cbSrv, &callbackServer{logger: obs.Logger})
-	go func() {
-		obs.Logger.Info("gateway callback grpc listening", clog.String("addr", cbLis.Addr().String()))
-		if err := cbSrv.Serve(cbLis); err != nil {
-			obs.Logger.Error("callback grpc serve failed", clog.Error(err))
-		}
-	}()
 
+	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(gin.Recovery())
 	r.Use(trace.GinMiddleware("obs-gateway"))
 	r.Use(metrics.GinHTTPMiddleware(httpMetrics))
-
+	r.Use(gin.Recovery())
 	r.POST("/orders", func(c *gin.Context) {
 		ctx := c.Request.Context()
 
-		auth := c.GetHeader("Authorization")
-		if auth != "Bearer demo-token" {
-			obs.Logger.WarnContext(ctx, "unauthorized request", clog.String("authorization", auth))
+		if c.GetHeader("Authorization") != "Bearer demo-token" {
+			obs.Logger.WarnContext(ctx, "Unauthorized request")
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
@@ -143,7 +148,7 @@ func main() {
 			return
 		}
 
-		obs.Logger.InfoContext(ctx, "gateway received order request",
+		obs.Logger.InfoContext(ctx, "Gateway received order request",
 			clog.String("user_id", req.UserID),
 			clog.String("product_id", req.ProductID),
 		)
@@ -153,7 +158,7 @@ func main() {
 			ProductId: req.ProductID,
 		})
 		if err != nil {
-			obs.Logger.ErrorContext(ctx, "logic grpc failed", clog.Error(err))
+			obs.Logger.ErrorContext(ctx, "Logic grpc failed", clog.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
 		}
@@ -165,14 +170,50 @@ func main() {
 		})
 	})
 
-	srv := &http.Server{
+	httpServer := &http.Server{
 		Addr:              httpAddr,
 		Handler:           r,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	serveErrors := make(chan error, 2)
+	go func() {
+		obs.Logger.Info("Gateway callback grpc listening", clog.String("addr", cbLis.Addr().String()))
+		if serveErr := cbSrv.Serve(cbLis); serveErr != nil && !xerrors.Is(serveErr, grpc.ErrServerStopped) {
+			serveErrors <- xerrors.Wrap(serveErr, "serve callback grpc")
+		}
+	}()
+	go func() {
+		obs.Logger.Info("Gateway http listening", clog.String("addr", httpAddr))
+		if serveErr := httpServer.ListenAndServe(); serveErr != nil && !xerrors.Is(serveErr, http.ErrServerClosed) {
+			serveErrors <- xerrors.Wrap(serveErr, "serve gateway http")
+		}
+	}()
 
-	obs.Logger.Info("gateway http listening", clog.String("addr", httpAddr))
-	if err := srv.ListenAndServe(); err != nil && !xerrors.Is(err, http.ErrServerClosed) {
-		fatalAndExit(obs.Logger, "gateway http failed", clog.Error(err))
+	select {
+	case <-appCtx.Done():
+		obs.Logger.Info("Gateway shutdown requested")
+	case serveErr := <-serveErrors:
+		retErr = serveErr
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	httpErr := httpServer.Shutdown(shutdownCtx)
+	grpcErr := stopGRPC(shutdownCtx, cbSrv)
+	return xerrors.Combine(retErr, xerrors.Wrap(httpErr, "shutdown gateway http"), grpcErr)
+}
+
+func stopGRPC(ctx context.Context, server *grpc.Server) error {
+	done := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		server.Stop()
+		return xerrors.Wrap(ctx.Err(), "shutdown callback grpc")
 	}
 }

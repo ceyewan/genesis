@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -17,12 +20,14 @@ import (
 	"github.com/ceyewan/genesis/examples/observability/internal/proto"
 	"github.com/ceyewan/genesis/mq"
 	"github.com/ceyewan/genesis/trace"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 const (
-	natsEndpoint   = "nats://localhost:4222"
-	orderSubject   = "orders.created"
-	callbackTarget = "localhost:9091"
+	natsEndpoint    = "nats://localhost:4222"
+	orderSubject    = "orders.created"
+	callbackTarget  = "localhost:9091"
+	shutdownTimeout = 10 * time.Second
 )
 
 func getenv(key, def string) string {
@@ -39,52 +44,68 @@ type orderCreatedEvent struct {
 	ProductID string `json:"product_id"`
 }
 
-func fatalAndExit(logger clog.Logger, msg string, fields ...clog.Field) {
-	logger.Fatal(msg, fields...)
-	_ = logger.Close()
-	os.Exit(1)
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
 
-func main() {
-	ctx := context.Background()
+func run() (retErr error) {
+	appCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 
-	obs, shutdowns, err := bootstrap.Init(ctx, "obs-task", 9103)
+	obs, err := bootstrap.Init("obs-task", 9103)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	for i := len(shutdowns) - 1; i >= 0; i-- {
-		defer func(fn bootstrap.Shutdown) { _ = fn(ctx) }(shutdowns[i])
-	}
+	defer func() {
+		if retErr != nil {
+			obs.Logger.Fatal("Task stopped with error", clog.Error(retErr))
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		retErr = xerrors.Combine(retErr, obs.Shutdown(shutdownCtx))
+	}()
 
-	natsConn, err := connector.NewNATS(&connector.NATSConfig{URL: getenv("NATS_URL", natsEndpoint)}, connector.WithLogger(obs.Logger))
+	natsConn, err := connector.NewNATS(
+		&connector.NATSConfig{URL: getenv("NATS_URL", natsEndpoint)},
+		connector.WithLogger(obs.Logger),
+	)
 	if err != nil {
-		fatalAndExit(obs.Logger, "new nats connector failed", clog.Error(err))
+		return xerrors.Wrap(err, "new nats connector")
 	}
 	defer func() { _ = natsConn.Close() }()
-	if err := natsConn.Connect(ctx); err != nil {
-		fatalAndExit(obs.Logger, "connect nats failed", clog.Error(err))
+	if err := natsConn.Connect(appCtx); err != nil {
+		return xerrors.Wrap(err, "connect nats")
 	}
 
-	mqClient, err := mq.New(&mq.Config{Driver: mq.DriverNATSJetStream}, mq.WithNATSConnector(natsConn), mq.WithLogger(obs.Logger), mq.WithMeter(obs.Meter))
+	mqClient, err := mq.New(
+		&mq.Config{Driver: mq.DriverNATSJetStream, JetStream: &mq.JetStreamConfig{AutoCreateStream: true}},
+		mq.WithNATSConnector(natsConn),
+		mq.WithLogger(obs.Logger),
+		mq.WithMeter(obs.Meter),
+	)
 	if err != nil {
-		fatalAndExit(obs.Logger, "new mq failed", clog.Error(err))
+		return xerrors.Wrap(err, "new mq")
 	}
 	defer func() { _ = mqClient.Close() }()
 
-	cbConn, err := grpc.NewClient(
+	callbackConn, err := grpc.NewClient(
 		getenv("GATEWAY_CALLBACK_TARGET", callbackTarget),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(trace.GRPCClientStatsHandler()),
 	)
 	if err != nil {
-		fatalAndExit(obs.Logger, "connect callback grpc failed", clog.Error(err))
+		return xerrors.Wrap(err, "create callback grpc client")
 	}
-	defer func() { _ = cbConn.Close() }()
-	cbClient := proto.NewGatewayCallbackServiceClient(cbConn)
-
+	defer func() { _ = callbackConn.Close() }()
+	callbackClient := proto.NewGatewayCallbackServiceClient(callbackConn)
 	tracer := otel.Tracer("obs-task")
 
-	sub, err := mqClient.Subscribe(ctx, orderSubject, func(msg mq.Message) error {
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	subscription, err := mqClient.Subscribe(workerCtx, orderSubject, func(msg mq.Message) error {
 		consumeCtx, consumeSpan := trace.StartConsumerSpanFromHeaders(
 			msg.Context(),
 			tracer,
@@ -100,49 +121,50 @@ func main() {
 		)
 		defer consumeSpan.End()
 
-		ev := orderCreatedEvent{}
-		if err := json.Unmarshal(msg.Data(), &ev); err != nil {
+		event := orderCreatedEvent{}
+		if err := json.Unmarshal(msg.Data(), &event); err != nil {
 			trace.MarkSpanError(consumeSpan, err)
-			obs.Logger.ErrorContext(consumeCtx, "unmarshal order event failed", clog.Error(err))
+			obs.Logger.ErrorContext(consumeCtx, "Unmarshal order event failed", clog.Error(err))
 			return err
 		}
 		consumeSpan.SetAttributes(
-			attribute.String("order.id", ev.OrderID),
-			attribute.String("order.user_id", ev.UserID),
-			attribute.String("order.product_id", ev.ProductID),
+			attribute.String("order.id", event.OrderID),
+			attribute.String("order.user_id", event.UserID),
+			attribute.String("order.product_id", event.ProductID),
 		)
 
-		handledCtx, span := tracer.Start(consumeCtx, "task.handle_order_created")
-		defer span.End()
-
-		obs.Logger.InfoContext(handledCtx, "task received order event",
-			clog.String("order_id", ev.OrderID),
-			clog.String("user_id", ev.UserID),
-			clog.String("product_id", ev.ProductID),
+		handledCtx, handleSpan := tracer.Start(consumeCtx, "task.handle_order_created")
+		defer handleSpan.End()
+		obs.Logger.InfoContext(handledCtx, "Task received order event",
+			clog.String("order_id", event.OrderID),
+			clog.String("user_id", event.UserID),
+			clog.String("product_id", event.ProductID),
 		)
 
 		time.Sleep(30 * time.Millisecond)
-
-		_, err := cbClient.PushResult(handledCtx, &proto.PushResultRequest{
-			Result: &proto.OrderResult{
-				OrderId: ev.OrderID,
-				Status:  "DONE",
-			},
+		_, err := callbackClient.PushResult(handledCtx, &proto.PushResultRequest{
+			Result: &proto.OrderResult{OrderId: event.OrderID, Status: "DONE"},
 		})
 		if err != nil {
-			obs.Logger.ErrorContext(handledCtx, "push result to gateway failed", clog.Error(err))
+			obs.Logger.ErrorContext(handledCtx, "Push result to gateway failed", clog.Error(err))
+			trace.MarkSpanError(handleSpan, err)
 			trace.MarkSpanError(consumeSpan, err)
 			return err
 		}
 
-		obs.Logger.InfoContext(handledCtx, "task pushed result to gateway", clog.String("order_id", ev.OrderID))
+		obs.Logger.InfoContext(handledCtx, "Task pushed result to gateway", clog.String("order_id", event.OrderID))
 		return nil
-	}, mq.WithQueueGroup("order-task-workers"))
+	}, mq.WithQueueGroup("order-task-workers"), mq.WithAutoAck())
 	if err != nil {
-		fatalAndExit(obs.Logger, "subscribe failed", clog.Error(err))
+		return xerrors.Wrap(err, "subscribe")
 	}
-	defer func() { _ = sub.Unsubscribe() }()
+	defer func() { _ = subscription.Unsubscribe() }()
 
-	obs.Logger.Info("task worker started", clog.String("subject", orderSubject))
-	select {}
+	obs.Logger.Info("Task worker started", clog.String("subject", orderSubject))
+	<-appCtx.Done()
+	obs.Logger.Info("Task shutdown requested")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	return xerrors.Wrap(mqClient.Drain(shutdownCtx), "drain mq")
 }

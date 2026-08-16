@@ -4,11 +4,30 @@
 
 Genesis v1 tightens failure and lifecycle contracts. Most changes are source compatible, but the items below require caller review.
 
-The currently published preview of this contract is `v1.0.0-rc.1` at
-`ec5ad2c31fb4adce2bd42529e3d7fbfe92b23aa7`. The RC is immutable: later test
+The currently published preview of this contract is `v1.0.0-rc.2` at
+`f78d7860849019ae5a35c6473420b5e7db2269a0`. The RC is immutable: later test
 or documentation commits do not alter that module artifact. Production fixes
 require a separately approved and published RC, which consumers must select
 explicitly.
+
+## From v1.0.0-rc.2 to the next candidate
+
+The next pre-v1 candidate deliberately makes two observability API
+replacements:
+
+- `metrics.New` now accepts `...metrics.Option`, including
+  `metrics.WithLogger`. Existing direct calls such as `metrics.New(cfg)` remain
+  valid. Code that stores the constructor in a value with the exact type
+  `func(*metrics.Config) (metrics.Meter, error)` must update that function type.
+- `trace.AttrMessagingDestination`, `trace.AttrMessagingOperation`, and
+  `trace.AttrMessagingConsumerGroup` now contain the current OpenTelemetry
+  semantic-convention keys ending in `.name`. Instrumentation that requires
+  the retired keys must use explicit string attributes during migration.
+
+JetStream `AutoCreateStream` now installs a stable first-token subject scope
+for Genesis-managed streams. Concurrent application instances therefore apply
+the same stream subject configuration instead of racing with full-config
+updates that can remove another instance's topic.
 
 ## From v1.0.0-rc.1 to the RC2 candidate
 

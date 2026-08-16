@@ -34,7 +34,7 @@ func normalizeTracer(tracer oteltrace.Tracer) oteltrace.Tracer {
 }
 
 func messagingAttributes(meta MessagingMeta, attrs ...attribute.KeyValue) []attribute.KeyValue {
-	out := make([]attribute.KeyValue, 0, len(attrs)+4)
+	out := make([]attribute.KeyValue, 0, len(attrs)+5)
 	if meta.System != "" {
 		out = append(out, attribute.String(AttrMessagingSystem, meta.System))
 	}
@@ -42,7 +42,10 @@ func messagingAttributes(meta MessagingMeta, attrs ...attribute.KeyValue) []attr
 		out = append(out, attribute.String(AttrMessagingDestination, meta.Destination))
 	}
 	if meta.Operation != "" {
-		out = append(out, attribute.String(AttrMessagingOperation, meta.Operation))
+		out = append(out,
+			attribute.String(AttrMessagingOperation, meta.Operation),
+			attribute.String(AttrMessagingOperationType, messagingOperationType(meta.Operation)),
+		)
 	}
 	if meta.ConsumerGroup != "" {
 		out = append(out, attribute.String(AttrMessagingConsumerGroup, meta.ConsumerGroup))

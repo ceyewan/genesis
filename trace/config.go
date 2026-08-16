@@ -23,7 +23,7 @@ type Config struct {
 	Version string `mapstructure:"version" json:"version" yaml:"version"`
 	// InstanceID 是 OTel service.instance.id。
 	InstanceID string `mapstructure:"instance_id" json:"instance_id" yaml:"instance_id"`
-	// Environment 是 OTel deployment.environment。
+	// Environment 是 OTel deployment.environment.name。
 	Environment string `mapstructure:"environment" json:"environment" yaml:"environment"`
 	// Endpoint 是 OTLP gRPC collector 地址。
 	Endpoint string `mapstructure:"endpoint" json:"endpoint" yaml:"endpoint"`

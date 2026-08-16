@@ -26,7 +26,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -87,14 +87,7 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 		spanExporter = &reportingExporter{SpanExporter: exporter, errors: cfg.ExportErrors}
 	}
 
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceNameKey.String(cfg.ServiceName),
-			semconv.ServiceVersionKey.String(cfg.Version),
-			attribute.String("service.instance.id", cfg.InstanceID),
-			attribute.String("deployment.environment", cfg.Environment),
-		),
-	)
+	res, err := resource.New(ctx, resource.WithAttributes(resourceAttributes(cfg)...))
 	if err != nil {
 		return nil, xerrors.Wrap(err, "create resource")
 	}
@@ -115,15 +108,24 @@ func Init(cfg *Config) (func(context.Context) error, error) {
 
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+	installedPropagator := &ownedTextMapPropagator{TextMapPropagator: propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},
-	))
+	)}
+	otel.SetTextMapPropagator(installedPropagator)
 
-	return newTracerShutdown(tp), nil
+	return newTracerShutdown(tp, installedPropagator), nil
 }
 
-func newTracerShutdown(tp *sdktrace.TracerProvider) func(context.Context) error {
+type ownedTextMapPropagator struct {
+	propagation.TextMapPropagator
+}
+
+func newTracerShutdown(tp *sdktrace.TracerProvider, installedPropagators ...propagation.TextMapPropagator) func(context.Context) error {
+	var installedPropagator propagation.TextMapPropagator
+	if len(installedPropagators) > 0 {
+		installedPropagator = installedPropagators[0]
+	}
 	var shutdownOnce sync.Once
 	shutdownDone := make(chan struct{})
 	var shutdownErr error
@@ -139,6 +141,8 @@ func newTracerShutdown(tp *sdktrace.TracerProvider) func(context.Context) error 
 				shutdownErr = tp.Shutdown(shutdownCtx)
 				if otel.GetTracerProvider() == tp {
 					otel.SetTracerProvider(tracenoop.NewTracerProvider())
+				}
+				if installedPropagator != nil && otel.GetTextMapPropagator() == installedPropagator {
 					otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 						propagation.TraceContext{},
 						propagation.Baggage{},
@@ -153,6 +157,20 @@ func newTracerShutdown(tp *sdktrace.TracerProvider) func(context.Context) error 
 			return ctx.Err()
 		}
 	}
+}
+
+func resourceAttributes(cfg *Config) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{semconv.ServiceNameKey.String(cfg.ServiceName)}
+	if cfg.Version != "" {
+		attrs = append(attrs, semconv.ServiceVersionKey.String(cfg.Version))
+	}
+	if cfg.InstanceID != "" {
+		attrs = append(attrs, semconv.ServiceInstanceIDKey.String(cfg.InstanceID))
+	}
+	if cfg.Environment != "" {
+		attrs = append(attrs, semconv.DeploymentEnvironmentNameKey.String(cfg.Environment))
+	}
+	return attrs
 }
 
 type reportingExporter struct {

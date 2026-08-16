@@ -1,9 +1,9 @@
-# Genesis v1.0.0-rc.2 approved API replacements
+# Genesis pre-v1 approved API replacements
 
 This file is consumed by `make api-compat-check` together with
-`v1-api-compat-allowlist.md`. Every entry is the exact RC2 replacement for one
-reviewed RC1 signature. The check fails if an approved replacement is absent or
-drifts again.
+`v1-api-compat-allowlist.md`. Every entry is the exact approved pre-v1
+replacement for one reviewed RC1 signature. The check fails if an approved
+replacement is absent or drifts again.
 
 ## `breaker`
 
@@ -33,6 +33,10 @@ drifts again.
 - type: `type GeneratorConfig struct{Mode GeneratorMode "mapstructure:\"mode\" yaml:\"mode\" json:\"mode\""; WorkerID int64 "mapstructure:\"worker_id\" yaml:\"worker_id\" json:\"worker_id\""; DatacenterID int64 "mapstructure:\"datacenter_id\" yaml:\"datacenter_id\" json:\"datacenter_id\""}`
 - type: `type SequencerConfig struct{Driver DriverType "mapstructure:\"driver\" yaml:\"driver\" json:\"driver\""; KeyPrefix string "mapstructure:\"key_prefix\" yaml:\"key_prefix\" json:\"key_prefix\""; Step int64 "mapstructure:\"step\" yaml:\"step\" json:\"step\""; MaxValue int64 "mapstructure:\"max_value\" yaml:\"max_value\" json:\"max_value\""; TTL time.Duration "mapstructure:\"ttl\" yaml:\"ttl\" json:\"ttl\""}`
 
+## `metrics`
+
+- func: `func New(*Config, ...Option) (Meter, error)`
+
 ## `ratelimit`
 
 - type: `type Config struct{Driver DriverType "json:\"driver\" yaml:\"driver\" mapstructure:\"driver\""; Standalone *StandaloneConfig "json:\"standalone\" yaml:\"standalone\" mapstructure:\"standalone\""; Distributed *DistributedConfig "json:\"distributed\" yaml:\"distributed\" mapstructure:\"distributed\""}`
@@ -42,3 +46,9 @@ drifts again.
 ## `registry`
 
 - type: `type Config struct{Namespace string "mapstructure:\"namespace\" yaml:\"namespace\" json:\"namespace\""; DefaultTTL time.Duration "mapstructure:\"default_ttl\" yaml:\"default_ttl\" json:\"default_ttl\""; RetryInterval time.Duration "mapstructure:\"retry_interval\" yaml:\"retry_interval\" json:\"retry_interval\""; LeaseFailureBuffer int "mapstructure:\"lease_failure_buffer\" yaml:\"lease_failure_buffer\" json:\"lease_failure_buffer\""}`
+
+## `trace`
+
+- const: `const AttrMessagingConsumerGroup untyped string = "messaging.consumer.group.name"`
+- const: `const AttrMessagingDestination untyped string = "messaging.destination.name"`
+- const: `const AttrMessagingOperation untyped string = "messaging.operation.name"`

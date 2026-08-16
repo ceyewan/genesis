@@ -27,7 +27,7 @@ type Config struct {
 	ServiceName string `json:"service_name" yaml:"service_name" mapstructure:"service_name"` // OTel service.name
 	Version     string `json:"version" yaml:"version" mapstructure:"version"`                // OTel service.version
 	InstanceID  string `json:"instance_id" yaml:"instance_id" mapstructure:"instance_id"`    // OTel service.instance.id
-	Environment string `json:"environment" yaml:"environment" mapstructure:"environment"`    // OTel deployment.environment
+	Environment string `json:"environment" yaml:"environment" mapstructure:"environment"`    // OTel deployment.environment.name
 }
 
 // NewDevDefaultConfig 创建开发环境的默认日志配置

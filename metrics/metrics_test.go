@@ -152,6 +152,15 @@ func TestNewCopiesConfigAndShutdownIsConcurrentIdempotent(t *testing.T) {
 
 // TestNew 测试创建 Meter 实例
 func TestNew(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve metrics port: %v", err)
+	}
+	metricsPort := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release metrics port: %v", err)
+	}
+
 	tests := []struct {
 		name    string
 		cfg     *Config
@@ -194,12 +203,29 @@ func TestNew(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "full config",
+			name: "port without path",
 			cfg: &Config{
 				ServiceName: "test-service",
-				Version:     "v1.0.0",
 				Port:        9091,
+			},
+			wantErr: true,
+		},
+		{
+			name: "path without port",
+			cfg: &Config{
+				ServiceName: "test-service",
 				Path:        "/metrics",
+			},
+			wantErr: true,
+		},
+		{
+			name: "full config",
+			cfg: &Config{
+				ServiceName:   "test-service",
+				Version:       "v1.0.0",
+				ListenAddress: "127.0.0.1",
+				Port:          metricsPort,
+				Path:          "/metrics",
 			},
 			wantErr: false,
 		},

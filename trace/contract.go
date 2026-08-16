@@ -3,9 +3,10 @@ package trace
 const (
 	// Messaging 语义属性键
 	AttrMessagingSystem        = "messaging.system"
-	AttrMessagingDestination   = "messaging.destination"
-	AttrMessagingOperation     = "messaging.operation"
-	AttrMessagingConsumerGroup = "messaging.consumer.group"
+	AttrMessagingDestination   = "messaging.destination.name"
+	AttrMessagingOperation     = "messaging.operation.name"
+	AttrMessagingOperationType = "messaging.operation.type"
+	AttrMessagingConsumerGroup = "messaging.consumer.group.name"
 )
 
 const (
@@ -19,6 +20,19 @@ const (
 	MessagingOperationConsume = "consume"
 	MessagingOperationProcess = "process"
 )
+
+func messagingOperationType(operation string) string {
+	switch operation {
+	case MessagingOperationPublish:
+		return "send"
+	case MessagingOperationConsume:
+		return "receive"
+	case MessagingOperationProcess:
+		return "process"
+	default:
+		return operation
+	}
+}
 
 // MessagingTraceRelation 表示消费者 Span 与上游消息 Span 的关系建模方式
 type MessagingTraceRelation string

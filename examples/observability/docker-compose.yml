@@ -13,6 +13,9 @@ services:
       - "9101:9101"   # Prometheus Metrics
     environment:
       - OTLP_ENDPOINT=tempo:4317
+      - OTLP_INSECURE=true
+      - DEPLOYMENT_ENVIRONMENT=demo
+      - SERVICE_VERSION=dev
       - LOGIC_GRPC_TARGET=logic:9090
       - GATEWAY_CALLBACK_GRPC_ADDR=:9091
     depends_on:
@@ -35,6 +38,9 @@ services:
       - "9102:9102"   # Prometheus Metrics
     environment:
       - OTLP_ENDPOINT=tempo:4317
+      - OTLP_INSECURE=true
+      - DEPLOYMENT_ENVIRONMENT=demo
+      - SERVICE_VERSION=dev
       - NATS_URL=nats://nats:4222
       - LOGIC_GRPC_ADDR=:9090
       - SQLITE_PATH=/data/logic.sqlite
@@ -59,6 +65,9 @@ services:
       - "9103:9103"   # Prometheus Metrics
     environment:
       - OTLP_ENDPOINT=tempo:4317
+      - OTLP_INSECURE=true
+      - DEPLOYMENT_ENVIRONMENT=demo
+      - SERVICE_VERSION=dev
       - NATS_URL=nats://nats:4222
       - GATEWAY_CALLBACK_TARGET=gateway:9091
     depends_on:
@@ -71,11 +80,12 @@ services:
       - demo-network
 
   # ============================================================================
-  # 0.1 Message Queue: NATS Core
+  # 0.1 Message Queue: NATS JetStream
   # ============================================================================
   nats:
     image: nats:2.12.4-alpine
     container_name: demo-nats
+    command: ["-js"]
     ports:
       - "4222:4222"
     networks:

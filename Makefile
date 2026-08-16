@@ -7,6 +7,11 @@ GOLANGCI_LINT_VERSION ?= 2.12.2
 GOLANGCI_LINT_VERSION_NORMALIZED := $(patsubst v%,%,$(GOLANGCI_LINT_VERSION))
 MARKDOWNLINT_CLI2_VERSION ?= 0.18.1
 
+# example-all is used by CI and must contain only self-terminating examples.
+# Scenario examples that require a development stack or intentionally run as a
+# service are invoked explicitly with make example-<name>.
+CI_EXAMPLES := auth breaker cache clog config connector db dlock grpc-registry idem idgen mq ratelimit registry xerrors
+
 help:
 	@echo "Genesis 开发环境"
 	@echo ""
@@ -150,12 +155,10 @@ example-%:
 	@echo "运行 $* 示例..."
 	@cd examples/$* && go run main.go
 
-# 一键运行所有示例
+# 运行可自行结束的 CI 示例
 example-all:
-	@echo "运行所有示例..."
-	for d in examples/*; do \
-		if [ -f "$$d/main.go" ]; then \
-			echo "运行 $$(basename $$d) 示例..."; \
-			(cd "$$d" && go run main.go) || exit 1; \
-		fi; \
+	@echo "运行可在 CI 中完成的独立示例..."
+	@for name in $(CI_EXAMPLES); do \
+		echo "运行 $$name 示例..."; \
+		(cd "examples/$$name" && go run main.go) || exit 1; \
 	done
