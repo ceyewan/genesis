@@ -207,7 +207,7 @@ func (t *natsJetStreamTransport) ensureStream(ctx context.Context, topic string)
 	// Stream 不存在，创建新 Stream
 	_, err = t.js.CreateStream(ctx, jetstream.StreamConfig{
 		Name:      streamName,
-		Subjects:  []string{topic},
+		Subjects:  canonicalStreamSubjects(nil, topic),
 		Retention: natsRetention(t.cfg.Retention),
 		Storage:   natsStorage(t.cfg.Storage),
 		MaxAge:    t.cfg.MaxAge,
@@ -240,23 +240,55 @@ func (t *natsJetStreamTransport) ensureStreamSubject(
 	if err != nil {
 		return xerrors.Wrap(err, "get stream info failed")
 	}
-	for _, subject := range info.Config.Subjects {
-		if subject == topic || matchesWildcard(subject, topic) {
-			return nil
-		}
+	if streamSubjectsCoverTopic(info.Config.Subjects, topic) {
+		return nil
 	}
 
-	// 使用原有配置的全量拷贝，只修改 Subjects，避免覆盖运维配置的保留策略。
+	// Genesis 按 topic 的第一段共享 Stream。为同一业务域安装稳定的精确根
+	// subject 和 tail wildcard，使所有实例计算出相同的目标配置，避免并发
+	// read-modify-write 时以 last-write-wins 的方式移除另一个实例的 topic。
+	// 其他业务域的 subject 和所有非 subject 运维配置保持不变。
 	updatedConfig := info.Config
-	updatedConfig.Subjects = append(updatedConfig.Subjects, topic)
+	updatedConfig.Subjects = canonicalStreamSubjects(updatedConfig.Subjects, topic)
 	if _, err := t.js.UpdateStream(ctx, updatedConfig); err != nil {
-		return xerrors.Wrapf(err, "update stream %s to add subject %s failed", streamName, topic)
+		return xerrors.Wrapf(err, "update stream %s to cover subject %s failed", streamName, topic)
 	}
-	t.logger.Info("Added subject to existing stream",
+	t.logger.Info("Updated stream subject scope",
 		clog.String("stream", streamName),
 		clog.String("subject", topic),
 	)
 	return nil
+}
+
+func streamSubjectsCoverTopic(subjects []string, topic string) bool {
+	for _, subject := range subjects {
+		if subject == topic || matchesWildcard(subject, topic) {
+			return true
+		}
+	}
+	return false
+}
+
+// canonicalStreamSubjects returns a stable subject scope for the first token
+// used by getStreamName. A root subject and its tail wildcard do not overlap in
+// NATS: "orders" matches the root while "orders.>" matches nested subjects.
+// Replacing exact same-domain subjects with this pair makes concurrent updates
+// idempotent across processes while preserving unrelated subjects on an
+// operator-managed stream.
+func canonicalStreamSubjects(existing []string, topic string) []string {
+	root := strings.Split(topic, ".")[0]
+	if root == ">" {
+		return []string{">"}
+	}
+
+	canonical := make([]string, 0, len(existing)+2)
+	for _, subject := range existing {
+		if strings.Split(subject, ".")[0] != root {
+			canonical = append(canonical, subject)
+		}
+	}
+	canonical = append(canonical, root, root+".>")
+	return canonical
 }
 
 func natsRetention(retention StreamRetention) jetstream.RetentionPolicy {

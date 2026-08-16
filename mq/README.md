@@ -51,7 +51,7 @@ if err := q.Publish(ctx, "orders.created", []byte(`{"id": 123}`),
 ```
 
 JetStream 下 `Publish` 只有在 broker 返回 `PubAck` 后才返回 nil；它不是“只写入客户端 socket 即成功”。退出时可用 `q.Drain(ctx)` 停止新投递并等待已交付 Handler 完成。`Close()` 使用 5 秒上限强制停止，适合作为兜底清理。
-开启 `AutoCreateStream` 后，发布端和订阅端都会在首次使用 topic 时确保 Stream 存在；生产环境仍建议关闭并由运维预创建。
+开启 `AutoCreateStream` 后，发布端和订阅端都会在首次使用 topic 时确保 Stream 存在。Genesis 按 topic 第一段共享自动创建的 Stream，并使用稳定的根 subject 与 tail wildcard（例如 `orders`、`orders.>`）覆盖同一业务域，避免多实例并发添加精确 subject 时互相覆盖。生产环境仍建议关闭并由运维预创建。
 
 ### Redis Stream
 
@@ -155,7 +155,7 @@ handler = mq.Chain(
 | `MaxBytes` | `int64` | `0`（服务端不限） | 新建 Stream 的最大字节数 |
 | `Replicas` | `int` | `1` | 新建 Stream 的副本数，范围 1–5 |
 
-这些 Stream 字段只用于 Genesis 自动创建的新 Stream。若 Stream 已存在，Genesis 只在需要时补充 subject，不覆盖其运维配置。生产环境建议关闭 `AutoCreateStream` 并预建 Stream。
+这些 Stream 字段只用于 Genesis 自动创建的新 Stream。若 Stream 已存在，Genesis 只在需要时把当前业务域的精确 subject 归一化为稳定的根 subject 与 tail wildcard，不覆盖其他业务域 subject 或其余运维配置。生产环境建议关闭 `AutoCreateStream` 并预建 Stream。
 
 ### RedisStreamConfig
 

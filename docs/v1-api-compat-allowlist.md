@@ -1,8 +1,18 @@
-# Genesis v1.0.0-rc.1 compatibility exceptions
+# Genesis pre-v1 compatibility exceptions
 
 This file is consumed by `make api-compat-check`. Every entry is the exact
-RC1 signature that a reviewed RC2 contract change replaces. Stale entries fail
-the check and must be removed.
+RC1 signature that a reviewed pre-v1 contract change replaces. Stale entries
+fail the check and must be removed.
+
+After RC2, `metrics.New` gains the same functional-option shape used by the
+other Genesis component constructors so applications can inject the shared
+logger. The direct `metrics.New(cfg)` call remains valid, but the exact Go
+function type changes and is therefore recorded as an approved pre-v1 break.
+
+The three exported messaging attribute constants move from the retired
+OpenTelemetry messaging keys to the current semantic-convention names. Their
+constant values are part of the exported API, so the replacements are recorded
+explicitly instead of being hidden by a regenerated inventory.
 
 The `breaker`, `cache`, `clog`, `dlock`, `idem`, `idgen`, `ratelimit`, and `registry` config
 types below gain explicit `mapstructure` tags. This makes the documented
@@ -42,6 +52,10 @@ literals.
 - type: `type GeneratorConfig struct{Mode GeneratorMode "yaml:\"mode\" json:\"mode\""; WorkerID int64 "yaml:\"worker_id\" json:\"worker_id\""; DatacenterID int64 "yaml:\"datacenter_id\" json:\"datacenter_id\""}`
 - type: `type SequencerConfig struct{Driver DriverType "yaml:\"driver\" json:\"driver\""; KeyPrefix string "yaml:\"key_prefix\" json:\"key_prefix\""; Step int64 "yaml:\"step\" json:\"step\""; MaxValue int64 "yaml:\"max_value\" json:\"max_value\""; TTL time.Duration "yaml:\"ttl\" json:\"ttl\""}`
 
+## `metrics`
+
+- func: `func New(*Config) (Meter, error)`
+
 ## `ratelimit`
 
 - type: `type Config struct{Driver DriverType "json:\"driver\" yaml:\"driver\""; Standalone *StandaloneConfig "json:\"standalone\" yaml:\"standalone\""; Distributed *DistributedConfig "json:\"distributed\" yaml:\"distributed\""}`
@@ -51,3 +65,9 @@ literals.
 ## `registry`
 
 - type: `type Config struct{Namespace string "yaml:\"namespace\" json:\"namespace\""; DefaultTTL time.Duration "yaml:\"default_ttl\" json:\"default_ttl\""; RetryInterval time.Duration "yaml:\"retry_interval\" json:\"retry_interval\""; LeaseFailureBuffer int "yaml:\"lease_failure_buffer\" json:\"lease_failure_buffer\""}`
+
+## `trace`
+
+- const: `const AttrMessagingConsumerGroup untyped string = "messaging.consumer.group"`
+- const: `const AttrMessagingDestination untyped string = "messaging.destination"`
+- const: `const AttrMessagingOperation untyped string = "messaging.operation"`

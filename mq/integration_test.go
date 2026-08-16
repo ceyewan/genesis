@@ -455,8 +455,78 @@ func TestJetStreamAutoCreateOnPublishIntegration(t *testing.T) {
 	require.NoError(t, err)
 	info, err := stream.Info(ctx)
 	require.NoError(t, err)
-	require.Contains(t, info.Config.Subjects, subject)
+	require.True(t, streamSubjectsCoverTopic(info.Config.Subjects, subject))
 	require.Equal(t, uint64(1), info.State.Msgs)
+}
+
+func TestJetStreamAutoCreateConcurrentDomainTopicsIntegration(t *testing.T) {
+	kit := testkit.NewKit(t)
+	natsConn := testkit.NewNATSContainerConnector(t)
+	cfg := &Config{
+		Driver: DriverNATSJetStream,
+		JetStream: &JetStreamConfig{
+			AutoCreateStream: true,
+			Storage:          StreamStorageMemory,
+		},
+	}
+	newClient := func() MQ {
+		client, err := New(cfg,
+			WithNATSConnector(natsConn),
+			WithLogger(kit.Logger),
+			WithMeter(kit.Meter),
+		)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = client.Close() })
+		return client
+	}
+	firstClient := newClient()
+	secondClient := newClient()
+
+	ctx, cancel := testkit.NewContext(t, 15*time.Second)
+	defer cancel()
+	root := "t" + testkit.NewID()
+	transport := firstClient.(*mq).transport.(*natsJetStreamTransport)
+	_, err := transport.js.CreateStream(ctx, jetstream.StreamConfig{
+		Name:     transport.getStreamName(root + ".seed"),
+		Subjects: []string{root + ".seed"},
+		Storage:  jetstream.MemoryStorage,
+		Replicas: 1,
+	})
+	require.NoError(t, err)
+
+	const topicCount = 16
+	topics := make([]string, topicCount)
+	start := make(chan struct{})
+	errorsByTopic := make(chan error, topicCount)
+	var publishers sync.WaitGroup
+	for i := range topicCount {
+		topics[i] = fmt.Sprintf("%s.event-%d", root, i)
+		client := firstClient
+		if i%2 == 1 {
+			client = secondClient
+		}
+		topic := topics[i]
+		publishers.Go(func() {
+			<-start
+			errorsByTopic <- client.Publish(ctx, topic, []byte(topic))
+		})
+	}
+	close(start)
+	publishers.Wait()
+	close(errorsByTopic)
+	for publishErr := range errorsByTopic {
+		require.NoError(t, publishErr)
+	}
+
+	stream, err := transport.js.Stream(ctx, transport.getStreamName(topics[0]))
+	require.NoError(t, err)
+	info, err := stream.Info(ctx)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{root, root + ".>"}, info.Config.Subjects)
+	for _, topic := range topics {
+		require.Truef(t, streamSubjectsCoverTopic(info.Config.Subjects, topic),
+			"stream subjects %v do not cover %s", info.Config.Subjects, topic)
+	}
 }
 
 func TestJetStreamMaxDeliverIntegration(t *testing.T) {
