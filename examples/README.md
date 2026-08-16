@@ -54,9 +54,15 @@ make examples
 make example-cache      # 运行缓存示例
 make example-dlock      # 运行分布式锁示例
 
-# 运行所有示例
+# 运行所有可自行结束的 CI 示例
 make example-all
 ```
+
+`example-all` 不会启动外部服务，也不会运行场景型或常驻服务；现有组件示例若缺少
+可选后端，会输出连接失败提示后自行结束。场景型示例需要按各自 README 单独执行：
+`async-task`、`cached-query` 和 `grpc-governance` 先运行 `make up`；
+`resilient-service` 是可交互的常驻服务，使用 `make example-resilient-service` 启动后通过
+终端中显示的命令验证。
 
 ### 直接运行示例
 
