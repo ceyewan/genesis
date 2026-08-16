@@ -1,6 +1,8 @@
 # Genesis 使用示例
 
-本目录包含了 Genesis 所有组件的使用示例。每个示例都是一个完整的、可运行的程序，展示如何正确使用 Genesis 组件。
+本目录包含 Genesis 的组件示例和场景型示例。组件示例分别展示单个组件的推荐用法；
+场景型示例展示多个组件在一条真实服务链路中的组合方式。尚处于设计阶段的场景会
+明确标注，不应视为已经可以运行。
 
 ## 📖 示例列表
 
@@ -30,6 +32,15 @@
 - **[breaker](./breaker/)** - 熔断器示例（包含 gRPC 测试）
 - **[registry](./registry/)** - 服务注册发现示例
 - **[grpc-registry](./grpc-registry/)** - gRPC 服务注册发现示例
+
+### 场景型示例
+
+- **[核心场景设计总览](./scenarios/)** - 融合型案例的范围、职责和实施顺序
+- **[observability](./observability/)** - HTTP、gRPC、DB、MQ 的全栈可观测性闭环
+- **[resilient-service](./resilient-service/)** - 限流、幂等与 gRPC 熔断的组合设计
+- **[async-task](./async-task/)** - JetStream、幂等消费与重复投递
+- **[cached-query](./cached-query/)** - SQLite、Cache 与缓存重建锁
+- **[grpc-governance](./grpc-governance/)** - Etcd 服务发现与 gRPC 熔断
 
 ## 🚀 运行示例
 
