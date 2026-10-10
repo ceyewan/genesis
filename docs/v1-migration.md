@@ -4,16 +4,15 @@
 
 Genesis v1 tightens failure and lifecycle contracts. Most changes are source compatible, but the items below require caller review.
 
-The currently published preview of this contract is `v1.0.0-rc.2` at
-`f78d7860849019ae5a35c6473420b5e7db2269a0`. The RC is immutable: later test
+The currently published preview of this contract is `v1.0.0-rc.3` at
+`285d5647f903dcdb4f4d2b71f138624f5db8da64`. The RC is immutable: later test
 or documentation commits do not alter that module artifact. Production fixes
 require a separately approved and published RC, which consumers must select
 explicitly.
 
-## From v1.0.0-rc.2 to the next candidate
+## From v1.0.0-rc.2 to v1.0.0-rc.3
 
-The next pre-v1 candidate deliberately makes two observability API
-replacements:
+RC3 deliberately makes two observability API replacements:
 
 - `metrics.New` now accepts `...metrics.Option`, including
   `metrics.WithLogger`. Existing direct calls such as `metrics.New(cfg)` remain
