@@ -1,4 +1,4 @@
-.PHONY: help up down test test-race lint lint-tool-check markdown-check modernize modernize-check clean logs status examples examples-check example-all buf-lint api-inventory api-inventory-check api-baseline-check api-compat-check exported-comments godoc-artifacts
+.PHONY: check help up down test test-race lint lint-tool-check markdown-check modernize modernize-check clean logs status examples examples-check example-all buf-lint api-inventory api-inventory-check api-baseline-check api-compat-check exported-comments godoc-artifacts
 
 DEV_COMPOSE_FILE := deploy/dev/docker-compose.yml
 BUF_DIR := examples
@@ -12,10 +12,13 @@ MARKDOWNLINT_CLI2_VERSION ?= 0.18.1
 # service are invoked explicitly with make example-<name>.
 CI_EXAMPLES := auth breaker cache clog config connector db dlock grpc-registry idem idgen mq ratelimit registry xerrors
 
+check: test lint modernize-check api-inventory-check api-compat-check markdown-check examples-check
+
 help:
 	@echo "Genesis 开发环境"
 	@echo ""
 	@echo "使用方法:"
+	@echo "  make check     - 运行日常代码、API 与文档检查"
 	@echo "  make up        - 启动所有开发服务"
 	@echo "  make down      - 停止所有开发服务"
 	@echo "  make test      - 运行测试"
@@ -42,7 +45,7 @@ down:
 	@docker compose -f $(DEV_COMPOSE_FILE) down
 test:
 	@echo "运行测试..."
-	@go test ./...
+	@go test -count=1 ./...
 
 test-race:
 	@echo "运行 race tests..."

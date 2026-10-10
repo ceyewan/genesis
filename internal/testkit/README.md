@@ -130,4 +130,4 @@ func TestPersistentSQLite(t *testing.T) {
 相关入口：
 
 - `go doc -all ./internal/testkit`
-- [项目测试约束](../../README.md#测试约束)
+- [项目开发与测试约束](../../docs/development.md#测试与资源)

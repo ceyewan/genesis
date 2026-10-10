@@ -1,57 +1,31 @@
 # Genesis 文档
 
-- [v1 API 与生命周期决策](./v1-api-decisions.md)
-- [v0.5.0 到 v1.0.0 迁移说明](./v1-migration.md)
-- [v1 导出 API 清单](./v1-api-inventory.md)
-- [RC1 到 RC2 获批 API removals](./v1-api-compat-removals.md)
-- [v1.0.0-rc.1 验收证据](./v1-rc1-evidence.md)
-- [v1.0.0-rc.1 契约加固与消费者风险清单](./v1-rc1-contract-hardening.md)
-- [v1.0.0-rc.2 发布流程](./v1-rc2-release-process.md)
-- [v1.0.0-rc.2 候选证据](./v1-rc2-evidence.md)
-- [v1.0.0-rc.2 Release Notes（草稿）](./v1-rc2-release-notes.md)
-- [v1 后端与工具链兼容矩阵](./v1-compatibility.md)
-- [v1 安全与依赖治理政策](./v1-security-and-dependencies.md)
+## 日常使用
 
-本文档目录包含 Genesis 项目的设计文档和规范。
+- [总体设计](./design.md)
+- [开发指南](./development.md)
+- [发布流程](./release.md)
+- [组件与使用示例](../examples/README.md)
+- [内部测试工具](../internal/testkit/README.md)
 
-## 文档列表
+组件的配置与接口以各包 README、GoDoc 和测试为准，不再维护第二套博客式使用入口。
 
-- [v0.6.0 开发计划](./v0.6.0-plan.md) - v0.6.0 体验优化任务清单（P0–P3 优先级）
-- [架构设计](./genesis-design.md) - Genesis 的总体架构设计和核心理念
-- [组件文档审计规范](./component-doc-audit-guide.md) - `go doc`、README 与组件 blog 的统一审计标准
-- [Auth 设计与 JWT 原理](./genesis-auth-blog.md) - Auth 组件设计、JWT 底层机制与认证扩展方案
-- [Breaker 设计与实现](./genesis-breaker-blog.md) - 服务级熔断、状态迁移与 gRPC 客户端降级策略
-- [Cache 设计与实现](./genesis-cache-blog.md) - Cache 双驱动架构、TTL/序列化策略与实践建议
-- [CLog 设计与实践](./genesis-clog-blog.md) - 统一日志抽象、上下文透传与命名空间分层
-- [Config 设计与实践](./genesis-config-blog.md) - 多源配置加载、解码策略与运行时治理
-- [Connector 设计与实现](./genesis-connector-blog.md) - 连接器生命周期管理与多后端统一接入
-- [DB 设计与实现](./genesis-db-blog.md) - DB 组件初始化流水线、事务模型与分库分表实践
-- [DLock 设计与实现](./genesis-dlock-blog.md) - Redis/Etcd 双后端分布式锁、续期机制与所有权保护
-- [IDGen 设计与实现](./genesis-idgen-blog.md) - 序列号与雪花 ID 生成机制、边界与选型建议
-- [Idem 设计与实现](./genesis-idem-blog.md) - 幂等执行、消息去重与 Gin/gRPC 集成策略
-- [Metrics 设计与取舍](./genesis-metrics-blog.md) - 全局指标组件、Prometheus 暴露与 HTTP/gRPC RED 埋点
-- [MQ 设计与实践](./genesis-mq-blog.md) - NATS/Redis Stream/Kafka 对比、消费者组与死信策略
-- [Observability 全栈实践](./genesis-observability-blog.md) - 基于 OpenTelemetry 的 LGTM 栈集成与 Trace/Log 联动
-- [RateLimit 核心原理](./genesis-ratelimit-blog.md) - 令牌桶算法、单机/分布式实现与接入语义
-- [Registry 核心原理](./genesis-registry-blog.md) - 服务注册发现、Watch 增量同步与 gRPC Resolver 机制
-- [Trace 设计与取舍](./genesis-trace-blog.md) - 全局链路追踪初始化、传播与 MQ 关系建模
-- [XErrors 设计与取舍](./genesis-xerrors-blog.md) - 轻量错误封装、错误链兼容与能力边界
-- [Internal Testkit](../internal/testkit/README.md) - 仓库内部测试基础设施、Testcontainers 容器与生命周期约定
+## API 契约
 
-## 架构概览
+以下资料仍用于兼容性检查和升级，不属于可删除的发布过程文档：
 
-Genesis 采用四层扁平化架构：
+- [API 与生命周期决策](./v1-api-decisions.md)
+- [迁移说明](./v1-migration.md)
+- [当前导出 API 清单](./v1-api-inventory.md)
+- [RC1 API 基线](./api-baselines/v1.0.0-rc.1.md)
+- [兼容性例外](./v1-api-compat-allowlist.md)
+- [预期接口变化](./v1-api-compat-expected.md)
+- [批准删除的接口](./v1-api-compat-removals.md)
+- [后端与工具链兼容矩阵](./v1-compatibility.md)
+- [安全与依赖治理](./v1-security-and-dependencies.md)
 
-| 层次                        | 核心组件                                        | 职责                         |
-| :-------------------------- | :---------------------------------------------- | :--------------------------- |
-| **Level 3: Governance**     | `auth`, `ratelimit`, `breaker`, `registry`      | 流量治理，身份认证，切面能力 |
-| **Level 2: Business**       | `cache`, `idgen`, `dlock`, `idem`, `mq`         | 业务能力封装                 |
-| **Level 1: Infrastructure** | `connector`, `db`                               | 连接管理，底层 I/O           |
-| **Level 0: Base**           | `clog`, `config`, `metrics`, `trace`, `xerrors` | 框架基石                     |
+## 历史资料
 
-## 相关链接
-
-- [项目主页](../README.md) - 返回项目主页
-- [架构分层](../README.md#架构分层) - 查看各层组件与职责
-- [使用示例](../examples/) - 查看代码示例
-- [内部测试辅助包](../internal/testkit/README.md) - 查看 Genesis 仓库测试 helper 和使用约束
+旧博客、计划和 RC 验收记录暂时保留原路径，以避免破坏已有链接。
+它们不再作为活跃文档入口或当前发布要求；准确发布状态见 GitHub Releases。
+历史版本的完整资料也可从对应 Git 标签查阅。
