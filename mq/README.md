@@ -53,6 +53,24 @@ if err := q.Publish(ctx, "orders.created", []byte(`{"id": 123}`),
 JetStream 下 `Publish` 只有在 broker 返回 `PubAck` 后才返回 nil；它不是“只写入客户端 socket 即成功”。退出时可用 `q.Drain(ctx)` 停止新投递并等待已交付 Handler 完成。`Close()` 使用 5 秒上限强制停止，适合作为兜底清理。
 开启 `AutoCreateStream` 后，发布端和订阅端都会在首次使用 topic 时确保 Stream 存在。Genesis 按 topic 第一段共享自动创建的 Stream，并使用稳定的根 subject 与 tail wildcard（例如 `orders`、`orders.>`）覆盖同一业务域，避免多实例并发添加精确 subject 时互相覆盖。生产环境仍建议关闭并由运维预创建。
 
+### Durable 启动与配置变更
+
+订阅启动时先读取已存在的 JetStream durable。Genesis 管理的配置等价时直接复用，
+不发送 consumer 更新请求；不存在时创建，创建竞争时重新读取并验证。
+只在 `AckWait`、`MaxDeliver` 或显式 `WithMaxInflight` 实际变化时执行 update-only。
+未设置 `WithMaxInflight` 时保留服务端/Stream 的有效值；描述、元数据、副本和其他运维字段不覆盖。
+`WithBatchSize` 仍只作用于本地订阅，不更新共享 durable。
+
+过滤主题、Ack 策略、初始投递策略/序列、push 模式或仅投递 headers 等不兼容配置会使
+订阅失败，不删除或重建消费者。重连时应使用原来的 `FromBeginning`、`FromLatest` 或
+`FromID` 设置；修改起点不会重置已有消费进度。运维 `BackOff` 与 Genesis 重试配置冲突时
+同样拒绝更新。需重置消费进度时，由调用者显式规划新的 durable 或运维迁移。
+
+NATS 2.10 首次创建时，内存对象与文件元数据的 `created` 时间戳可能相差微秒；
+首次文件恢复后以后者为准。不能仅凭精确时间戳差异判断消费者重建，还应检查 durable
+名称、配置与 delivered/ack-floor 序列。Genesis 不修改 broker 返回的时间戳。
+消息语义仍是 at-least-once，业务处理仍需幂等。
+
 ### Redis Stream
 
 ```go

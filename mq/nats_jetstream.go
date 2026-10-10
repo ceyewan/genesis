@@ -146,8 +146,8 @@ func (t *natsJetStreamTransport) Subscribe(ctx context.Context, topic string, ha
 		consumerCfg.MaxAckPending = opts.MaxInflight
 	}
 
-	// 创建或更新 Consumer
-	consumer, err := t.js.CreateOrUpdateConsumer(ctx, streamName, consumerCfg)
+	// 等价 durable 直接复用，避免无意义更新持久化元数据。
+	consumer, err := resolveJetStreamConsumer(ctx, t.js, streamName, consumerCfg)
 	if err != nil {
 		return nil, xerrors.Wrapf(err, "create consumer for %s failed", topic)
 	}
