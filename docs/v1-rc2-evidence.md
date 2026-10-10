@@ -1,8 +1,10 @@
 # Genesis v1.0.0-rc.2 candidate evidence
 
-Status: draft. This record describes the unpublished RC2 candidate. A field
-marked `Pending` is a release blocker or evidence that can exist only after
-publication; it is not an expected value.
+> 历史候选记录：`v1.0.0-rc.2` 已于 2026-08-10 发布，提交为
+> `f78d7860849019ae5a35c6473420b5e7db2269a0`。下文保留当时的候选过程，
+> `Pending` 不表示当前版本尚未发布，也不构成后续版本门禁。
+> 当前发布要求见[发布流程](./release.md)，实际状态见
+> [GitHub Release](https://github.com/ceyewan/genesis/releases/tag/v1.0.0-rc.2)。
 
 RC1 remains immutable at
 `ec5ad2c31fb4adce2bd42529e3d7fbfe92b23aa7`. Nothing in this candidate moves or
@@ -311,5 +313,5 @@ may be copied between manifests or inferred from a mutable tag:
 | Release-owner exit decision                   | Pending                                                     |
 
 RC2 publication, module adoption, and stable promotion are separate milestones.
-Stable-v1 promotion follows the reset and exit criteria in
-[the release process](./v1-rc2-release-process.md#6-proposed-rc2-observation-before-stable-v1).
+The observation criteria above belong to the historical RC2 proposal.
+Future releases follow [the current release process](./release.md).
