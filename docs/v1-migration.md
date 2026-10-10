@@ -29,6 +29,17 @@ for Genesis-managed streams. Concurrent application instances therefore apply
 the same stream subject configuration instead of racing with full-config
 updates that can remove another instance's topic.
 
+Durable subscription startup now reuses equivalent consumers without updating
+broker metadata. Only changed `AckWait`, `MaxDeliver`, and explicitly requested
+`MaxAckPending` are updated; operator-owned fields are preserved. Incompatible
+filters, ack policies, initial delivery policies/sequences, headers-only mode,
+or conflicting operator backoff fail instead of resetting consumer state.
+Keep the original start options when reopening an existing durable. An omitted
+`WithMaxInflight` preserves the effective broker value rather than resetting it.
+NATS 2.10 may report a microsecond-level `created` adjustment on the first file
+recovery because its initial in-memory and persisted timestamps differ; this
+alone is not proof of recreation. See [MQ startup semantics](../mq/README.md#durable-启动与配置变更).
+
 ## From v1.0.0-rc.1 to the RC2 candidate
 
 RC2 retains every RC1 exported sentinel name. Three unreachable sentinels are
