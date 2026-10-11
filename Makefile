@@ -53,7 +53,10 @@ test:
 # Explicit pure-package subset; never replaces ordinary/race integration gates.
 test-fast:
 	@go test -count=1 ./auth ./breaker ./clog ./config ./metrics ./trace ./xerrors ./internal/cmd/... ./examples/resilient-service
-	@go test -count=1 ./cache -run '^(TestLocal|TestMultiBackfillCannotOverwriteMutation|TestMultiAllowsDocumentedStaleTTL|Fuzz)'
+	@go test -count=1 ./cache -run '^(TestLocal|TestMultiBackfillCannotOverwriteMutation|TestMultiAllowsDocumentedStaleTTL|TestMultiCoordinationHonorsCancellation|TestMultiAlreadyCanceledContext|Fuzz)'
+	@go test -count=1 ./examples/cached-query -run '^(TestLocalConcurrentRebuild|TestRebuild)'
+	@go test -count=1 ./examples/grpc-governance -run '^TestDiscoveryRequiresConsecutiveSuccessfulCalls$$'
+	@go test -count=1 ./connector -run '^TestRedisTLSConfig'
 	@go test -count=1 ./idgen -run '^(TestGeneratorMetricsFailure|TestSequencerSubmillisecondTTLIsRejected|Fuzz)'
 	@go test -count=1 ./idem -run '^(TestInvalidCallbackAndTTLPrecedeStorage|TestConsumeZeroTTLStillUsesDefault)'
 

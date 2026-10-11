@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -66,10 +67,8 @@ func waitEvent(ctx context.Context, events <-chan registry.ServiceEvent, id stri
 }
 
 func waitCallSet(ctx context.Context, conn *grpc.ClientConn, wanted ...string) error {
-	remaining := make(map[string]bool, len(wanted))
-	for _, id := range wanted {
-		remaining[id] = true
-	}
+	seen := make(map[string]bool, len(wanted))
+	successes := 0
 	client := grpc_health_v1.NewHealthClient(conn)
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
@@ -78,13 +77,17 @@ func waitCallSet(ctx context.Context, conn *grpc.ClientConn, wanted ...string) e
 		var headers metadata.MD
 		_, err := client.Check(callCtx, &grpc_health_v1.HealthCheckRequest{}, grpc.Header(&headers))
 		cancel()
-		if err == nil {
-			for _, id := range headers.Get("instance-id") {
-				delete(remaining, id)
-			}
-			if len(remaining) == 0 {
+		ids := headers.Get("instance-id")
+		if err == nil && len(ids) == 1 && slices.Contains(wanted, ids[0]) {
+			seen[ids[0]] = true
+			successes++
+			// 要求连续成功的观察窗口，而不是偶然调用一次存活实例就通过。
+			if successes >= 5*len(wanted) && len(seen) == len(wanted) {
 				return nil
 			}
+		} else {
+			successes = 0
+			clear(seen)
 		}
 		select {
 		case <-ticker.C:
