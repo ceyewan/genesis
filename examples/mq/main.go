@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
 	"sync"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
-	"github.com/ceyewan/genesis/internal/testkit"
 	"github.com/ceyewan/genesis/mq"
 )
 
@@ -76,7 +76,7 @@ func initJetStream(ctx context.Context, logger clog.Logger) (mq.MQ, func(), erro
 
 // runDemo 运行演示场景
 func runDemo(ctx context.Context, mqClient mq.MQ, logger clog.Logger) {
-	id := testkit.NewID()
+	id := rand.Text()
 
 	// 场景一: 基础发布订阅
 	demoBasicPubSub(ctx, mqClient, logger, id)

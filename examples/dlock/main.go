@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"os"
 	"strings"
 	"time"
@@ -9,7 +10,6 @@ import (
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/dlock"
-	"github.com/ceyewan/genesis/internal/testkit"
 )
 
 func main() {
@@ -108,7 +108,7 @@ func initEtcd(ctx context.Context, logger clog.Logger) (dlock.Locker, func(), er
 }
 
 func runDemo(ctx context.Context, locker dlock.Locker, logger clog.Logger) {
-	key := "resource:" + testkit.NewID()
+	key := "resource:" + rand.Text()
 
 	logger.Info("尝试加锁", clog.String("key", key))
 	if err := locker.Lock(ctx, key); err != nil {
