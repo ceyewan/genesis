@@ -2,12 +2,15 @@ package cache
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/ceyewan/genesis/xerrors"
 )
 
 type multiCache struct {
+	// 协调同一 Multi 的写入/删除与读回填，不提供跨实例失效协议。
+	mu          sync.RWMutex
 	local       Local
 	remote      KV
 	localTTL    time.Duration
@@ -26,6 +29,8 @@ func newMulti(local Local, remote KV, cfg *MultiConfig) (Multi, error) {
 }
 
 func (c *multiCache) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if ttl < 0 {
 		return ErrInvalidTTL
 	}
@@ -39,6 +44,8 @@ func (c *multiCache) Set(ctx context.Context, key string, value any, ttl time.Du
 }
 
 func (c *multiCache) Get(ctx context.Context, key string, dest any) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	err := c.local.Get(ctx, key, dest)
 	if err == nil {
 		return nil
@@ -57,6 +64,8 @@ func (c *multiCache) Get(ctx context.Context, key string, dest any) error {
 }
 
 func (c *multiCache) Delete(ctx context.Context, key string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := c.remote.Delete(ctx, key); err != nil {
 		return err
 	}
@@ -67,6 +76,8 @@ func (c *multiCache) Delete(ctx context.Context, key string) error {
 }
 
 func (c *multiCache) Has(ctx context.Context, key string) (bool, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	ok, err := c.local.Has(ctx, key)
 	if err != nil {
 		if !c.failOpen {
@@ -80,6 +91,8 @@ func (c *multiCache) Has(ctx context.Context, key string) (bool, error) {
 }
 
 func (c *multiCache) Expire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if ttl < 0 {
 		return false, ErrInvalidTTL
 	}
