@@ -516,9 +516,11 @@ func setupNATSContainer(t *testing.T) (*nats.NATSContainer, *NATSConfig) {
 	container, err := nats.Run(ctx, "nats:2.10-alpine",
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("Server is ready").WithStartupTimeout(30*time.Second),
+			wait.ForListeningPort("4222/tcp").WithStartupTimeout(30*time.Second),
 		),
 	)
 	require.NoError(t, err, "Failed to start NATS container")
+	t.Cleanup(func() { require.NoError(t, container.Terminate(context.Background())) })
 
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
@@ -533,6 +535,15 @@ func setupNATSContainer(t *testing.T) (*nats.NATSContainer, *NATSConfig) {
 		ReconnectWait: 100 * time.Millisecond,
 	}
 
+	// ready 日志不保证宿主机转发与 NATS 握手已经可用。
+	require.Eventually(t, func() bool {
+		probe, err := natsgo.Connect(cfg.URL, natsgo.Timeout(time.Second))
+		if err != nil {
+			return false
+		}
+		defer probe.Close()
+		return probe.FlushTimeout(time.Second) == nil
+	}, 15*time.Second, 100*time.Millisecond, "NATS fixture protocol did not become ready")
 	return container, cfg
 }
 
@@ -542,8 +553,7 @@ func TestNATSConnectorIntegration(t *testing.T) {
 	}
 
 	t.Run("完整生命周期", func(t *testing.T) {
-		container, cfg := setupNATSContainer(t)
-		defer container.Terminate(context.Background())
+		_, cfg := setupNATSContainer(t)
 
 		conn, err := NewNATS(cfg, WithLogger(getTestLogger()))
 		require.NoError(t, err)
@@ -579,8 +589,7 @@ func TestNATSConnectorIntegration(t *testing.T) {
 	})
 
 	t.Run("NATS 发布订阅", func(t *testing.T) {
-		container, cfg := setupNATSContainer(t)
-		defer container.Terminate(context.Background())
+		_, cfg := setupNATSContainer(t)
 
 		conn, err := NewNATS(cfg, WithLogger(getTestLogger()))
 		require.NoError(t, err)
@@ -613,8 +622,7 @@ func TestNATSConnectorIntegration(t *testing.T) {
 	})
 
 	t.Run("NATS 连接状态检查", func(t *testing.T) {
-		container, cfg := setupNATSContainer(t)
-		defer container.Terminate(context.Background())
+		_, cfg := setupNATSContainer(t)
 
 		conn, err := NewNATS(cfg, WithLogger(getTestLogger()))
 		require.NoError(t, err)

@@ -33,6 +33,7 @@ func NewNATSContainer(t *testing.T) (*natscontainer.NATSContainer, *connector.NA
 	container, err := natscontainer.Run(ctx, "nats:2.10-alpine",
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("Server is ready").WithStartupTimeout(30*time.Second),
+			wait.ForListeningPort("4222/tcp").WithStartupTimeout(30*time.Second),
 		),
 	)
 	require.NoError(t, err, "failed to start NATS container")
@@ -48,12 +49,21 @@ func NewNATSContainer(t *testing.T) (*natscontainer.NATSContainer, *connector.NA
 		_ = container.Terminate(ctx)
 	})
 
-	return container, &connector.NATSConfig{
+	cfg := &connector.NATSConfig{
 		Name:          "testcontainer-nats",
 		URL:           "nats://" + host + ":" + mappedPort.Port(),
 		MaxReconnects: 10,
 		ReconnectWait: 100 * time.Millisecond,
 	}
+	require.Eventually(t, func() bool {
+		probe, err := nats.Connect(cfg.URL, nats.Timeout(time.Second))
+		if err != nil {
+			return false
+		}
+		defer probe.Close()
+		return probe.FlushTimeout(time.Second) == nil
+	}, 15*time.Second, 100*time.Millisecond, "NATS fixture protocol did not become ready")
+	return container, cfg
 }
 
 // NewNATSContainerConnector 使用 testcontainers 创建并连接 NATS 连接器。
