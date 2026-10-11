@@ -37,7 +37,7 @@
 
 | 编号 | 问题与范围 | 验收标准 | 状态 |
 | :--- | :--- | :--- | :--- |
-| H15 | Redis Connector 无 ACL Username 与 TLS 注入入口 | ACL 认证、可信 CA、主机名校验、错误证书/凭证、TLS 配置复制均测试；默认不变；API 清单更新 | 待处理 |
+| H15 | Redis Connector 无 ACL Username 与 TLS 注入入口 | ACL 认证、可信 CA、主机名校验、错误证书/凭证、TLS 配置复制均测试；默认不变；API 清单更新 | 已完成 |
 
 ## 不在本轮范围
 

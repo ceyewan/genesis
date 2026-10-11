@@ -12,7 +12,12 @@ explicitly.
 
 ## Unreleased hardening after RC3
 
-These changes are source-compatible but observable; RC3 remains unchanged:
+RC3 remains unchanged. Redis ACL adds `RedisConfig.Username`: keyed literals
+remain valid, while positional struct literals must migrate to keyed fields.
+TLS is opt-in through `connector.WithRedisTLSConfig`; the default remains
+plaintext, and applications must configure trusted CA and server-name verification.
+
+The remaining changes are source-compatible but observable:
 
 - `idem.Execute` / `Consume` reject nil callbacks with `ErrInvalidConfig`
   before storage access. `Consume` rejects negative TTL instead of silently

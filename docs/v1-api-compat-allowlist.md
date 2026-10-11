@@ -38,6 +38,14 @@ literals.
 
 - type: `type Config struct{Level string "json:\"level\" yaml:\"level\""; Format string "json:\"format\" yaml:\"format\""; Output string "json:\"output\" yaml:\"output\""; EnableColor bool "json:\"enable_color\" yaml:\"enable_color\""; AddSource bool "json:\"add_source\" yaml:\"add_source\""; SourceRoot string "json:\"source_root\" yaml:\"source_root\""; ServiceName string "json:\"service_name\" yaml:\"service_name\""; Version string "json:\"version\" yaml:\"version\""; InstanceID string "json:\"instance_id\" yaml:\"instance_id\""; Environment string "json:\"environment\" yaml:\"environment\""}`
 
+## `connector`
+
+Redis ACL support adds `RedisConfig.Username` before stable v1. Keyed literals
+keep their behavior; positional literals must migrate to keyed fields. The
+new transport option does not alter the constructor or Connector interfaces.
+
+- type: `type RedisConfig struct{Name string "mapstructure:\"name\" json:\"name\" yaml:\"name\""; Addr string "mapstructure:\"addr\" json:\"addr\" yaml:\"addr\""; Password string "mapstructure:\"password\" json:\"password\" yaml:\"password\""; DB int "mapstructure:\"db\" json:\"db\" yaml:\"db\""; PoolSize int "mapstructure:\"pool_size\" json:\"pool_size\" yaml:\"pool_size\""; MinIdleConns int "mapstructure:\"min_idle_conns\" json:\"min_idle_conns\" yaml:\"min_idle_conns\""; DialTimeout time.Duration "mapstructure:\"dial_timeout\" json:\"dial_timeout\" yaml:\"dial_timeout\""; ReadTimeout time.Duration "mapstructure:\"read_timeout\" json:\"read_timeout\" yaml:\"read_timeout\""; WriteTimeout time.Duration "mapstructure:\"write_timeout\" json:\"write_timeout\" yaml:\"write_timeout\""; EnableTracing bool "mapstructure:\"enable_tracing\" json:\"enable_tracing\" yaml:\"enable_tracing\""}`
+
 ## `dlock`
 
 - type: `type Config struct{Driver DriverType "json:\"driver\" yaml:\"driver\""; Prefix string "json:\"prefix\" yaml:\"prefix\""; DefaultTTL time.Duration "json:\"default_ttl\" yaml:\"default_ttl\""; RetryInterval time.Duration "json:\"retry_interval\" yaml:\"retry_interval\""}`

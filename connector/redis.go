@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"crypto/tls"
 	"sync"
 	"sync/atomic"
 
@@ -14,12 +15,13 @@ import (
 )
 
 type redisConnector struct {
-	cfg     *RedisConfig
-	client  *redis.Client
-	logger  clog.Logger
-	metrics *connectorTelemetry
-	healthy atomic.Bool
-	mu      sync.RWMutex
+	cfg       *RedisConfig
+	tlsConfig *tls.Config
+	client    *redis.Client
+	logger    clog.Logger
+	metrics   *connectorTelemetry
+	healthy   atomic.Bool
+	mu        sync.RWMutex
 }
 
 // NewRedis 创建 Redis 连接器
@@ -41,9 +43,10 @@ func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
 	opt.applyDefaults()
 
 	c := &redisConnector{
-		cfg:     cfg,
-		logger:  opt.logger.With(clog.String("connector", "redis"), clog.String("name", cfg.Name)),
-		metrics: newConnectorTelemetry(opt.meter, "redis", cfg.Name),
+		cfg:       cfg,
+		tlsConfig: opt.redisTLS,
+		logger:    opt.logger.With(clog.String("connector", "redis"), clog.String("name", cfg.Name)),
+		metrics:   newConnectorTelemetry(opt.meter, "redis", cfg.Name),
 	}
 
 	return c, nil
@@ -64,6 +67,8 @@ func (c *redisConnector) Connect(ctx context.Context) error {
 	// 创建 Redis 客户端
 	client := redis.NewClient(&redis.Options{
 		Addr:         c.cfg.Addr,
+		Username:     c.cfg.Username,
+		TLSConfig:    c.tlsConfig,
 		Password:     c.cfg.Password,
 		DB:           c.cfg.DB,
 		PoolSize:     c.cfg.PoolSize,

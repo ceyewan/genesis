@@ -59,6 +59,10 @@ func TestSomething(t *testing.T) {
 | NATS | `NewNATSContainerConfig` | `NewNATSContainerConnector` | `NewNATSContainerConn` |
 | Kafka | `NewKafkaContainerConfig` | `NewKafkaContainerConnector` | `NewKafkaContainerClient` |
 
+`NewRedisTLSContainerConfig(t)` 提供只允许 TLS 和命名 ACL 用户的独立 Redis；返回
+Connector 配置与客户端 TLS 配置，证书由测试临时生成。测试 CA/密码仅用于 fixture，
+不是生产配置模板；容器、私钥文件由测试生命周期清理。
+
 Redis 示例：
 
 ```go
