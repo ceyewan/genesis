@@ -29,7 +29,7 @@
 | H09 | async-task 使用 Memory 去重，第一次成功即退出；没有验证重启后的去重 | Redis 持久去重；等待重复消息处理；重新创建消费者后的去重与临时失败重投 | 已完成 |
 | H10 | resilient-service 只有人工 curl，没有验证治理状态 | 并发幂等、429/恢复、系统故障熔断/半开、业务错误不熔断自动测试；优雅退出 | 已完成 |
 | H11 | grpc-governance 只有单实例停止，没有动态发现与恢复验收 | 多实例加入/退出/重新加入；真实 Etcd Watch、gRPC 调用恢复与生命周期测试 | 已完成 |
-| H12 | idem.Consume 负 TTL 静默默认，Execute/Consume 的 nil 回调可能 panic；亚毫秒序列 TTL 截断 | 无效输入在副作用前返回可分类错误；零 TTL 默认不变；边界测试 | 待处理 |
+| H12 | idem.Consume 负 TTL 静默默认，Execute/Consume 的 nil 回调可能 panic；亚毫秒序列 TTL 截断 | 无效输入在副作用前返回可分类错误；零 TTL 默认不变；边界测试 | 已完成 |
 | H13 | 缺少输入 Fuzz 与缓存/幂等/MQ 性能基线 | Fuzz 覆盖高风险解析；benchmark 可复跑并记录分配；不根据一次结果提前优化 | 待处理 |
 | H14 | 示例编译/可选后端 smoke 不等于场景成功；缺少明确的无 Docker 快速入口 | 独立快速、真实场景、外部示例检查入口；CI 执行场景断言；全量普通/race 门禁不削弱 | 待处理 |
 

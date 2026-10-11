@@ -63,6 +63,9 @@ result, err := idemComp.Execute(ctx, "order:create:req-123", func(ctx context.Co
 
 Memory 后端达到容量后，新 key 返回 `ErrStoreCapacity`；已有 key 仍可读取或更新，过期条目会在同一临界区内先清理再决定是否接纳新 key。HTTP 将容量错误映射为 `503`，gRPC 映射为 `ResourceExhausted`，并且都发生在 handler 前。自定义限容 Store 必须在 `Lock` 成功时为对应 token 的 `SetResult` 预留提交容量，不能等业务成功后才拒绝 lock 到 result 的转换。
 
+`Execute` / `Consume` 的回调不能为 nil；`Consume` 的零 TTL 使用默认值，负 TTL
+返回 `ErrInvalidConfig`。无效输入会在存储访问与业务执行之前拒绝。
+
 ## 配置说明
 
 | 字段 | 类型 | 默认值 | 说明 |

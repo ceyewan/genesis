@@ -135,6 +135,7 @@ if err != nil {
 - 每个 `Generator` 都有独立的时间戳/序列状态。同一个 ID 碰撞域（例如同一张表的主键、会汇入同一唯一索引或消息命名空间）内，不能同时创建两个使用相同 `(Mode, DatacenterID, WorkerID)` 的 `Generator`，即使它们位于同一进程；否则同一毫秒内可能生成重复 ID。只有永不合并、互不比较唯一性的命名空间才可以复用该组合。
 - `Sequencer` 当前不支持 Etcd。
 - `SequencerConfig.TTL`、`AllocatorConfig.TTL` 都是 `time.Duration`；不要再传裸整数秒。
+- Sequencer 的正 TTL 至少 1 毫秒；小于毫秒会返回 `ErrInvalidInput`，避免截断成永不过期。
 - `MaxValue` 是耗尽边界；超过时返回 `ErrSequenceExhausted`，Redis 中的值保持不变，永不回绕。
 - `Allocator.KeyPrefix` 是所有可能同时生成 Snowflake ID 的实例共享的 worker namespace；不同独立 worker 池必须使用不同前缀。
 - `Allocator.KeepAlive()` 只能在成功 `Allocate` 后启动一次。错误通道在停止或 context 取消后关闭；任何收到的错误都表示不能继续安全使用该 WorkerID。
