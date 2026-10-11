@@ -45,13 +45,18 @@ import (
 	bootstrap := filepath.Join(dir, "bootstrap")
 	require.NoError(t, os.MkdirAll(bootstrap, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(bootstrap, "bootstrap.go"), []byte(imports+code), 0o644))
-	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
-	defer cancel()
 	for _, args := range [][]string{{"mod", "tidy"}, {"test", "-run", "^$", "./..."}} {
-		cmd := exec.CommandContext(ctx, "go", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GOWORK=off")
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", out)
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			// race 缓存不能代替普通构建缓存，每个阶段独立预留冷构建预算。
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "go", args...)
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "GOWORK=off")
+			started := time.Now()
+			out, err := cmd.CombinedOutput()
+			t.Logf("go %s: elapsed=%s, context=%v", strings.Join(args, " "), time.Since(started), ctx.Err())
+			require.NoError(t, err, "go %s: context=%v\n%s", strings.Join(args, " "), ctx.Err(), out)
+		})
 	}
 }
