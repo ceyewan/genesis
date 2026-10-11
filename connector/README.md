@@ -111,5 +111,5 @@ go test -race ./connector/... -count=1
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/connector)
-- [组件设计博客](../docs/genesis-connector-blog.md)
+- [历史设计博客](../docs/genesis-connector-blog.md)
 - [Genesis 文档目录](../docs/README.md)

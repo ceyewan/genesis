@@ -142,5 +142,5 @@ go test -race ./db/... -count=1
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/db)
-- [组件设计博客](../docs/genesis-db-blog.md)
+- [历史设计博客](../docs/genesis-db-blog.md)
 - [Genesis 文档目录](../docs/README.md)

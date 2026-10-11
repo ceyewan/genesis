@@ -8,7 +8,7 @@
 - `Local`：本地缓存，当前基于进程内存，只提供稳定的 `KV` 语义。
 - `Multi`：多级缓存，组合 `Local` 与 `Distributed`，提供两级 `KV` 策略。
 
-接口设计与取舍详见 [genesis-cache-blog.md](../docs/genesis-cache-blog.md)，完整 API 文档见 `go doc ./cache`。
+完整 API 与行为契约见 `go doc -all ./cache` 和本页；旧设计博客仅供历史参考。
 
 ## 快速开始
 
@@ -153,5 +153,5 @@ go test -race ./cache/... -count=1
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/cache)
-- [组件设计博客](../docs/genesis-cache-blog.md)
+- [历史设计博客](../docs/genesis-cache-blog.md)
 - [Genesis 文档目录](../docs/README.md)

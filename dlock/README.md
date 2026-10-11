@@ -142,5 +142,5 @@ return updateInventory(ctx, productID)
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/dlock)
-- [组件设计博客](../docs/genesis-dlock-blog.md)
+- [历史设计博客](../docs/genesis-dlock-blog.md)
 - [完整示例](../examples/dlock/main.go)

@@ -112,5 +112,5 @@ make status
 ## 📚 更多文档
 
 - [项目主页](../README.md) - 返回项目主页
-- [组件文档审计规范](../docs/component-doc-audit-guide.md) - 了解组件文档的审计与验收要求
-- [架构设计](../docs/genesis-design.md) - 了解项目架构
+- [开发指南](../docs/development.md) - 了解测试和文档约定
+- [总体设计](../docs/design.md) - 了解现行项目架构

@@ -226,4 +226,4 @@ defer reg.Close()
 ## 进一步阅读
 
 - `go doc -all ./registry`
-- [docs/genesis-registry-blog.md](../docs/genesis-registry-blog.md)
+- [历史设计博客](../docs/genesis-registry-blog.md)

@@ -172,4 +172,4 @@ server := grpc.NewServer(
 - Gin 的真实限流拒绝返回 `429 Too Many Requests`；限流器自身故障且采用 `fail_closed` 时返回 `503 Service Unavailable`，与 gRPC 的 `Unavailable` 语义一致。
 - 当前实现记录 `MetricAllowed`（`ratelimit_allowed_total`）、`MetricDenied`（`ratelimit_denied_total`）和 `MetricErrors`（`ratelimit_errors_total`），并只以低基数 `LabelMode` 区分 standalone / distributed。容量拒绝、后端错误和其他操作错误计入 `MetricErrors`。
 
-更完整的设计背景、分布式语义和工程取舍见：[Genesis ratelimit：请求入口限流组件的设计与取舍](../docs/genesis-ratelimit-blog.md)
+当前行为以本页与 `go doc -all ./ratelimit` 为准；[旧设计博客](../docs/genesis-ratelimit-blog.md)仅供历史参考。
