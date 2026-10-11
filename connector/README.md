@@ -52,8 +52,9 @@ conn, err := connector.NewRedis(&connector.RedisConfig{
 ```
 
 `secret` 与 `trustedRoots` 由应用从凭证管理和可信 CA 文件加载。构造 Connector 时
-复制 TLS 配置、CA 池及证书列表；证书内容、私钥、回调和会话缓存仍遵守标准库的
-不可变/并发使用约束。`nil` 不启用 TLS；不要用 `InsecureSkipVerify` 绕过生产校验。
+复制 TLS 配置、协议/密码套件/曲线/ECH 策略切片、CA 池及证书列表。
+证书内容、私钥、回调和会话缓存仍遵守标准库的不可变/并发使用约束。
+`nil` 不启用 TLS；不要用 `InsecureSkipVerify` 绕过生产校验。
 
 TLS 信任链、有效期、主机名或 ACL 失败在 Connect 阶段返回 `ErrConnection`，保留
 底层原因，且不会发布未连接客户端。Connector 不提供 Redis Cluster/Sentinel 或

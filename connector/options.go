@@ -2,6 +2,7 @@ package connector
 
 import (
 	"crypto/tls"
+	"slices"
 
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/metrics"
@@ -27,7 +28,7 @@ func (o *options) applyDefaults() {
 }
 
 // WithRedisTLSConfig 为 Redis 注入 TLS 配置，nil 表示使用默认明文连接。
-// 创建 Connector 时复制配置和 CA 池；证书内容、私钥与回调仍遵守标准库不可变约束。
+// 创建 Connector 时复制配置、策略切片和 CA 池；证书内容、私钥与回调仍遵守标准库不可变约束。
 func WithRedisTLSConfig(cfg *tls.Config) Option {
 	return func(o *options) {
 		if cfg == nil {
@@ -35,15 +36,21 @@ func WithRedisTLSConfig(cfg *tls.Config) Option {
 			return
 		}
 		o.redisTLS = cfg.Clone()
+		o.redisTLS.CipherSuites = slices.Clone(cfg.CipherSuites)
+		o.redisTLS.CurvePreferences = slices.Clone(cfg.CurvePreferences)
+		o.redisTLS.NextProtos = slices.Clone(cfg.NextProtos)
+		o.redisTLS.EncryptedClientHelloConfigList = slices.Clone(cfg.EncryptedClientHelloConfigList)
+		o.redisTLS.EncryptedClientHelloKeys = slices.Clone(cfg.EncryptedClientHelloKeys)
+		for i := range o.redisTLS.EncryptedClientHelloKeys {
+			o.redisTLS.EncryptedClientHelloKeys[i].Config = slices.Clone(cfg.EncryptedClientHelloKeys[i].Config)
+		}
 		if cfg.RootCAs != nil {
 			o.redisTLS.RootCAs = cfg.RootCAs.Clone()
 		}
 		if cfg.ClientCAs != nil {
 			o.redisTLS.ClientCAs = cfg.ClientCAs.Clone()
 		}
-		if cfg.Certificates != nil {
-			o.redisTLS.Certificates = append([]tls.Certificate(nil), cfg.Certificates...)
-		}
+		o.redisTLS.Certificates = slices.Clone(cfg.Certificates)
 	}
 }
 
