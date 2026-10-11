@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,24 @@ func TestExamplesCopyToExternalModule(t *testing.T) {
 		require.NoError(t, os.MkdirAll(dest, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(dest, "main.go"), data, 0o644))
 	}
+	doc, err := os.ReadFile(filepath.Join(root, "docs", "production.md"))
+	require.NoError(t, err)
+	blocks := strings.SplitN(string(doc), "```go\n", 2)
+	require.Len(t, blocks, 2)
+	code := strings.SplitN(blocks[1], "```", 2)[0]
+	imports := `package bootstrap
+import (
+ "context"
+ "time"
+ "github.com/ceyewan/genesis/cache"
+ "github.com/ceyewan/genesis/clog"
+ "github.com/ceyewan/genesis/connector"
+ "github.com/ceyewan/genesis/xerrors"
+)
+`
+	bootstrap := filepath.Join(dir, "bootstrap")
+	require.NoError(t, os.MkdirAll(bootstrap, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(bootstrap, "bootstrap.go"), []byte(imports+code), 0o644))
 	for _, args := range [][]string{{"mod", "tidy"}, {"test", "-run", "^$", "./..."}} {
 		cmd := exec.Command("go", args...)
 		cmd.Dir = dir
