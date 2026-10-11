@@ -54,8 +54,13 @@ make examples
 make example-cache      # 运行缓存示例
 make example-dlock      # 运行分布式锁示例
 
-# 运行所有可自行结束的 CI 示例
+# 可选后端 smoke（依赖缺失可正常退出，不代表后端验收通过）
 make example-all
+
+# 示例编译 / 真实场景 / 外部复制与文档编译
+make examples-check
+make examples-scenarios
+make examples-external-check
 ```
 
 `example-all` 不会启动外部服务，也不会运行场景型或常驻服务；现有组件示例若缺少
@@ -88,6 +93,12 @@ go run main.go -config config.yaml
 3. **最佳实践** - 遵循 Genesis 的设计原则
 4. **错误处理** - 展示如何处理各种错误情况
 5. **配置文件** - 部分示例包含配置文件（如 config 示例）
+
+### 自动验收与 smoke 的区别
+
+四个数据访问/治理场景都有 `main_test.go`，使用 Testcontainers 或进程内真实 gRPC
+自动断言结果，不再只有人工日志。`examples-scenarios` 不依赖 `make up`；容器启动
+失败或行为断言失败均非零退出。`example-all` 保留可选后端 smoke，不能替代它。
 
 ### 特殊说明
 

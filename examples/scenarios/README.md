@@ -15,10 +15,10 @@ Genesis 现有示例主要按组件拆分，适合学习单个包的构造方式
 | 场景 | 核心问题 | 主要组件 | 状态 |
 | :--- | :--- | :--- | :--- |
 | 全链路可观测性 | 如何看清跨 HTTP、gRPC、DB、MQ 的一次请求 | `clog`、`metrics`、`trace`、`db`、`mq` | 已实现 |
-| Web 与 RPC 弹性保护 | 如何处理突发流量、重复提交和下游故障 | `ratelimit`、`idem`、`breaker` | MVP 已实现 |
-| 可靠异步任务 | 如何面对至少一次投递、重复消费和临时失败 | `mq`、`idem` | MVP 已实现 |
-| 缓存化数据查询 | 如何组合缓存、数据库和缓存重建保护 | `cache`、`db`、`dlock` | MVP 已实现 |
-| gRPC 服务发现与调用治理 | 如何发现实例、建立调用并隔离故障 | `registry`、`breaker`、`connector` | MVP 已实现 |
+| Web 与 RPC 弹性保护 | 如何处理突发流量、重复提交和下游故障 | `ratelimit`、`idem`、`breaker` | 自动行为验收已实现 |
+| 可靠异步任务 | 如何面对至少一次投递、重复消费和临时失败 | `mq`、`idem` | Redis 持久去重与重建验收已实现 |
+| 缓存化数据查询 | 如何组合缓存、数据库和缓存重建保护 | `cache`、`db`、`dlock` | 本地与跨实例并发验收已实现 |
+| gRPC 服务发现与调用治理 | 如何发现实例、建立调用并隔离故障 | `registry`、`breaker`、`connector` | 实例加入/退出/重入验收已实现 |
 
 `config`、`clog`、`xerrors` 是这些场景的基础能力；`metrics` 和 `trace` 可以按场景需要
 接入，但只有可观测性场景负责展示完整的采集与查询后端。
@@ -83,7 +83,7 @@ POST /orders → RateLimit → Idempotency → Gateway Handler
 ### 详细设计
 
 参见 [`examples/resilient-service`](../resilient-service/)。第一版保持两个逻辑服务和一个
-Redis 依赖，不重复搭建可观测性示例的完整后端。
+进程内 gRPC，不依赖 Redis，也不重复搭建可观测性示例的完整后端。
 
 ## 场景三：可靠异步任务
 
@@ -198,7 +198,13 @@ Caller → gRPC Resolver → Client Connection → Breaker → Service Instance
 服务发现、负载均衡和熔断是三件不同的事。示例应明确底层 gRPC resolver/balancer 的
 行为，不把 `registry` 描述成完整的服务网格，也不承诺瞬时一致的实例视图。
 
-## 实施顺序建议
+## 当前验收入口
+
+运行 `make examples-scenarios` 自动验证四个场景，不需要提前启动开发栈；完整普通与
+race 测试也包含这些用例。`make examples-check` 只检查编译，`example-all` 只做可选
+后端 smoke，两者不等同于行为成功。各场景 README 说明实际实现和未解决的边界。
+
+## 历史实施顺序建议
 
 建议按以下顺序推进：
 

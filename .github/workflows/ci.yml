@@ -115,7 +115,13 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - run: go build ./...
-      - run: make api-inventory-check api-baseline-check api-compat-check examples-check
+      - run: make api-inventory-check api-baseline-check api-compat-check examples-check examples-external-check
+      - name: Verify real-backend scenarios
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          make examples-scenarios | tee artifacts/scenarios.txt
       - name: Run standalone examples
         shell: bash
         run: |
@@ -126,5 +132,7 @@ jobs:
         if: always()
         with:
           name: example-results
-          path: artifacts/examples.txt
+          path: |
+            artifacts/examples.txt
+            artifacts/scenarios.txt
           retention-days: 14
