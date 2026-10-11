@@ -73,6 +73,20 @@ func (t *redisStreamTransport) Subscribe(ctx context.Context, topic string, hand
 		done:           make(chan struct{}),
 	}
 
+	// 广播的最新位置只在初始化时解析一次，空读后不能再次使用 `$`。
+	if opts.QueueGroup == "" && opts.StartID == "$" {
+		messages, err := t.client.XRevRangeN(ctx, topic, "+", "-", 1).Result()
+		if err != nil {
+			stopConsuming()
+			cancelHandlers()
+			return nil, xerrors.Wrap(err, "resolve latest stream position")
+		}
+		opts.StartID = "0-0"
+		if len(messages) > 0 {
+			opts.StartID = messages[0].ID
+		}
+	}
+
 	// Consumer Group 创建在 goroutine 外执行，确保错误能在初始化阶段暴露
 	if opts.QueueGroup != "" {
 		if err := t.client.XGroupCreateMkStream(ctx, topic, opts.QueueGroup, opts.StartID).Err(); err != nil && !isGroupExistsError(err) {
