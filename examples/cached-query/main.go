@@ -38,6 +38,9 @@ type productReader struct {
 }
 
 func (r *productReader) get(ctx context.Context, id string) (product, error) {
+	if err := ctx.Err(); err != nil {
+		return product{}, err
+	}
 	key := "product:" + id
 	var entry cachedProduct
 	if err := r.values.Get(ctx, key, &entry); err == nil {
@@ -46,7 +49,12 @@ func (r *productReader) get(ctx context.Context, id string) (product, error) {
 		return product{}, err
 	}
 	// 单实例用请求合并，跨实例用共享缓存和各实例自己的 Locker。
-	result := r.pending.DoChan(key, func() (any, error) { return r.load(ctx, key, id) })
+	result := r.pending.DoChan(key, func() (any, error) {
+		// 共享重建不属于首个请求；为加载设置独立的有限预算。
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return r.load(loadCtx, key, id)
+	})
 	select {
 	case <-ctx.Done():
 		return product{}, ctx.Err()
