@@ -80,7 +80,7 @@ func NewGenerator(cfg *GeneratorConfig, opts ...Option) (Generator, error) {
 		meter = metrics.Discard()
 	}
 
-	genCounter, _ := meter.Counter(MetricSnowflakeGenerated, "雪花算法 ID 生成总数")
+	genCounter := initCounter(meter, logger, MetricSnowflakeGenerated, "雪花算法 ID 生成总数")
 
 	sf := &snowflake{
 		mode:       config.Mode,

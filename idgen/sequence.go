@@ -60,7 +60,7 @@ func NewSequencer(cfg *SequencerConfig, opts ...Option) (Sequencer, error) {
 	if meter == nil {
 		meter = metrics.Discard()
 	}
-	seqCounter, _ := meter.Counter(MetricSequenceGenerated, "序列号生成总数")
+	seqCounter := initCounter(meter, opt.Logger, MetricSequenceGenerated, "序列号生成总数")
 
 	// 目前仅支持 Redis
 	switch config.Driver {
