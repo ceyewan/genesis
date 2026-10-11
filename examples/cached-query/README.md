@@ -1,7 +1,25 @@
-# 缓存化数据查询示例
+# 缓存化数据查询
 
-运行 `make up` 后执行 `make example-cached-query`。示例使用 SQLite 保存权威商品数据，
-使用 Genesis 本地缓存保存查询结果，并使用 Redis `dlock` 保护同一热点 key 的缓存重建。
+运行 `make up` 后执行 `make example-cached-query`。Redis 默认地址为
+`127.0.0.1:6379`，可通过 `REDIS_ADDR` 覆盖。任何断言或依赖连接失败都会非零退出。
 
-首次读取会访问数据库并回填缓存；后续读取命中缓存，最终输出的数据库读取次数应为 1。
-锁持有者在重建前后都检查缓存，避免等待锁的请求再次穿透到数据库。
+示例使用 SQLite 作为权威存储，验证两个不同模式：
+
+1. 单进程 Local + singleflight：100 个并发请求，数据库只读取一次。
+2. 两个模拟应用实例，各自拥有 Locker，共用 Redis Distributed 缓存：100 个并发请求，
+   锁后再查共享缓存，数据库只读取一次。仅 Local + 分布式锁不能达到这一跨实例效果。
+
+所有正常请求必须得到同一商品；测试同时验证不存在记录的 5 秒负缓存和缓存错误传播。
+每次运行随机命名空间，避免与上次数据相互影响；资源由创建者逆序关闭。
+
+## 自动验收
+
+```bash
+go test -race -count=1 ./examples/cached-query
+```
+
+测试通过 `internal/testkit` 自动启动 Redis，不需要 `make up`。单进程用例不需要 Docker。
+
+该示例是 cache-aside，不提供数据库与缓存事务、跨实例本地失效或 exactly-once。
+singleflight 的加载任务使用首个调用方 context；首个调用取消可能使同批等待者失败，
+其他等待者可以独立取消等待。写入侧的一致性策略由应用决定。
