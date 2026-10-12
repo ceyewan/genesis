@@ -107,5 +107,5 @@ port := xerrors.MustOK(loadBootstrapPort())
 ## 相关文档
 
 - `go doc -all ./xerrors`
-- [Genesis xerrors：轻量错误封装组件的设计与取舍](../docs/genesis-xerrors-blog.md)
+- [历史设计博客](../docs/genesis-xerrors-blog.md)
 - [示例代码](../examples/xerrors/main.go)

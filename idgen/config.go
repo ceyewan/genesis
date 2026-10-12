@@ -93,7 +93,7 @@ type SequencerConfig struct {
 	// MaxValue 最大值限制；下一次分配超过该值时返回 ErrSequenceExhausted（0 表示不限制）。
 	MaxValue int64 `mapstructure:"max_value" yaml:"max_value" json:"max_value"`
 
-	// TTL 键过期时间，0 表示永不过期。
+	// TTL 键过期时间，0 表示永不过期；正值要求至少 1 毫秒。
 	TTL time.Duration `mapstructure:"ttl" yaml:"ttl" json:"ttl"`
 }
 
@@ -118,6 +118,9 @@ func (c *SequencerConfig) validate() error {
 	}
 	if c.TTL < 0 {
 		return xerrors.WithCode(ErrInvalidInput, "ttl_cannot_be_negative")
+	}
+	if c.TTL > 0 && c.TTL < time.Millisecond {
+		return xerrors.WithCode(ErrInvalidInput, "ttl_must_be_at_least_one_millisecond")
 	}
 	return nil
 }

@@ -2,101 +2,215 @@ package main
 
 import (
 	"context"
-	"errors"
+	"crypto/rand"
 	"fmt"
-	"log"
+	"os"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
+	"gorm.io/gorm"
 
 	"github.com/ceyewan/genesis/cache"
 	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/db"
 	"github.com/ceyewan/genesis/dlock"
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 type product struct {
 	ID   string `gorm:"primaryKey" json:"id"`
 	Name string `json:"name"`
 }
+type cachedProduct struct {
+	Value   product `json:"value"`
+	Missing bool    `json:"missing"`
+}
 
-func main() {
-	ctx := context.Background()
-	logger, err := clog.New(&clog.Config{Level: "info", Format: "console", Output: "stdout"})
-	if err != nil {
-		log.Fatal(err)
-	}
+type productReader struct {
+	database db.DB
+	values   cache.KV
+	locker   dlock.Locker
+	pending  singleflight.Group
+	reads    atomic.Int32
+}
 
-	sqliteConn, err := connector.NewSQLite(&connector.SQLiteConfig{Name: "cached-query", Path: "file:cached-query?mode=memory&cache=shared"}, connector.WithLogger(logger))
-	if err != nil {
-		log.Fatal(err)
+func (r *productReader) get(ctx context.Context, id string) (product, error) {
+	if err := ctx.Err(); err != nil {
+		return product{}, err
 	}
-	defer sqliteConn.Close()
-	if err := sqliteConn.Connect(ctx); err != nil {
-		log.Fatal(err)
+	key := "product:" + id
+	var entry cachedProduct
+	if err := r.values.Get(ctx, key, &entry); err == nil {
+		return entry.result()
+	} else if !xerrors.Is(err, cache.ErrMiss) {
+		return product{}, err
 	}
-	database, err := db.New(&db.Config{Driver: "sqlite"}, db.WithSQLiteConnector(sqliteConn), db.WithLogger(logger))
+	// 单实例用请求合并，跨实例用共享缓存和各实例自己的 Locker。
+	result := r.pending.DoChan(key, func() (any, error) {
+		// 共享重建不属于首个请求；为加载设置独立的有限预算。
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return r.load(loadCtx, key, id)
+	})
+	select {
+	case <-ctx.Done():
+		return product{}, ctx.Err()
+	case value := <-result:
+		if value.Err != nil {
+			return product{}, value.Err
+		}
+		return value.Val.(product), nil
+	}
+}
+
+func (v cachedProduct) result() (product, error) {
+	if v.Missing {
+		return product{}, gorm.ErrRecordNotFound
+	}
+	return v.Value, nil
+}
+
+func (r *productReader) load(ctx context.Context, key, id string) (value product, err error) {
+	if r.locker != nil {
+		if err := r.locker.Lock(ctx, key); err != nil {
+			return product{}, err
+		}
+		defer func() {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			defer cancel()
+			err = xerrors.Join(err, r.locker.Unlock(cleanup, key))
+		}()
+	}
+	var entry cachedProduct
+	// 等待共享锁或 singleflight 后必须再次检查，也要传播非 miss 错误。
+	if err := r.values.Get(ctx, key, &entry); err == nil {
+		return entry.result()
+	} else if !xerrors.Is(err, cache.ErrMiss) {
+		return product{}, err
+	}
+	r.reads.Add(1)
+	err = r.database.DB(ctx).First(&value, "id = ?", id).Error
+	if err != nil && !xerrors.Is(err, gorm.ErrRecordNotFound) {
+		return product{}, err
+	}
+	entry = cachedProduct{Value: value, Missing: xerrors.Is(err, gorm.ErrRecordNotFound)}
+	ttl := time.Minute
+	if entry.Missing {
+		ttl = 5 * time.Second
+	}
+	if setErr := r.values.Set(ctx, key, entry, ttl); setErr != nil {
+		return product{}, setErr
+	}
+	return entry.result()
+}
+
+// verifyConcurrent 要求每个参与者成功且业务数据库只读取一次。
+func verifyConcurrent(ctx context.Context, readers ...*productReader) error {
+	var wg sync.WaitGroup
+	errors := make(chan error, 100)
+	start := make(chan struct{})
+	for i := range 100 {
+		wg.Go(func() {
+			<-start
+			value, err := readers[i%len(readers)].get(ctx, "p-1001")
+			if err == nil && value.ID != "p-1001" {
+				err = xerrors.New("unexpected product")
+			}
+			errors <- err
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			return err
+		}
+	}
+	var count int32
+	for _, reader := range readers {
+		count += reader.reads.Load()
+	}
+	if count != 1 {
+		return xerrors.Wrapf(xerrors.New("cache rebuild assertion failed"), "database reads: %d, expected 1", count)
+	}
+	return nil
+}
+
+func run(ctx context.Context) (err error) {
+	logger, err := clog.New(&clog.Config{Format: "console", Output: "stdout"})
 	if err != nil {
-		log.Fatal(err)
+		return err
+	}
+	defer func() { err = xerrors.Join(err, logger.Close()) }()
+	sqlite, err := connector.NewSQLite(&connector.SQLiteConfig{Path: "file:" + rand.Text() + "?mode=memory&cache=shared"})
+	if err != nil {
+		return err
+	}
+	defer func() { err = xerrors.Join(err, sqlite.Close()) }()
+	if err := sqlite.Connect(ctx); err != nil {
+		return err
+	}
+	database, err := db.New(&db.Config{Driver: "sqlite"}, db.WithSQLiteConnector(sqlite), db.WithLogger(logger))
+	if err != nil {
+		return err
 	}
 	if err := database.DB(ctx).AutoMigrate(&product{}); err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if err := database.DB(ctx).Create(&product{ID: "p-1001", Name: "Genesis T-Shirt"}).Error; err != nil {
-		log.Fatal(err)
+		return err
 	}
-
-	redisConn, err := connector.NewRedis(&connector.RedisConfig{Addr: "127.0.0.1:6379"}, connector.WithLogger(logger))
+	local, err := cache.NewLocal(&cache.LocalConfig{MaxEntries: 128})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	defer redisConn.Close()
-	if err := redisConn.Connect(ctx); err != nil {
-		log.Fatalf("连接 Redis 失败；请先执行 make up: %v", err)
+	defer func() { err = xerrors.Join(err, local.Close()) }()
+	if err := verifyConcurrent(ctx, &productReader{database: database, values: local}); err != nil {
+		return err
 	}
-	locker, err := dlock.New(&dlock.Config{Driver: dlock.DriverRedis, Prefix: "cached-query:", DefaultTTL: 3 * time.Second}, dlock.WithRedisConnector(redisConn), dlock.WithLogger(logger))
+	fmt.Println("单进程并发查询通过，数据库读取次数=1")
+	addr := os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:6379"
+	}
+	conn, err := connector.NewRedis(&connector.RedisConfig{Addr: addr})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	defer locker.Close()
-	local, err := cache.NewLocal(&cache.LocalConfig{MaxEntries: 128, DefaultTTL: time.Minute}, cache.WithLogger(logger))
+	defer func() { err = xerrors.Join(err, conn.Close()) }()
+	if err := conn.Connect(ctx); err != nil {
+		return xerrors.Wrap(err, "connect Redis; run make up for this example")
+	}
+	prefix := "cached-query:" + rand.Text() + ":"
+	values, err := cache.NewDistributed(&cache.DistributedConfig{KeyPrefix: prefix}, cache.WithRedisConnector(conn))
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	defer local.Close()
-
-	var databaseReads atomic.Int32
-	getProduct := func(id string) (product, error) {
-		key := "product:" + id
-		var value product
-		if err := local.Get(ctx, key, &value); err == nil {
-			return value, nil
-		} else if !errors.Is(err, cache.ErrMiss) {
-			return product{}, err
-		}
-		if err := locker.Lock(ctx, key); err != nil {
-			return product{}, err
-		}
-		defer locker.Unlock(ctx, key)
-		if err := local.Get(ctx, key, &value); err == nil { // 获取锁后必须再次检查缓存。
-			return value, nil
-		}
-		databaseReads.Add(1)
-		if err := database.DB(ctx).First(&value, "id = ?", id).Error; err != nil {
-			return product{}, err
-		}
-		if err := local.Set(ctx, key, value, time.Minute); err != nil {
-			return product{}, err
-		}
-		return value, nil
-	}
-
-	for range 3 {
-		value, err := getProduct("p-1001")
+	var readers []*productReader
+	for range 2 {
+		locker, err := dlock.New(&dlock.Config{Driver: dlock.DriverRedis, Prefix: prefix + "lock:", DefaultTTL: 3 * time.Second}, dlock.WithRedisConnector(conn))
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
-		fmt.Printf("读取商品: %s (%s)\n", value.Name, value.ID)
+		defer func() { err = xerrors.Join(err, locker.Close()) }()
+		readers = append(readers, &productReader{database: database, values: values, locker: locker})
 	}
-	fmt.Printf("数据库读取次数=%d（期望为 1）\n", databaseReads.Load())
+	if err := verifyConcurrent(ctx, readers...); err != nil {
+		return err
+	}
+	fmt.Println("共享 Redis 缓存跨实例并发查询通过，数据库读取次数=1")
+	return values.Delete(ctx, "product:p-1001")
+}
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := run(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

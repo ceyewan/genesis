@@ -8,7 +8,7 @@
 - `Local`：本地缓存，当前基于进程内存，只提供稳定的 `KV` 语义。
 - `Multi`：多级缓存，组合 `Local` 与 `Distributed`，提供两级 `KV` 策略。
 
-接口设计与取舍详见 [genesis-cache-blog.md](../docs/genesis-cache-blog.md)，完整 API 文档见 `go doc ./cache`。
+完整 API 与行为契约见 `go doc -all ./cache` 和本页；旧设计博客仅供历史参考。
 
 ## 快速开始
 
@@ -117,6 +117,22 @@ JSON 与 MessagePack 不是可直接互换的线上编码。切换 `Serializer` 
 | `BackfillTTL` | `time.Duration` | `1min` | 从远端回填本地缓存时使用的 TTL |
 | `FailOpenOnLocalError` | `*bool` | `true` | 本地缓存异常时是否继续访问远端；`nil` 视为 `true` |
 
+## 多级缓存一致性边界
+
+Multi 是允许陈旧读取的两级缓存策略，不是远端的同步镜像：
+
+- `LocalTTL` 可以长于远端写入 TTL；`ttl=0` 分别使用两层自己的默认值。
+- 读回填使用 `BackfillTTL`，不读取远端剩余 TTL，因此远端过期后本地仍可能命中。
+- 其他实例或绕过 Multi 的更新/删除不广播本地失效；陈旧值最多保留到本地条目
+  最近一次写入/回填的 TTL 结束，也可能提前被容量策略淘汰。
+- 同一个 Multi 实例协调 Get 回填与 Set/Delete/Expire，避免慢回填覆盖已经完成的
+  本实例写入或删除。不同 Multi 实例及直接操作底层缓存不共享这把协调锁。
+- 协调允许并发读取，等待读写额度时遵守请求取消和 deadline；它不是按 key 分片的锁，
+  写操作仍会等待正在进行的远端读取。高吞吐场景应测量竞争并设置远端 I/O 超时。
+
+需要及时反映库存、权限等权威状态时，直接读取 Distributed 或数据库；不要依赖
+Multi 提供跨实例强一致性。本轮不改变既有 TTL 策略，也不新增自动失效协议。
+
 ## 推荐实践
 
 - 把 `Distributed` 作为共享缓存和结构化缓存入口。
@@ -137,5 +153,5 @@ go test -race ./cache/... -count=1
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/cache)
-- [组件设计博客](../docs/genesis-cache-blog.md)
+- [历史设计博客](../docs/genesis-cache-blog.md)
 - [Genesis 文档目录](../docs/README.md)

@@ -84,6 +84,7 @@ type RedisConfig struct {
 
 	// 核心配置
 	Addr     string `mapstructure:"addr" json:"addr" yaml:"addr"`             // 连接地址 (必填)，如 "127.0.0.1:6379"
+	Username string `mapstructure:"username" json:"username" yaml:"username"` // ACL 用户名，空值保持默认用户。
 	Password string `mapstructure:"password" json:"password" yaml:"password"` // 认证密码 (可选)
 	DB       int    `mapstructure:"db" json:"db" yaml:"db"`                   // 数据库编号 (默认: 0)
 

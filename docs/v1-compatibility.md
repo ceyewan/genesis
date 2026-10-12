@@ -1,122 +1,55 @@
-# Genesis v1 compatibility matrix
+# Genesis v1 兼容矩阵
 
-This matrix records the configured candidate baseline for the Genesis v1
-release gate. A combination becomes release evidence only after the final
-evidence record contains its successful exact-SHA run and artifact; it is not a
-claim that every earlier or later vendor version behaves identically.
+本矩阵描述当前仓库的验证配置，不保证所有厂商版本和部署拓扑都经过验证。
+具体发布状态以 GitHub Releases 为准，发布过程见[发布流程](./release.md)。
+历史 RC2 指定下游门禁与证据归档要求不适用于当前流程。
 
-## Go toolchain
+## 工具链
 
-| Role                 | Version  | Gate                                                  |
-| -------------------- | -------- | ----------------------------------------------------- |
-| Minimum supported Go | `1.26.0` | Build, unit tests, API compatibility                  |
-| Pinned current Go    | `1.26.5` | Full tests, race, lint, examples and release evidence |
+| 工具 | 版本 | 用途 |
+| :--- | :--- | :--- |
+| 最低 Go | `1.26.0` | 构建、选定包测试 |
+| CI Go | `1.26.5` | 普通/race、lint、示例及 API 检查 |
+| golangci-lint | `2.12.2` | 静态分析与导出注释 |
+| Buf | `1.66.1` | 示例 Proto |
+| actionlint | `1.7.7` | 工作流语法 |
+| Node.js | `22.23.2` | CI Markdown 检查 |
+| markdownlint-cli2 | `0.18.1` | Markdown 格式 |
 
-Consumers must compile with Go 1.26 or later. A higher local Go version is not
-accepted as a substitute for the minimum-version gate.
+本地其他补丁版本的结果可帮助开发，但不能替代对应 CI 工具链验证。
+实际固定值以 `.github/workflows/ci.yml` 与 `Makefile` 为准。
 
-## Quality toolchain
+## 公共包
 
-| Tool             | Version   | Gate                          |
-| ---------------- | --------- | ----------------------------- |
-| golangci-lint    | `v2.12.2` | Go lint and static analysis   |
-| Buf              | `v1.66.1` | Protobuf lint                 |
-| actionlint       | `v1.7.7`  | GitHub Actions syntax         |
-| GitHub CLI       | `v2.96.0` | Immutable Release attestation |
+所有根 module 公开包及 `cache/serializer` 都遵守同一 SemVer 契约。
+`breaker`、`dlock`、`idem` 与其他组件一样具有兼容性责任；不以某个业务项目是否
+导入它们决定稳定性。API 与生命周期见[契约决策](./v1-api-decisions.md)。
 
-Genesis local/hosted checks and Resonance local/hosted checks use the same
-golangci-lint version; a different local binary is not equivalent evidence.
-The tag-defense publisher downloads the exact GitHub CLI archive, checks its
-pinned SHA-256 and reported version before the irreversible Release transition,
-and uses that binary for the post-publication attestation check.
+`internal/testkit` 和示例的 `internal/proto` 仅用于本仓库。外部应用应维护自己的
+测试 fixture 与 Proto，不能导入这些内部路径。
 
-## Documentation toolchain
+## 外部后端
 
-| Tool                | Version   | Gate                                  |
-| ------------------- | --------- | ------------------------------------- |
-| Node.js             | `22.23.2` | Hosted Markdown quality/API-docs jobs |
-| markdownlint-cli2   | `0.18.1`  | Repository Markdown structure         |
-| Local link checker  | Candidate | Relative paths and Markdown anchors   |
+| 后端 | Testcontainers 镜像 | 验证组件 |
+| :--- | :--- | :--- |
+| Redis | `redis:7.2-alpine` | connector、cache、dlock、idem、idgen、mq、ratelimit |
+| PostgreSQL | `postgres:17-alpine` | connector、db |
+| MySQL | `mysql:8.0` | connector、db |
+| Etcd | `quay.io/coreos/etcd:v3.5.12` | connector、dlock、idgen、registry |
+| NATS JetStream | `nats:2.10-alpine` | connector、mq |
+| Kafka | `confluentinc/confluent-local:7.5.0` | connector |
+| SQLite | go.mod 中的进程内驱动 | connector、db |
 
-The hosted jobs pin the Node.js patch version and the immutable `setup-node`
-action revision. The Markdown command installs only the exact CLI version in
-the runner's npm cache; it does not create a repository `node_modules` tree or
-lockfile.
+普通与 race 全量测试运行真实后端；Docker 不可用是失败，不是跳过。
+镜像 tag 可变，不能把这张表描述成不可变镜像证明；本 CI 保存测试日志，不维护
+镜像摘要与发布证据哈希协议。客户端精确版本由 `go.mod` / `go.sum` 固定。
 
-## Package support tiers
+## 解释与升级
 
-Support tiers describe verification depth and response priority, not different
-SemVer promises. Every package admitted to the generated root-v1 inventory is
-covered by the same compatibility policy.
+- 各后端的确认、精度和恢复语义保留差异，不承诺统一的 exactly-once 或强一致。
+- 改变投递、TTL、事务或所有权语义的后端升级需要契约审阅，不只是修改镜像 tag。
+- 暴露 Gin、gRPC、GORM、OTel、JWT 或原生客户端类型的 API 需要审阅上游兼容性。
+- 依赖 PR 运行本库门禁；下游项目自行进行业务验收，不成为本库 CI 的固定依赖。
+- 拓扑、凭证、TLS、持久化、备份和厂商升级由应用负责。
 
-| Tier                    | Packages                                                                                                                    | Release evidence                                                                           |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Consumer-validated core | `auth`, `cache`, `clog`, `config`, `connector`, `db`, `idgen`, `metrics`, `mq`, `ratelimit`, `registry`, `trace`, `xerrors` | Package tests plus an exact Genesis/Resonance consumer gate                                |
-| Extended                | `breaker`, `cache/serializer`, `dlock`, `idem`                                                                              | Package contract, race, and applicable real-backend tests; no direct Resonance import      |
-
-Within mixed packages, Resonance directly validates Redis distributed cache KV,
-JetStream MQ, and limiter-core paths. Local/multi/hash/ZSet cache features,
-Redis Stream MQ, and framework adapters retain the package's v1 contract but
-receive extended-path evidence rather than direct consumer evidence.
-
-`testkit` and all four generated example-proto packages are now under
-`internal` paths. They remain fully buildable repository infrastructure, but
-are intentionally outside the public module contract and package tiers.
-External consumers must own their Testcontainers fixtures and protobuf schemas.
-
-## External backends
-
-| Backend        | Release-test image                   | Exercised packages                                                |
-| -------------- | ------------------------------------ | ----------------------------------------------------------------- |
-| Redis          | `redis:7.2-alpine`                   | `connector`, `cache`, `dlock`, `idem`, `idgen`, `mq`, `ratelimit` |
-| PostgreSQL     | `postgres:17-alpine`                 | `connector`, `db`                                                 |
-| MySQL          | `mysql:8.0`                          | `connector`, `db`                                                 |
-| etcd           | `quay.io/coreos/etcd:v3.5.12`        | `connector`, `dlock`, `idgen`, `registry`                         |
-| NATS JetStream | `nats:2.10-alpine`                   | `connector`, `mq`                                                 |
-| Kafka          | `confluentinc/confluent-local:7.5.0` | `connector`                                                       |
-| SQLite         | in-process driver from `go.mod`      | `connector`, `db`                                                 |
-
-The ordinary and race release jobs run the real Testcontainers cases. Docker
-unavailability is a failure, not a skip. The table records human-readable image
-tags; each ordinary/race Testcontainers artifact also captures the resolved
-image ID and repository digest so the mutable tag is not mistaken for immutable
-evidence.
-Backend-specific behavior remains visible at the package boundary; for example,
-Etcd lock TTLs are whole seconds, JetStream supports progress acknowledgement,
-and Redis Stream does not.
-
-## Client-library baseline
-
-The exact client dependency graph is fixed by `go.mod` and `go.sum`. The RC2
-candidate currently uses:
-
-| Client                                        | Version   |
-| --------------------------------------------- | --------- |
-| `github.com/redis/go-redis/v9`                | `v9.16.0` |
-| `go.etcd.io/etcd/client/v3`                   | `v3.6.6`  |
-| `github.com/nats-io/nats.go`                  | `v1.47.0` |
-| `github.com/twmb/franz-go`                    | `v1.20.6` |
-| `gorm.io/gorm`                                | `v1.31.1` |
-| GORM MySQL/PostgreSQL/SQLite drivers          | `v1.6.0`  |
-| `github.com/testcontainers/testcontainers-go` | `v0.40.0` |
-
-An incompatible upstream major version is not adopted implicitly. It requires
-a reviewed dependency PR, the full Genesis gate, API-inventory review for any
-public third-party type, and the exact Resonance consumer gate.
-
-## Support interpretation
-
-- The table plus the hosted run's resolved image digests is the reproducible
-  release baseline. Other compatible vendor patch versions may work, but are
-  not release evidence until added to CI.
-- Final RC2 evidence is durable only after the immutable GitHub prerelease
-  contains the five pre-tag archives plus the tag-defense evidence archive and
-  its exact-six asset set and release attestation have both been verified.
-- A package remaining in the root v1 module carries normal SemVer obligations
-  regardless of whether Resonance currently imports it.
-- Applications own topology, credentials, TLS, persistence, backup and vendor
-  upgrade policy. Genesis owns the documented Go API and backend interaction
-  semantics it exposes.
-- A backend upgrade that changes observable delivery, TTL, transaction or
-  ownership behavior must be treated as a contract change, not a routine image
-  bump.
+安全扫描与依赖策略见[安全与依赖治理](./v1-security-and-dependencies.md)。

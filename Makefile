@@ -1,4 +1,4 @@
-.PHONY: check help up down test test-race lint lint-tool-check markdown-check modernize modernize-check clean logs status examples examples-check example-all buf-lint api-inventory api-inventory-check api-baseline-check api-compat-check exported-comments godoc-artifacts
+.PHONY: check help up down test test-fast test-race lint lint-tool-check markdown-check modernize modernize-check clean logs status examples examples-check examples-scenarios examples-external-check example-all buf-lint api-inventory api-inventory-check api-baseline-check api-compat-check exported-comments godoc-artifacts
 
 DEV_COMPOSE_FILE := deploy/dev/docker-compose.yml
 BUF_DIR := examples
@@ -21,7 +21,10 @@ help:
 	@echo "  make check     - 运行日常代码、API 与文档检查"
 	@echo "  make up        - 启动所有开发服务"
 	@echo "  make down      - 停止所有开发服务"
-	@echo "  make test      - 运行测试"
+	@echo "  make test      - 运行全量测试（含真实容器）"
+	@echo "  make test-fast - 运行选定的无 Docker 开发反馈测试"
+	@echo "  make examples-scenarios - 真实后端场景行为验收"
+	@echo "  make examples-external-check - 外部复制与装配文档编译验收"
 	@echo "  make lint      - 运行代码检查"
 	@echo "  make markdown-check - 检查 Markdown 格式和仓库内链接"
 	@echo "  make buf-lint  - 检查 internal example proto 定义"
@@ -46,6 +49,16 @@ down:
 test:
 	@echo "运行测试..."
 	@go test -count=1 ./...
+
+# Explicit pure-package subset; never replaces ordinary/race integration gates.
+test-fast:
+	@go test -count=1 ./auth ./breaker ./clog ./config ./metrics ./trace ./xerrors ./internal/cmd/... ./examples/resilient-service
+	@go test -count=1 ./cache -run '^(TestLocal|TestMultiBackfillCannotOverwriteMutation|TestMultiAllowsDocumentedStaleTTL|TestMultiCoordinationHonorsCancellation|TestMultiAlreadyCanceledContext|Fuzz)'
+	@go test -count=1 ./examples/cached-query -run '^(TestLocalConcurrentRebuild|TestRebuild)'
+	@go test -count=1 ./examples/grpc-governance -run '^TestDiscoveryRequiresConsecutiveSuccessfulCalls$$'
+	@go test -count=1 ./connector -run '^TestRedisTLSConfig'
+	@go test -count=1 ./idgen -run '^(TestGeneratorMetricsFailure|TestSequencerSubmillisecondTTLIsRejected|Fuzz)'
+	@go test -count=1 ./idem -run '^(TestInvalidCallbackAndTTLPrecedeStorage|TestConsumeZeroTTLStillUsesDefault)'
 
 test-race:
 	@echo "运行 race tests..."
@@ -136,8 +149,15 @@ godoc-artifacts:
 	@count=$$(find artifacts/godoc -type f -name '*.txt' | wc -l | tr -d ' '); \
 	test "$$count" = "17" || { echo "expected 17 GoDoc artifacts, got $$count"; exit 1; }
 
+# Compile-only, including test sources. Runtime acceptance has explicit targets.
 examples-check:
-	@go test ./examples/...
+	@go test -run '^$$' ./examples/...
+
+examples-scenarios:
+	@go test -count=1 ./examples/cached-query ./examples/async-task ./examples/resilient-service ./examples/grpc-governance
+
+examples-external-check:
+	@go test -count=1 ./examples/internal/acceptance
 
 clean:
 	@echo "清理卷和网络..."

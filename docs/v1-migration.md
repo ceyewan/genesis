@@ -10,6 +10,27 @@ or documentation commits do not alter that module artifact. Production fixes
 require a separately approved and published RC, which consumers must select
 explicitly.
 
+## Unreleased hardening after RC3
+
+RC3 remains unchanged. Redis ACL adds `RedisConfig.Username`: keyed literals
+remain valid, while positional struct literals must migrate to keyed fields.
+TLS is opt-in through `connector.WithRedisTLSConfig`; the default remains
+plaintext, and applications must configure trusted CA and server-name verification.
+
+The remaining changes are source-compatible but observable:
+
+- `idem.Execute` / `Consume` reject nil callbacks with `ErrInvalidConfig`
+  before storage access. `Consume` rejects negative TTL instead of silently
+  selecting the default; zero still uses `DefaultTTL`.
+- `idgen.SequencerConfig.TTL` rejects positive values below one millisecond
+  with `ErrInvalidInput`, rather than truncating them into non-expiring keys.
+- Sequencer allocation preserves exact int64 values beyond `2^53` and checks
+  exhaustion before mutation. Existing data and TTL are retained on failure.
+- Redis broadcast `FromLatest` resolves its initial cursor once; an empty read
+  no longer causes messages arriving between reads to be skipped.
+- Multi coordinates backfill and mutations within the same instance. Its
+  existing stale-read TTL and cross-instance invalidation limits do not change.
+
 ## From v1.0.0-rc.2 to v1.0.0-rc.3
 
 RC3 deliberately makes two observability API replacements:

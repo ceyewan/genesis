@@ -34,6 +34,33 @@ client := redisConn.GetClient()
 client.Set(ctx, "key", "value", time.Hour)
 ```
 
+## Redis ACL 与 TLS
+
+`RedisConfig.Username` 对应 Redis ACL 命名用户，空值保持默认用户；`Password` 不变。
+TLS 通过标准库配置显式注入，不把证书、私钥放进序列化业务配置：
+
+```go
+conn, err := connector.NewRedis(&connector.RedisConfig{
+    Addr: "redis.internal:6379",
+    Username: "myapp",
+    Password: secret,
+}, connector.WithRedisTLSConfig(&tls.Config{
+    MinVersion: tls.VersionTLS12,
+    ServerName: "redis.internal",
+    RootCAs: trustedRoots,
+}))
+```
+
+`secret` 与 `trustedRoots` 由应用从凭证管理和可信 CA 文件加载。构造 Connector 时
+复制 TLS 配置、协议/密码套件/曲线/ECH 策略切片、CA 池及证书列表。
+证书内容、私钥、回调和会话缓存仍遵守标准库的不可变/并发使用约束。
+`nil` 不启用 TLS；不要用 `InsecureSkipVerify` 绕过生产校验。
+
+TLS 信任链、有效期、主机名或 ACL 失败在 Connect 阶段返回 `ErrConnection`，保留
+底层原因，且不会发布未连接客户端。Connector 不提供 Redis Cluster/Sentinel 或
+动态凭证轮换。新增字段使位置式 RedisConfig 字面量需要改成带字段名的写法，见
+[迁移说明](../docs/v1-migration.md#unreleased-hardening-after-rc3)。
+
 ## 支持的连接器
 
 | 类型 | 接口 | 底层客户端 | 工厂函数 |
@@ -111,5 +138,5 @@ go test -race ./connector/... -count=1
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/connector)
-- [组件设计博客](../docs/genesis-connector-blog.md)
+- [历史设计博客](../docs/genesis-connector-blog.md)
 - [Genesis 文档目录](../docs/README.md)

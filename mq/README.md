@@ -7,7 +7,7 @@
 - **NATS JetStream**：持久化流式系统，支持显式 Ack/Nak、durable consumer 和消息重投。
 - **Redis Stream**：基于 Consumer Group，复用现有 Redis 设施，Nak 语义不同（见下文）。
 
-接口设计与取舍详见 [genesis-mq-blog.md](../docs/genesis-mq-blog.md)，完整 API 文档见 `go doc ./mq`。
+完整 API 与后端行为见 `go doc -all ./mq` 和本页；旧设计博客仅供历史参考。
 
 ## 快速开始
 
@@ -210,5 +210,5 @@ go test -race ./mq/... -count=1
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/mq)
-- [组件设计博客](../docs/genesis-mq-blog.md)
+- [历史设计博客](../docs/genesis-mq-blog.md)
 - [Genesis 文档目录](../docs/README.md)

@@ -5,6 +5,9 @@
 - [总体设计](./design.md)
 - [开发指南](./development.md)
 - [发布流程](./release.md)
+- [组件选型与边界](./component-selection.md)
+- [最小生产接入](./production.md)
+- [常见问题排查](./troubleshooting.md)
 - [组件与使用示例](../examples/README.md)
 - [内部测试工具](../internal/testkit/README.md)
 

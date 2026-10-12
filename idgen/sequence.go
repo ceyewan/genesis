@@ -3,6 +3,8 @@ package idgen
 import (
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 
 	"github.com/redis/go-redis/v9"
 
@@ -58,7 +60,7 @@ func NewSequencer(cfg *SequencerConfig, opts ...Option) (Sequencer, error) {
 	if meter == nil {
 		meter = metrics.Discard()
 	}
-	seqCounter, _ := meter.Counter(MetricSequenceGenerated, "序列号生成总数")
+	seqCounter := initCounter(meter, opt.Logger, MetricSequenceGenerated, "序列号生成总数")
 
 	// 目前仅支持 Redis
 	switch config.Driver {
@@ -115,51 +117,9 @@ func (r *redisSequencer) Next(ctx context.Context, key string) (int64, error) {
 		return 0, err
 	}
 
-	// Lua 脚本：原子执行 IncrBy + MaxValue Check + rollback + Expire。
-	// 达到上限时回滚本次增量，绝不重置或回绕。
-	script := `
-		local key = KEYS[1]
-		local step = tonumber(ARGV[1])
-		local max = tonumber(ARGV[2])
-		local ttl_ms = tonumber(ARGV[3])
-
-		local v = redis.call("INCRBY", key, step)
-		local current = tonumber(v)
-
-		if max > 0 and current > max then
-			redis.call("DECRBY", key, step)
-			return {0, current}
-		end
-
-		if ttl_ms > 0 then
-			redis.call("PEXPIRE", key, ttl_ms)
-		end
-
-		return {1, current}
-	`
-
-	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, r.cfg.MaxValue, r.cfg.TTL.Milliseconds()).Slice()
+	seq, err := r.increment(ctx, client, redisKey, r.cfg.Step)
 	if err != nil {
-		if r.logger != nil {
-			r.logger.Error("failed to generate sequence",
-				clog.Error(err),
-				clog.String("redis_key", redisKey),
-				clog.String("key", key),
-			)
-		}
-		return 0, xerrors.Wrap(err, "redis_eval_failed")
-	}
-
-	if len(result) != 2 {
-		return 0, xerrors.New("unexpected result type from redis")
-	}
-	ok, okType := result[0].(int64)
-	seq, seqType := result[1].(int64)
-	if !okType || !seqType {
-		return 0, xerrors.New("unexpected result type from redis")
-	}
-	if ok != 1 {
-		return 0, xerrors.WithCode(ErrSequenceExhausted, "max_value_exceeded")
+		return 0, err
 	}
 
 	if r.logger != nil {
@@ -187,52 +147,12 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 		return nil, err
 	}
 
-	// Lua 脚本：原子执行 Batch IncrBy + MaxValue Check + rollback + Expire。
-	script := `
-		local key = KEYS[1]
-		local step = tonumber(ARGV[1])
-		local count = tonumber(ARGV[2])
-		local max = tonumber(ARGV[3])
-		local ttl_ms = tonumber(ARGV[4])
-
-		local total_inc = step * count
-		local v = redis.call("INCRBY", key, total_inc)
-		local end_seq = tonumber(v)
-
-		if max > 0 and end_seq > max then
-			redis.call("DECRBY", key, total_inc)
-			return {0, end_seq}
-		end
-
-		if ttl_ms > 0 then
-			redis.call("PEXPIRE", key, ttl_ms)
-		end
-
-		return {1, end_seq}
-	`
-
-	result, err := client.Eval(ctx, script, []string{redisKey}, r.cfg.Step, count, r.cfg.MaxValue, r.cfg.TTL.Milliseconds()).Slice()
+	if int64(count) > math.MaxInt64/r.cfg.Step {
+		return nil, xerrors.WithCode(ErrSequenceExhausted, "batch_increment_overflow")
+	}
+	endSeq, err := r.increment(ctx, client, redisKey, r.cfg.Step*int64(count))
 	if err != nil {
-		if r.logger != nil {
-			r.logger.Error("failed to batch generate sequence",
-				clog.Error(err),
-				clog.String("redis_key", redisKey),
-				clog.String("key", key),
-			)
-		}
-		return nil, xerrors.Wrap(err, "redis_eval_failed")
-	}
-
-	if len(result) != 2 {
-		return nil, xerrors.New("unexpected result type from redis")
-	}
-	ok, okType := result[0].(int64)
-	endSeq, seqType := result[1].(int64)
-	if !okType || !seqType {
-		return nil, xerrors.New("unexpected result type from redis")
-	}
-	if ok != 1 {
-		return nil, xerrors.WithCode(ErrSequenceExhausted, "max_value_exceeded")
+		return nil, err
 	}
 
 	// 生成序列号数组
@@ -255,6 +175,41 @@ func (r *redisSequencer) NextBatch(ctx context.Context, key string, count int) (
 	r.seqCounter.Add(ctx, float64(count))
 
 	return seqs, nil
+}
+
+// increment 将整数计算交给 Redis，Lua 只比较十进制字符串，避免 double 精度损失。
+func (r *redisSequencer) increment(ctx context.Context, client *redis.Client, key string, delta int64) (int64, error) {
+	maximum := r.cfg.MaxValue
+	if maximum == 0 {
+		maximum = math.MaxInt64
+	}
+	if delta > maximum {
+		return 0, ErrSequenceExhausted
+	}
+	const script = `
+		local current = redis.call("GET", KEYS[1]) or "0"
+		local limit = ARGV[2]
+		if #current > #limit or (#current == #limit and current > limit) then
+			return false
+		end
+		redis.call("INCRBY", KEYS[1], ARGV[1])
+		if tonumber(ARGV[3]) > 0 then
+			redis.call("PEXPIRE", KEYS[1], ARGV[3])
+		end
+		return redis.call("GET", KEYS[1])
+	`
+	value, err := client.Eval(ctx, script, []string{key}, delta, maximum-delta, r.cfg.TTL.Milliseconds()).Text()
+	if xerrors.Is(err, redis.Nil) {
+		return 0, ErrSequenceExhausted
+	}
+	if err != nil {
+		return 0, xerrors.Wrap(err, "increment sequence")
+	}
+	result, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, xerrors.Wrap(err, "parse sequence result")
+	}
+	return result, nil
 }
 
 // Set 直接设置序列号的值

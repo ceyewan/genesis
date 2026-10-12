@@ -64,6 +64,7 @@ type Idempotency interface {
 	//   - 执行结果或缓存的结果。为保证首次执行与缓存命中的类型一致，返回值会经过同一套 JSON 编解码规范化。
 	//   - 序列化结果超过 WithMaxResultBytes 时仍返回规范化结果，但不缓存；后续同 key 可能再次执行。
 	//   - 错误：ErrKeyEmpty、ErrKeyTooLong、ErrStoreCapacity、上下文错误、锁丢失错误等
+	// nil fn 返回 ErrInvalidConfig，且不会读取缓存或获取锁。
 	Execute(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error)
 
 	// Consume 用于消息消费的幂等处理
@@ -76,6 +77,7 @@ type Idempotency interface {
 	// 返回：
 	//   - executed: 是否执行了 fn
 	//   - 错误：ErrKeyEmpty、ErrKeyTooLong、ErrConcurrentRequest、ErrStoreCapacity 等
+	// ttl=0 使用 DefaultTTL；负 ttl 或 nil fn 返回 ErrInvalidConfig，不执行业务或访问存储。
 	Consume(ctx context.Context, key string, ttl time.Duration, fn func(ctx context.Context) error) (executed bool, err error)
 
 	// GinMiddleware 创建 Gin 框架中间件

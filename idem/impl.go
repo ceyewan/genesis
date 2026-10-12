@@ -77,6 +77,10 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 		return nil, err
 	}
 
+	if fn == nil {
+		return nil, xerrors.Wrap(ErrInvalidConfig, "execute callback is nil")
+	}
+
 	cachedResult, token, locked, err := i.loadResultOrAcquireLock(ctx, key, decodeJSONResult)
 	if err != nil {
 		if i.logger != nil {
@@ -162,7 +166,13 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 		return false, err
 	}
 
-	if ttl <= 0 {
+	if fn == nil {
+		return false, xerrors.Wrap(ErrInvalidConfig, "consume callback is nil")
+	}
+	if ttl < 0 {
+		return false, xerrors.Wrap(ErrInvalidConfig, "consume ttl must not be negative")
+	}
+	if ttl == 0 {
 		ttl = i.cfg.DefaultTTL
 	}
 

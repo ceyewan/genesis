@@ -14,7 +14,10 @@
 
 ```bash
 make check
+make test-fast
 make test-race
+make examples-scenarios
+make examples-external-check
 make markdown-check
 make api-compat-check
 make examples
@@ -23,10 +26,15 @@ make example-all
 
 `make check` 运行普通测试、lint、现代化检查、API 清单与兼容性检查、文档检查和
 示例编译。涉及并发或生命周期时，还需运行 `make test-race`。
+`test-fast` 是显式选定的无 Docker 包与用例，方便本地反馈，不代表全部单测通过，
+也不替代任何普通/race 容器门禁。Fuzz 与性能命令见[性能基线](./performance.md)。
 
 `make example-all` 只运行可自行结束的独立示例。场景示例通过
 `make example-<name>` 单独运行；可观测性完整验收见
 [示例说明](../examples/observability/README.md)。
+`examples-check` 仅编译；`examples-scenarios` 真实运行四个治理/数据访问场景测试；
+`examples-external-check` 在临时外部 module 编译 MQ/DLock 示例和生产装配文档。
+后两者与全量测试都会执行行为验收，真实后端缺失会失败。
 
 ## 测试与资源
 
