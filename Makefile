@@ -1,8 +1,8 @@
-.PHONY: check help up down test test-fast test-race lint lint-tool-check markdown-check modernize modernize-check clean logs status examples examples-check examples-scenarios examples-external-check example-all buf-lint api-inventory api-inventory-check api-baseline-check api-compat-check exported-comments godoc-artifacts
+.PHONY: check help up down test test-fast test-race lint lint-tool-check markdown-check modernize modernize-check clean logs status examples examples-check examples-scenarios examples-external-check example-all buf-lint api-inventory api-inventory-check api-compat-check vulncheck exported-comments godoc-artifacts
 
 DEV_COMPOSE_FILE := deploy/dev/docker-compose.yml
 BUF_DIR := examples
-RC1_BASELINE_COMMIT := ec5ad2c31fb4adce2bd42529e3d7fbfe92b23aa7
+GOVULNCHECK_VERSION := v1.9.0
 GOLANGCI_LINT_VERSION ?= 2.12.2
 GOLANGCI_LINT_VERSION_NORMALIZED := $(patsubst v%,%,$(GOLANGCI_LINT_VERSION))
 MARKDOWNLINT_CLI2_VERSION ?= 0.18.1
@@ -32,8 +32,8 @@ help:
 	@echo "  make modernize-check - 检查是否存在 go fix 建议"
 	@echo "  make api-inventory - 更新 v1 导出 API 清单"
 	@echo "  make api-inventory-check - 检查 v1 导出 API 清单漂移"
-	@echo "  make api-baseline-check - 从固定 RC1 提交重建并核验基线"
-	@echo "  make api-compat-check - 检查相对 RC1 基线的已审阅兼容性"
+	@echo "  make api-compat-check - 检查相对 v1.0.0 稳定基线的源码兼容性"
+	@echo "  make vulncheck - 使用固定版本 govulncheck 扫描漏洞（联网）"
 	@echo "  make clean     - 清理卷和网络"
 	@echo "  make logs      - 显示所有服务日志"
 	@echo "  make status    - 查看服务状态"
@@ -123,21 +123,12 @@ api-inventory:
 api-inventory-check:
 	@go run ./internal/cmd/apiinventory -check docs/api/inventory.md
 
-api-baseline-check:
-	@baseline_dir=$$(mktemp -d); \
-	trap 'rm -rf "$$baseline_dir"' EXIT; \
-	git archive $(RC1_BASELINE_COMMIT) | tar -x -C "$$baseline_dir"; \
-	go run ./internal/cmd/apiinventory \
-		-dir "$$baseline_dir" \
-		-legacy-public-examples \
-		-check docs/api/baselines/v1.0.0-rc.1.md
-
 api-compat-check:
 	@go run ./internal/cmd/apiinventory \
-		-compat-baseline docs/api/baselines/v1.0.0-rc.1.md \
-		-allow-breaking docs/api/compat-allowlist.md \
-		-expect-breaking docs/api/compat-expected.md \
-		-allow-removals docs/api/compat-removals.md
+		-compat-baseline docs/api/baselines/v1.0.0.md
+
+vulncheck:
+	@go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 exported-comments: lint-tool-check
 	@golangci-lint run --config .golangci-doc.yml ./...

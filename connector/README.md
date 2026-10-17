@@ -58,8 +58,7 @@ conn, err := connector.NewRedis(&connector.RedisConfig{
 
 TLS 信任链、有效期、主机名或 ACL 失败在 Connect 阶段返回 `ErrConnection`，保留
 底层原因，且不会发布未连接客户端。Connector 不提供 Redis Cluster/Sentinel 或
-动态凭证轮换。新增字段使位置式 RedisConfig 字面量需要改成带字段名的写法，见
-[迁移说明](../docs/migration.md#unreleased-hardening-after-rc3)。
+动态凭证轮换。配置请使用带字段名的 RedisConfig 字面量，避免依赖字段顺序。
 
 ## 支持的连接器
 

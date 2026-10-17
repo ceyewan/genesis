@@ -14,6 +14,8 @@ import (
 	"unicode"
 
 	"golang.org/x/tools/go/packages"
+
+	"github.com/ceyewan/genesis/xerrors"
 )
 
 const headerPrefix = `# Genesis v1 exported API inventory
@@ -25,22 +27,12 @@ func main() {
 	checkPath := flag.String("check", "", "fail if this path differs from the generated inventory")
 	moduleDir := flag.String("dir", ".", "module directory to inventory")
 	compatBaseline := flag.String("compat-baseline", "", "fail on removals or signature changes relative to this inventory")
-	allowBreaking := flag.String("allow-breaking", "", "inventory subset containing reviewed compatibility exceptions")
-	expectBreaking := flag.String("expect-breaking", "", "inventory subset containing the approved replacement signatures")
-	allowRemovals := flag.String("allow-removals", "", "inventory subset containing reviewed API removals with no replacement")
-	legacyPublicExamples := flag.Bool("legacy-public-examples", false, "allow importable example packages only while rebuilding a frozen legacy baseline")
 	flag.Parse()
 	if *writePath != "" && *checkPath != "" {
 		fatalf("-write and -check are mutually exclusive")
 	}
-	if *compatBaseline == "" && (*allowBreaking != "" || *expectBreaking != "" || *allowRemovals != "") {
-		fatalf("compatibility exception files require -compat-baseline")
-	}
-	if *legacyPublicExamples && (*moduleDir == "." || *checkPath == "") {
-		fatalf("-legacy-public-examples requires a non-default -dir and -check for frozen baseline reconstruction")
-	}
 
-	generated, err := generate(*moduleDir, *legacyPublicExamples)
+	generated, err := generate(*moduleDir)
 	if err != nil {
 		fatalf("generate inventory: %v", err)
 	}
@@ -63,13 +55,13 @@ func main() {
 		}
 	}
 	if *compatBaseline != "" {
-		if err := checkCompatibility(generated, *compatBaseline, *allowBreaking, *expectBreaking, *allowRemovals); err != nil {
+		if err := checkCompatibility(generated, *compatBaseline); err != nil {
 			fatalf("compatibility check: %v", err)
 		}
 	}
 }
 
-func generate(moduleDir string, legacyPublicExamples bool) ([]byte, error) {
+func generate(moduleDir string) ([]byte, error) {
 	cfg := &packages.Config{
 		Dir:  moduleDir,
 		Mode: packages.NeedName | packages.NeedTypes | packages.NeedModule,
@@ -90,7 +82,7 @@ func generate(moduleDir string, legacyPublicExamples bool) ([]byte, error) {
 		rel := strings.TrimPrefix(pkg.PkgPath, pkg.Module.Path)
 		isExample := strings.HasPrefix(rel, "/examples/") || rel == "/examples"
 		isInternal := strings.Contains(rel, "/internal/") || strings.HasSuffix(rel, "/internal")
-		if isExample && pkg.Name != "main" && !isInternal && !legacyPublicExamples {
+		if isExample && pkg.Name != "main" && !isInternal {
 			return nil, fmt.Errorf("importable example package must move under internal: %s", pkg.PkgPath)
 		}
 		if pkg.Name == "main" || isExample || strings.HasPrefix(rel, "/internal/") || rel == "/internal" {
@@ -101,7 +93,7 @@ func generate(moduleDir string, legacyPublicExamples bool) ([]byte, error) {
 	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].PkgPath < pkgs[j].PkgPath })
 
 	var out bytes.Buffer
-	out.WriteString(inventoryHeader(pkgs))
+	out.WriteString(headerPrefix + ".\n\n")
 	for _, pkg := range pkgs {
 		rel := strings.TrimPrefix(pkg.PkgPath, pkg.Module.Path+"/")
 		fmt.Fprintf(&out, "## `%s`\n\n", rel)
@@ -111,16 +103,6 @@ func generate(moduleDir string, legacyPublicExamples bool) ([]byte, error) {
 		out.WriteByte('\n')
 	}
 	return append(bytes.TrimRight(out.Bytes(), "\n"), '\n'), nil
-}
-
-func inventoryHeader(pkgs []*packages.Package) string {
-	header := headerPrefix
-	for _, pkg := range pkgs {
-		if strings.TrimPrefix(pkg.PkgPath, pkg.Module.Path+"/") == "testkit" {
-			return header + "; `testkit` is included because it is an importable module package.\n\n"
-		}
-	}
-	return header + ".\n\n"
 }
 
 func packageEntries(pkg *types.Package) []string {
@@ -372,7 +354,7 @@ func (p apiPrinter) qualifier(other *types.Package) string {
 	return other.Path()
 }
 
-func checkCompatibility(current []byte, baselinePath, allowPath, expectedPath, removalsPath string) error {
+func checkCompatibility(current []byte, baselinePath string) error {
 	baseline, err := os.ReadFile(baselinePath)
 	if err != nil {
 		return fmt.Errorf("read baseline: %w", err)
@@ -385,90 +367,8 @@ func checkCompatibility(current []byte, baselinePath, allowPath, expectedPath, r
 	if err != nil {
 		return fmt.Errorf("parse baseline: %w", err)
 	}
-
-	if (allowPath == "") != (expectedPath == "") {
-		return fmt.Errorf("-allow-breaking and -expect-breaking must be supplied together")
-	}
-
-	allowed := newInventory()
-	if allowPath != "" {
-		allowData, readErr := os.ReadFile(allowPath)
-		if readErr != nil {
-			return fmt.Errorf("read allowlist: %w", readErr)
-		}
-		allowed, err = parseInventory(allowData)
-		if err != nil {
-			return fmt.Errorf("parse allowlist: %w", err)
-		}
-	}
-	expected := newInventory()
-	if expectedPath != "" {
-		expectedData, readErr := os.ReadFile(expectedPath)
-		if readErr != nil {
-			return fmt.Errorf("read expected replacements: %w", readErr)
-		}
-		expected, err = parseInventory(expectedData)
-		if err != nil {
-			return fmt.Errorf("parse expected replacements: %w", err)
-		}
-	}
-	removals := newInventory()
-	if removalsPath != "" {
-		removalsData, readErr := os.ReadFile(removalsPath)
-		if readErr != nil {
-			return fmt.Errorf("read approved removals: %w", readErr)
-		}
-		removals, err = parseInventory(removalsData)
-		if err != nil {
-			return fmt.Errorf("parse approved removals: %w", err)
-		}
-	}
-	var invalidAllowlist []string
-	for slot, before := range allowed.slots {
-		after, paired := expected.slots[slot]
-		if !paired {
-			invalidAllowlist = append(invalidAllowlist, "missing expected replacement for "+slot+": "+before.key)
-		}
-		if _, ok := baselineEntries.entries[before.key]; !ok {
-			invalidAllowlist = append(invalidAllowlist, "not present in baseline: "+before.key)
-			continue
-		}
-		if _, ok := currentEntries.entries[before.key]; ok {
-			invalidAllowlist = append(invalidAllowlist, "no longer needed: "+before.key)
-		}
-		if paired {
-			if _, ok := currentEntries.entries[after.key]; !ok {
-				invalidAllowlist = append(invalidAllowlist, "approved replacement is not current: "+after.key)
-			}
-			if _, ok := baselineEntries.entries[after.key]; ok {
-				invalidAllowlist = append(invalidAllowlist, "replacement already exists in baseline: "+after.key)
-			}
-		}
-	}
-	for slot, after := range expected.slots {
-		if _, paired := allowed.slots[slot]; !paired {
-			invalidAllowlist = append(invalidAllowlist, "expected replacement has no matching old entry for "+slot+": "+after.key)
-		}
-	}
-	for slot, removal := range removals.slots {
-		if _, ok := baselineEntries.entries[removal.key]; !ok {
-			invalidAllowlist = append(invalidAllowlist, "approved removal is not present in baseline: "+removal.key)
-			continue
-		}
-		if _, paired := allowed.slots[slot]; paired {
-			invalidAllowlist = append(invalidAllowlist, "API slot is approved as both replacement and removal: "+slot)
-		}
-		if _, ok := currentEntries.entries[removal.key]; ok {
-			invalidAllowlist = append(invalidAllowlist, "approved removal is still current: "+removal.key)
-			continue
-		}
-		if after, ok := currentEntries.slots[slot]; ok {
-			invalidAllowlist = append(invalidAllowlist, "approved removal has a current replacement; use the paired replacement files: "+after.key)
-		}
-	}
-	if len(invalidAllowlist) > 0 {
-		sort.Strings(invalidAllowlist)
-		return fmt.Errorf("invalid compatibility allowlist:\n  %s", strings.Join(invalidAllowlist, "\n  "))
+	if len(baselineEntries.entries) == 0 {
+		return xerrors.New("baseline contains no exported declarations")
 	}
 
 	var incompatible []string
@@ -476,35 +376,24 @@ func checkCompatibility(current []byte, baselinePath, allowPath, expectedPath, r
 		if _, ok := currentEntries.entries[entry]; ok {
 			continue
 		}
-		if _, ok := allowed.entries[entry]; ok {
-			continue
-		}
-		if _, ok := removals.entries[entry]; ok {
-			continue
-		}
 		incompatible = append(incompatible, entry)
 	}
 	if len(incompatible) > 0 {
 		sort.Strings(incompatible)
-		return fmt.Errorf("unreviewed exported API removals or changes:\n  %s", strings.Join(incompatible, "\n  "))
+		return fmt.Errorf("incompatible exported API removals or changes:\n  %s", strings.Join(incompatible, "\n  "))
 	}
 	return nil
 }
 
-type inventoryEntry struct {
-	key  string
-	slot string
-}
-
 type inventory struct {
-	entries map[string]inventoryEntry
-	slots   map[string]inventoryEntry
+	entries map[string]struct{}
+	slots   map[string]string
 }
 
 func newInventory() *inventory {
 	return &inventory{
-		entries: make(map[string]inventoryEntry),
-		slots:   make(map[string]inventoryEntry),
+		entries: make(map[string]struct{}),
+		slots:   make(map[string]string),
 	}
 }
 
@@ -532,11 +421,10 @@ func parseInventory(data []byte) (*inventory, error) {
 			return nil, err
 		}
 		if previous, duplicate := inventory.slots[slot]; duplicate {
-			return nil, fmt.Errorf("multiple entries occupy API slot %s: %s and %s", slot, previous.key, key)
+			return nil, fmt.Errorf("multiple entries occupy API slot %s: %s and %s", slot, previous, key)
 		}
-		entry := inventoryEntry{key: key, slot: slot}
-		inventory.entries[key] = entry
-		inventory.slots[slot] = entry
+		inventory.entries[key] = struct{}{}
+		inventory.slots[slot] = key
 	}
 	return inventory, nil
 }
