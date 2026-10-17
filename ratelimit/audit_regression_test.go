@@ -13,9 +13,9 @@ import (
 	"github.com/ceyewan/genesis/metrics"
 )
 
-func TestRedisTimestampSerializationPreservesHighRateDebt(t *testing.T) {
+func TestRedisTokenBucketPreservesHighRateBurst(t *testing.T) {
 	client := testkit.NewRedisContainerClient(t)
-	// Freeze server time to isolate serialization precision from network latency.
+	// Freeze server time to isolate token accounting from network latency.
 	script := redis.NewScript(strings.Replace(luaScript, `redis.call("TIME")`, `{1700000000, 0}`, 1))
 	allowed := 0
 	for range 30 {
@@ -25,10 +25,7 @@ func TestRedisTimestampSerializationPreservesHighRateDebt(t *testing.T) {
 			allowed++
 		}
 	}
-	// Binary floating-point may conservatively lose one token, but must not
-	// erase the accumulated debt and admit arbitrarily many requests.
-	require.GreaterOrEqual(t, allowed, 9)
-	require.LessOrEqual(t, allowed, 10)
+	require.Equal(t, 10, allowed, "an unchanged server time cannot refill tokens")
 }
 
 func TestStandaloneReclaimsIdleKeysAtCapacity(t *testing.T) {

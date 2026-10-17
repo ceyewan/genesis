@@ -196,9 +196,12 @@ var (
 
 空 Driver、空 topic 和 nil Handler 都返回可由 `errors.Is(err, ErrInvalidConfig)` 判断的错误。
 
-MQ 的 `Drain(ctx)` 停止新投递并等待已交付 Handler 完成；ctx 到期只结束当前调用者的等待，
+MQ 的 `Drain(ctx)` 立即启动已有订阅的排空，同时覆盖初始化中的订阅，不等全部初始化完成才停收。
+它等待已交付 Handler 完成；ctx 到期只结束当前调用者的等待，
 不取消共享清理，之后仍可调用 `Close()` 强制停止。单个 Subscription 的 `Drain(ctx)` 到期会取消该订阅的 Handler Context。
-`Close()` 使用 5 秒默认上限取消已有订阅并等待退出。两者都可并发重复调用，生命周期开始关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`。
+`Close()` 使用 5 秒默认上限取消已有及正在初始化的订阅，并等待迟到订阅及 Handler 退出。
+若初始化或 Handler 不响应取消，关闭会返回超时而非成功，后台清理仍会等待其结束。
+两者都可并发重复调用，生命周期开始关闭后 `Publish` 和 `Subscribe` 返回 `ErrClosed`。
 MQ 只借用注入的 Connector；关闭 MQ 不会关闭 Connector，连接生命周期仍由调用方负责。
 
 ## 测试

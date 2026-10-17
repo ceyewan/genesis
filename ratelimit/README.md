@@ -86,10 +86,27 @@ allowed, err := limiter.Allow(ctx, "user:123", ratelimit.Limit{
 })
 ```
 
-分布式模式当前仍然是令牌桶语义，但有两个实现细节需要知道：
+分布式模式使用普通令牌桶，只保存 `tokens`（剩余令牌）和 `last_us`（上次更新时间）：
 
-- Redis 键会把 `key + rate + burst` 一起编码进去，避免同一个业务键在不同规则下互相串扰。
-- 脚本使用 Redis `TIME` 作为统一时钟，而不是各节点本地时间。
+```text
+available = min(Burst, tokens + elapsed_seconds * Rate)
+若 n <= available：允许，扣除 n；否则拒绝。
+```
+
+补充、判断和更新在一个 Redis Lua 脚本中原子执行。`n > Burst` 直接拒绝，不访问 Redis。
+Redis 键编码 `key + rate + burst`，并带 `:v2` 状态版本后缀，避免不同规则及旧格式互相串扰。
+
+精度与适用范围：
+
+- 使用 Redis `TIME` 的整数微秒时间，先做时间差再补充令牌，不向大 Unix 秒时间戳累加微小间隔。
+- 时钟为微秒粒度，令牌使用浮点近似计算。极高 Rate、小 Burst 或极大数值下会有粒度/舍入误差，
+  不保证纳秒级放行或精确配额结算；需要严格计量时应使用专门的整数配额方案。
+- Burst 超过 Lua 可精确表示的整数范围（`2^53-1`），或回满时间无法安全表示为 Redis 过期时间时，返回 `ErrInvalidLimit`。
+
+从旧标量时间戳状态升级时，新键的桶从完整 Burst 开始；旧键不被覆盖，按原 TTL 退出。
+新旧实例不共享同一桶，不能在混部期间假定全局额度一致，须协调切换。
+若跨升级也必须保留额度约束，应暂停流量并停止旧实例，至少等待相关规则的一个完整回满窗口 `Burst/Rate` 后启用新实例，
+而不能直接滚动混部或无条件接受初始 Burst 重建，见[迁移说明](../docs/migration.md)。
 
 ## Gin 集成
 

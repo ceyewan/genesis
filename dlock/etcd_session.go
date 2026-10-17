@@ -131,6 +131,8 @@ func (l *etcdLocker) recordCleanupError(err error) {
 	}
 }
 
+// cleanupAcquisition only receives unpublished entries: no Unlock or Close
+// snapshot can access their Mutex. The acquiring worker owns all cleanup.
 func (l *etcdLocker) cleanupAcquisition(entry *etcdLockEntry) {
 	ctx, cancel := context.WithTimeout(context.Background(), etcdLeaseCleanupTimeout)
 	defer cancel()

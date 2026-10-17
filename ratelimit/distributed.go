@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"sync/atomic"
 
@@ -14,56 +15,52 @@ import (
 	"github.com/ceyewan/genesis/xerrors"
 )
 
-// luaScript 令牌桶算法的 Lua 脚本
-const luaScript = `
--- 令牌桶算法的纯时间戳实现 (Token Bucket with Timestamp)
--- KEYS[1]: 限流器的唯一键
--- ARGV[1]: 速率 (rate, 每秒允许的请求数)
--- ARGV[2]: 桶容量 (capacity, 峰值/并发容量)
--- ARGV[3]: 本次请求需要消耗的令牌数 (tokens_to_consume)
+const (
+	maxRedisExactInteger int64 = 1<<53 - 1
+	maxRedisTTLSeconds         = maxRedisExactInteger / 1000
+)
 
+// luaScript is a standard token bucket: refill by elapsed time, cap at Burst,
+// then consume n tokens. State contains only remaining tokens and last update.
+// Integer microseconds avoid adding tiny intervals to absolute Unix seconds.
+const luaScript = `
 local rate = tonumber(ARGV[1])
 local capacity = tonumber(ARGV[2])
 local requested = tonumber(ARGV[3])
+if requested > capacity then return {0, 0} end
 
 local time_parts = redis.call("TIME")
-local now = tonumber(time_parts[1]) + tonumber(time_parts[2]) / 1000000
+local now = tonumber(time_parts[1]) * 1000000 + tonumber(time_parts[2])
+local state = redis.call("HMGET", KEYS[1], "tokens", "last_us")
+local tokens = tonumber(state[1]) or capacity
+local last = tonumber(state[2]) or now
+-- A backward clock step must not refill tokens or move the reference backward.
+now = math.max(now, last)
+local elapsed = (now - last) / 1000000
+tokens = math.min(capacity, tokens + elapsed * rate)
 
--- 每个令牌代表的时间间隔（秒）
-local interval_per_token = 1 / rate
--- 桶装满所需要的时间
-local fill_time = capacity * interval_per_token
-
--- 获取上一次的状态（即下一次允许放行的时间戳）
-local last_refreshed = tonumber(redis.call("GET", KEYS[1]))
-if last_refreshed == nil then
-  last_refreshed = now
+local allowed = 0
+if requested <= tokens then
+  tokens = tokens - requested
+  allowed = 1
 end
-
--- 计算理论上的下一次放行时间
-local next_available_time = math.max(last_refreshed, now)
-
--- 判断是否允许请求
-local new_refreshed = next_available_time + requested * interval_per_token
-local allow_at_most = now + fill_time
-
-if new_refreshed <= allow_at_most then
-  -- 令牌足够，请求被允许
-  -- Redis 的隐式数字转字符串仅保留 14 位有效数字；显式保留 double 精度。
-  -- 保持秒级存储格式，兼容已有 key，避免升级时重置桶。
-  redis.call("SET", KEYS[1], string.format("%.17g", new_refreshed), "EX", math.ceil(fill_time * 2))
-  
-  -- 计算剩余可用令牌数
-  local remaining_tokens = math.floor((allow_at_most - new_refreshed) / interval_per_token)
-  
-  return {1, remaining_tokens}
-else
-  -- 令牌不足，拒绝请求
-  local remaining_tokens = math.floor((allow_at_most - next_available_time) / interval_per_token)
-  
-  return {0, remaining_tokens}
-end
+-- Preserve fractional tokens and integer microseconds without Lua's implicit
+-- 14-significant-digit conversion when passing numbers to Redis commands.
+redis.call("HSET", KEYS[1], "tokens", string.format("%.17g", tokens),
+  "last_us", string.format("%.0f", now))
+redis.call("EXPIRE", KEYS[1], math.max(1, math.ceil(2 * capacity / rate)))
+return {allowed, math.floor(tokens)}
 `
+
+func validRedisLimit(limit Limit) bool {
+	if !limit.valid() || int64(limit.Burst) > maxRedisExactInteger {
+		return false
+	}
+	// Keep expiration arithmetic representable by Redis and Lua. This also
+	// rejects extremely small rates whose full refill horizon overflows.
+	horizon := 2 * float64(limit.Burst) / limit.Rate
+	return !math.IsInf(horizon, 1) && horizon <= float64(maxRedisTTLSeconds)
+}
 
 // distributedLimiter 分布式限流器实现（非导出）
 type distributedLimiter struct {
@@ -140,12 +137,18 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 		return false, ErrKeyEmpty
 	}
 
-	if !limit.valid() {
+	if !validRedisLimit(limit) {
 		return false, ErrInvalidLimit
 	}
 
 	if n <= 0 {
 		return false, ErrInvalidLimit
+	}
+	if n > limit.Burst {
+		if l.deniedCounter != nil {
+			l.deniedCounter.Inc(ctx, metrics.L(LabelMode, "distributed"))
+		}
+		return false, nil
 	}
 
 	// 构建 Redis key
@@ -206,7 +209,7 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 
 func (l *distributedLimiter) buildKey(key string, limit Limit) string {
 	return fmt.Sprintf(
-		"%s%s:rate=%s:burst=%d",
+		"%s%s:rate=%s:burst=%d:v2",
 		l.prefix,
 		key,
 		strconv.FormatFloat(limit.Rate, 'g', -1, 64),

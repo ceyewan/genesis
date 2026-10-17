@@ -6,6 +6,13 @@
 
 ## Unreleased hardening after RC3
 
+- Redis 限流改为普通令牌桶，保存剩余令牌与更新时间，使用 `:v2` 状态键。
+  新桶从完整 Burst 开始，旧标量键保持不变并按原 TTL 退出；新旧实例不共享额度，必须协调切换，
+  不要在混部期间假定全局限流仍覆盖所有实例。Redis 规则超出 Lua 精确整数或过期时间范围时，
+  现在返回 `ErrInvalidLimit`，详见 [Redis 数值边界](../ratelimit/README.md#2-分布式模式)。
+- MQ 的关闭现在覆盖正在初始化的订阅；初始化取消后仍须等待迟到订阅及 Handler 清理完成。
+  不响应取消的初始化或 Handler 可能使 `Close` 返回超时，不能把它当作成功关闭。
+
 - Registry 改用 `registry.New(cfg, registry.WithEtcdConnector(conn), opts...)`；
   旧的位置式 connector 参数不再支持。缺失或未连接的 connector 返回 `registry.ErrConnectorNil`，
   同时匹配 `connector.ErrClientNil`。

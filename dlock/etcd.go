@@ -51,6 +51,7 @@ type etcdLockEntry struct {
 	monitorDone chan struct{}
 	stopOnce    sync.Once
 	releaseMu   sync.Mutex
+	released    bool // Protected by releaseMu; includes forced terminal cleanup.
 }
 
 // newEtcd 创建 Etcd Locker 实例
@@ -243,45 +244,78 @@ func (l *etcdLocker) releaseAcquisition(key string) {
 }
 
 func (l *etcdLocker) Unlock(ctx context.Context, key string) error {
+	if ctx == nil {
+		return xerrors.Wrap(ErrInvalidConfig, "unlock context is nil")
+	}
 	if err := validateKey(key); err != nil {
 		return err
 	}
-	l.mu.RLock()
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
+	}
 	entry, exists := l.locks[key]
 	if !exists {
 		_, lost := l.lost.Get(key)
-		l.mu.RUnlock()
+		l.mu.Unlock()
 		if lost {
 			return xerrors.Wrapf(ErrOwnershipLost, "key: %s", key)
 		}
 		return xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
 	}
-	l.mu.RUnlock()
+	// Admission and Close's transition share the same mutex: no Add can race
+	// with Wait after shutdown, and releases include their session cleanup.
+	l.workers.Add(1)
+	l.mu.Unlock()
+	defer l.workers.Done()
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(l.ctx, cancel)
+	defer stop()
+	defer cancel()
+	return l.releaseEntry(ctx, key, entry, false)
+}
 
+// Both explicit Unlock and Close serialize all access to the native Mutex.
+// A caller that already captured an entry may find another release completed;
+// that is success, not ErrLockNotHeld, and must not revoke the session twice.
+func (l *etcdLocker) releaseEntry(ctx context.Context, key string, entry *etcdLockEntry, force bool) error {
 	entry.releaseMu.Lock()
 	defer entry.releaseMu.Unlock()
-	l.mu.RLock()
-	current := l.locks[key]
-	l.mu.RUnlock()
-	if current != entry {
-		return xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
+	if entry.released {
+		return nil
 	}
-
-	// 释放 Mutex
-	if err := entry.mutex.Unlock(ctx); err != nil {
-		return xerrors.Wrap(err, "failed to unlock")
-	}
-	l.removeReleased(key, entry)
-
-	// 如果是 TTL session，需要关闭它
-	if entry.isTTL && entry.session != nil {
-		if err := l.closeSession(entry.session); err != nil {
-			return err
+	if !force {
+		l.mu.RLock()
+		current, closed := l.locks[key], l.closed
+		lostEntry, lost := l.lost.Get(key)
+		l.mu.RUnlock()
+		if current != entry && !closed {
+			if lost && lostEntry == entry {
+				return xerrors.Wrapf(ErrOwnershipLost, "key: %s", key)
+			}
+			return xerrors.Wrapf(ErrLockNotHeld, "key: %s", key)
 		}
 	}
-
+	unlockErr := entry.mutex.Unlock(ctx)
+	if unlockErr != nil && !force {
+		// Leave the entry retryable; Close can retry with its cleanup budget.
+		return xerrors.Wrap(unlockErr, "failed to unlock")
+	}
+	entry.released = true
+	l.removeReleased(key, entry)
+	var sessionErr error
+	if entry.isTTL {
+		sessionErr = l.closeSession(entry.session)
+		if !force {
+			l.recordCleanupError(sessionErr)
+		}
+	}
+	if err := xerrors.Combine(unlockErr, sessionErr); err != nil {
+		return err
+	}
 	if l.logger != nil {
-		l.logger.InfoContext(ctx, "lock released", clog.String("key", key))
+		l.logger.InfoContext(ctx, "Lock released", clog.String("key", key))
 	}
 	return nil
 }
@@ -359,24 +393,16 @@ func (l *etcdLocker) Close() error {
 		l.session = nil
 		l.mu.Unlock()
 		l.cancel()
-		// All in-flight creators must finish reclaiming late leases before Close returns.
+		// Wait for admitted acquisitions and releases, including late lease cleanup.
 		l.workers.Wait()
 
 		var errs []error
 		for key, entry := range entries {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			if err := entry.mutex.Unlock(ctx); err != nil {
-				errs = append(errs, xerrors.Wrapf(err, "failed to unlock key: %s during close", key))
+			if err := l.releaseEntry(ctx, key, entry, true); err != nil {
+				errs = append(errs, xerrors.Wrapf(err, "failed to release key: %s during close", key))
 			}
 			cancel()
-			l.stopMonitor(entry)
-			entry.lostOnce.Do(func() { close(entry.lostCh) })
-
-			if entry.isTTL && entry.session != nil {
-				if err := l.closeSession(entry.session); err != nil {
-					errs = append(errs, xerrors.Wrapf(err, "failed to close ttl session for key: %s", key))
-				}
-			}
 		}
 
 		if defaultSession != nil {

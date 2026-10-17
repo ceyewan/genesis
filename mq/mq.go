@@ -53,7 +53,8 @@ type MQ interface {
 	Drain(ctx context.Context) error
 
 	// Close 关闭 MQ 客户端
-	// 注意：此方法会停止并等待当前订阅，但底层连接由 Connector 管理，不会被关闭。
+	// 停止并等待已有及初始化中的订阅，最多等待 5 秒；超时不代表 Handler 已退出。
+	// 底层连接由 Connector 管理，不会被关闭。
 	Close() error
 }
 

@@ -59,9 +59,9 @@ test-fast:
 	@go test -count=1 ./connector -run '^(TestRedisTLSConfig|TestConnectRejectsNilContextBeforeIO|TestNilConnectorOptionIsIgnored|TestPublicConfigSerializationTagsAreConsistent)'
 	@go test -count=1 ./idgen -run '^(TestGeneratorMetricsFailure|TestSequencerSubmillisecondTTLIsRejected|Fuzz)'
 	@go test -count=1 ./idem -run '^(TestInvalidCallbackAndTTLPrecedeStorage|TestConsumeZeroTTLStillUsesDefault|TestCompletionJoinsRefreshBeforeCommit|TestGinMiddlewareRestoresRequestContext|TestSubmillisecondTTLRejected|TestMemoryStoreRejectsOperationsAfterClose)'
-	@go test -count=1 ./mq -run '^(TestDrainTimeoutDoesNotPreventForceClose|TestDrainCallerDeadlineDoesNotCancelSharedCleanup|TestMessageHotPathReusesInstruments)'
+	@go test -count=1 ./mq -run '^(TestDrainTimeoutDoesNotPreventForceClose|TestDrainCallerDeadlineDoesNotCancelSharedCleanup|TestMessageHotPathReusesInstruments|TestCloseTracksAllConcurrentInitializers|TestCloseWaitsForInitializingSubscription|TestClosePreservesLateSubscriptionCleanupError|TestCloseCannotSucceedBeforeUncooperativeInitializerReturns|TestDrainStartsReadySubscriptionsBeforeWaitingForInitialization|TestDrainIncludesLateSubscriptionAndCloseCanEscalate)'
 	@go test -count=1 ./db -run '^(TestGormLogger|TestNewRejectsNegativeSlowThreshold|TestBorrowedPool|TestGormInitializeFailure|TestBorrowedHandle)'
-	@go test -count=1 ./ratelimit -run '^TestStandaloneReclaimsIdleKeysAtCapacity$$'
+	@go test -count=1 ./ratelimit -run '^(TestStandaloneReclaimsIdleKeysAtCapacity|TestDistributedLimitNumericBounds)$$'
 
 test-race:
 	@echo "运行 race tests..."
