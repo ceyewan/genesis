@@ -39,7 +39,7 @@ func WithLogger(l clog.Logger) Option {
 	}
 }
 
-// WithTracer 注入 TracerProvider（用于 OpenTelemetry trace）
+// WithTracer 将 TracerProvider 注入组件自己的 GORM 句柄，不修改 Connector 或其他 DB 实例。
 func WithTracer(tp trace.TracerProvider) Option {
 	return func(o *options) {
 		o.tracer = tp

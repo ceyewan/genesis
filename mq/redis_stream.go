@@ -146,7 +146,7 @@ func (t *redisStreamTransport) consumeWithGroup(ctx, handlerCtx context.Context,
 		loopCount++
 
 		// 定期检查并 claim 超时的 Pending 消息
-		if loopCount%pendingCheckRatio == 0 {
+		if loopCount == 1 || loopCount%pendingCheckRatio == 0 {
 			claimCursor = t.claimPendingMessages(ctx, handlerCtx, topic, group, consumer, pendingIdleTime, pendingClaimCount, claimCursor, handler)
 		}
 
@@ -171,9 +171,7 @@ func (t *redisStreamTransport) consumeWithGroup(ctx, handlerCtx context.Context,
 
 		for _, stream := range streams {
 			for _, msg := range stream.Messages {
-				if ctx.Err() != nil {
-					return
-				}
+				// 已拉取的批次属于已交付消息，Drain 必须处理完毕。
 				t.processMessage(handlerCtx, topic, group, msg, handler)
 			}
 		}
@@ -221,9 +219,6 @@ func (t *redisStreamTransport) claimPendingMessages(
 
 	// 处理认领到的消息
 	for _, msg := range messages {
-		if ctx.Err() != nil {
-			break
-		}
 		t.processMessage(handlerCtx, topic, group, msg, handler)
 	}
 
@@ -261,9 +256,6 @@ func (t *redisStreamTransport) consumeBroadcast(ctx, handlerCtx context.Context,
 
 		for _, stream := range streams {
 			for _, msg := range stream.Messages {
-				if ctx.Err() != nil {
-					return
-				}
 				t.processMessage(handlerCtx, topic, "", msg, handler)
 				lastID = msg.ID
 			}
@@ -390,7 +382,9 @@ func (m *redisStreamMessage) Ack() error {
 		m.acked = true
 		return nil
 	}
-	if err := m.client.XAck(context.Background(), m.topic, m.group, m.id).Err(); err != nil {
+	ctx, cancel := context.WithTimeout(m.Context(), 5*time.Second)
+	defer cancel()
+	if err := m.client.XAck(ctx, m.topic, m.group, m.id).Err(); err != nil {
 		return err
 	}
 	m.acked = true
@@ -432,7 +426,7 @@ func (s *redisStreamSubscription) Unsubscribe() error {
 
 func (s *redisStreamSubscription) Drain(ctx context.Context) error {
 	if ctx == nil {
-		return xerrors.New("mq subscription drain context is nil")
+		return xerrors.Wrap(ErrInvalidConfig, "mq subscription drain context is nil")
 	}
 	s.stopOnce.Do(s.stopConsuming)
 	select {

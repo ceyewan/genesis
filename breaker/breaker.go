@@ -164,7 +164,9 @@ func New(cfg *Config, opts ...Option) (Breaker, error) {
 	// 应用选项
 	opt := options{}
 	for _, o := range opts {
-		o(&opt)
+		if o != nil {
+			o(&opt)
+		}
 	}
 
 	// nil logger 时使用 Discard（确保 logger 永远不为 nil）
@@ -172,13 +174,6 @@ func New(cfg *Config, opts ...Option) (Breaker, error) {
 	if logger == nil {
 		logger = clog.Discard()
 	}
-
-	logger.Info("creating circuit breaker",
-		clog.Int("max_requests", int(cfg.MaxRequests)),
-		clog.Duration("interval", cfg.Interval),
-		clog.Duration("timeout", cfg.Timeout),
-		clog.Float64("failure_ratio", cfg.FailureRatio),
-		clog.Int("minimum_requests", int(cfg.MinimumRequests)))
 
 	return newBreaker(cfg, logger, opt.meter, opt.fallback, opt.failureClassifier)
 }

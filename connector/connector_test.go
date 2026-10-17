@@ -31,6 +31,10 @@ func (m *connectorTestMeter) Counter(name, _ string, _ ...metrics.MetricOption) 
 	return &connectorTestCounter{value: &atomic.Int64{}}, nil
 }
 
+func (*connectorTestMeter) UpDownCounter(name, desc string, opts ...metrics.MetricOption) (metrics.UpDownCounter, error) {
+	return metrics.Discard().UpDownCounter(name, desc, opts...)
+}
+
 func (*connectorTestMeter) Gauge(string, string, ...metrics.MetricOption) (metrics.Gauge, error) {
 	return connectorTestGauge{}, nil
 }
@@ -47,8 +51,6 @@ func (c *connectorTestCounter) Add(_ context.Context, value float64, _ ...metric
 }
 
 func (connectorTestGauge) Set(context.Context, float64, ...metrics.Label) {}
-func (connectorTestGauge) Inc(context.Context, ...metrics.Label)          {}
-func (connectorTestGauge) Dec(context.Context, ...metrics.Label)          {}
 
 func (connectorTestHistogram) Record(context.Context, float64, ...metrics.Label) {
 }

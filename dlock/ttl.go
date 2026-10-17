@@ -9,7 +9,9 @@ import (
 func resolveLockTTL(defaultTTL time.Duration, opts ...LockOption) (time.Duration, error) {
 	options := &lockOptions{}
 	for _, opt := range opts {
-		opt(options)
+		if opt != nil {
+			opt(options)
+		}
 	}
 
 	if !options.ttlSet {

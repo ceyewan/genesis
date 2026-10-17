@@ -28,14 +28,14 @@
 - **指标**：OpenTelemetry
 - **缓存**：Redis / 内存
 - **分布式锁**：Redis / Etcd
-- **消息队列**：NATS (Core/JetStream) / Redis Stream
-- **数据库**：MySQL（支持分库分表）
+- **消息队列**：NATS JetStream / Redis Stream
+- **数据库**：SQLite / PostgreSQL / MySQL 标准单库连接（不提供应用层分库分表）
 
 ## 开发指南
 
 ```bash
 # 环境管理
-make up          # 启动所有开发服务（Redis, MySQL, Etcd, NATS）
+make up          # 启动示例开发服务（Redis, PostgreSQL, Etcd, NATS）
 make down        # 停止所有开发服务
 make status      # 查看服务状态
 make logs        # 查看服务日志

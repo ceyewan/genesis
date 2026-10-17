@@ -428,8 +428,12 @@ func TestMeterInterface(t *testing.T) {
 	counter.Add(ctx, 5, L("method", "POST"))
 
 	gauge.Set(ctx, 100.5, L("type", "memory"))
-	gauge.Inc(ctx, L("node", "worker1"))
-	gauge.Dec(ctx, L("node", "worker1"))
+	inflight, err := meter.UpDownCounter("test_inflight", "正在处理的请求", WithUnit("{request}"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inflight.Add(ctx, 1, L("node", "worker1"))
+	inflight.Add(ctx, -1, L("node", "worker1"))
 
 	histogram.Record(ctx, 0.123, L("endpoint", "/api/users"))
 	histogram.Record(ctx, 0.456, L("endpoint", "/api/orders"))

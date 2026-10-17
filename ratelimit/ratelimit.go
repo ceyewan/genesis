@@ -56,8 +56,8 @@ import (
 
 // Limit 定义限流规则（令牌桶算法）
 type Limit struct {
-	Rate  float64 // 令牌生成速率（每秒生成多少个令牌）
-	Burst int     // 令牌桶容量（突发最大请求数）
+	Rate  float64 `json:"rate" yaml:"rate" mapstructure:"rate"`    // 令牌生成速率（每秒生成多少个令牌）
+	Burst int     `json:"burst" yaml:"burst" mapstructure:"burst"` // 令牌桶容量（突发最大请求数）
 }
 
 func (l Limit) valid() bool {
@@ -310,7 +310,9 @@ func New(cfg *Config, opts ...Option) (Limiter, error) {
 	// 应用选项（需要先提取 WithRedisConnector）
 	o := options{}
 	for _, opt := range opts {
-		opt(&o)
+		if opt != nil {
+			opt(&o)
+		}
 	}
 
 	if o.logger == nil {
@@ -320,7 +322,7 @@ func New(cfg *Config, opts ...Option) (Limiter, error) {
 		o.meter = metrics.Discard()
 	}
 
-	logger := o.logger.With(clog.String("component", "ratelimit"))
+	logger := o.logger.WithNamespace("ratelimit")
 
 	switch cfg.Driver {
 	case DriverStandalone:

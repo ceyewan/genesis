@@ -26,6 +26,13 @@ type mq struct {
 	lifecycleOnce sync.Once
 	lifecycleDone chan struct{}
 	lifecycleErr  error
+	forceOnce     sync.Once
+	forceErr      error
+
+	publishCounter   metrics.Counter
+	consumeCounter   metrics.Counter
+	publishHistogram metrics.Histogram
+	handleHistogram  metrics.Histogram
 }
 
 // Publish 发布消息
@@ -40,7 +47,9 @@ func (m *mq) Publish(ctx context.Context, topic string, data []byte, opts ...Pub
 	// 应用选项
 	o := defaultPublishOptions()
 	for _, opt := range opts {
-		opt(&o)
+		if opt != nil {
+			opt(&o)
+		}
 	}
 
 	// 发布消息
@@ -68,7 +77,9 @@ func (m *mq) Subscribe(ctx context.Context, topic string, handler Handler, opts 
 	// 应用选项
 	o := defaultSubscribeOptions()
 	for _, opt := range opts {
-		opt(&o)
+		if opt != nil {
+			opt(&o)
+		}
 	}
 
 	wrappedHandler := m.wrapHandler(topic, handler, o)
@@ -100,21 +111,39 @@ func (m *mq) Subscribe(ctx context.Context, topic string, handler Handler, opts 
 func (m *mq) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return m.shutdown(ctx, false)
+	// Force-close remains available after any Drain caller has timed out.
+	m.closed.Store(true)
+	m.forceOnce.Do(func() {
+		m.mu.Lock()
+		subs := make([]Subscription, 0, len(m.subscriptions))
+		for sub := range m.subscriptions {
+			subs = append(subs, sub)
+		}
+		m.mu.Unlock()
+		var errs []error
+		for _, sub := range subs {
+			if err := sub.Unsubscribe(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		m.forceErr = xerrors.Combine(errs...)
+	})
+	return xerrors.Combine(m.forceErr, m.shutdown(ctx))
 }
 
 func (m *mq) Drain(ctx context.Context) error {
 	if ctx == nil {
-		return xerrors.New("mq drain context is nil")
+		return xerrors.Wrap(ErrInvalidConfig, "mq drain context is nil")
 	}
-	return m.shutdown(ctx, true)
+	return m.shutdown(ctx)
 }
 
-func (m *mq) shutdown(ctx context.Context, graceful bool) error {
+func (m *mq) shutdown(ctx context.Context) error {
 	m.lifecycleOnce.Do(func() {
 		m.closed.Store(true)
 		go func() {
-			m.lifecycleErr = m.shutdownSubscriptions(ctx, graceful)
+			// The first caller's deadline must not control shared cleanup.
+			m.lifecycleErr = m.shutdownSubscriptions(context.Background())
 			close(m.lifecycleDone)
 		}()
 	})
@@ -127,7 +156,7 @@ func (m *mq) shutdown(ctx context.Context, graceful bool) error {
 	}
 }
 
-func (m *mq) shutdownSubscriptions(ctx context.Context, graceful bool) error {
+func (m *mq) shutdownSubscriptions(ctx context.Context) error {
 	m.mu.Lock()
 	subs := make([]Subscription, 0, len(m.subscriptions))
 	for sub := range m.subscriptions {
@@ -136,26 +165,18 @@ func (m *mq) shutdownSubscriptions(ctx context.Context, graceful bool) error {
 	m.mu.Unlock()
 
 	var errs []error
+	var wg sync.WaitGroup
+	var errsMu sync.Mutex
 	for _, sub := range subs {
-		if graceful {
+		wg.Go(func() {
 			if err := sub.Drain(ctx); err != nil {
+				errsMu.Lock()
 				errs = append(errs, err)
+				errsMu.Unlock()
 			}
-			continue
-		}
-		if err := sub.Unsubscribe(); err != nil {
-			errs = append(errs, err)
-		}
+		})
 	}
-	if !graceful {
-		for _, sub := range subs {
-			select {
-			case <-sub.Done():
-			case <-ctx.Done():
-				errs = append(errs, xerrors.Wrap(ctx.Err(), "wait for mq subscription"))
-			}
-		}
-	}
+	wg.Wait()
 	m.cleanupWG.Wait()
 	if err := m.transport.Close(); err != nil {
 		errs = append(errs, err)
@@ -208,6 +229,14 @@ func (m *mq) wrapHandler(topic string, handler Handler, opts subscribeOptions) H
 	}
 }
 
+// initMetrics 在构造时缓存 instrument；可观测性失败不阻断消息收发。
+func (m *mq) initMetrics() {
+	m.publishCounter, _ = m.meter.Counter(MetricPublishTotal, "Total number of messages published")
+	m.consumeCounter, _ = m.meter.Counter(MetricConsumeTotal, "Total number of messages consumed")
+	m.publishHistogram, _ = m.meter.Histogram(MetricPublishDuration, "Publish latency in seconds", metrics.WithUnit("s"))
+	m.handleHistogram, _ = m.meter.Histogram(MetricHandleDuration, "Message handler duration in seconds", metrics.WithUnit("s"))
+}
+
 // recordPublishMetrics 记录发布指标
 func (m *mq) recordPublishMetrics(ctx context.Context, topic string, err error, duration time.Duration) {
 	status := "success"
@@ -216,12 +245,12 @@ func (m *mq) recordPublishMetrics(ctx context.Context, topic string, err error, 
 	}
 	driver := string(m.driver)
 
-	if counter, counterErr := m.meter.Counter(MetricPublishTotal, "Total number of messages published"); counterErr == nil {
-		counter.Inc(ctx, metrics.L(LabelTopic, topic), metrics.L(LabelStatus, status), metrics.L(LabelDriver, driver))
+	if m.publishCounter != nil {
+		m.publishCounter.Inc(ctx, metrics.L(LabelTopic, topic), metrics.L(LabelStatus, status), metrics.L(LabelDriver, driver))
 	}
 
-	if histogram, histErr := m.meter.Histogram(MetricPublishDuration, "Publish latency in seconds", metrics.WithUnit("s")); histErr == nil {
-		histogram.Record(ctx, duration.Seconds(), metrics.L(LabelTopic, topic), metrics.L(LabelDriver, driver))
+	if m.publishHistogram != nil {
+		m.publishHistogram.Record(ctx, duration.Seconds(), metrics.L(LabelTopic, topic), metrics.L(LabelDriver, driver))
 	}
 }
 
@@ -231,14 +260,14 @@ func (m *mq) recordConsumeMetrics(ctx context.Context, topic string, err error) 
 	if err != nil {
 		status = "error"
 	}
-	if counter, counterErr := m.meter.Counter(MetricConsumeTotal, "Total number of messages consumed"); counterErr == nil {
-		counter.Inc(ctx, metrics.L(LabelTopic, topic), metrics.L(LabelStatus, status), metrics.L(LabelDriver, string(m.driver)))
+	if m.consumeCounter != nil {
+		m.consumeCounter.Inc(ctx, metrics.L(LabelTopic, topic), metrics.L(LabelStatus, status), metrics.L(LabelDriver, string(m.driver)))
 	}
 }
 
 // recordHandleDuration 记录处理耗时
 func (m *mq) recordHandleDuration(ctx context.Context, topic string, duration time.Duration) {
-	if histogram, err := m.meter.Histogram(MetricHandleDuration, "Message handler duration in seconds", metrics.WithUnit("s")); err == nil {
-		histogram.Record(ctx, duration.Seconds(), metrics.L(LabelTopic, topic), metrics.L(LabelDriver, string(m.driver)))
+	if m.handleHistogram != nil {
+		m.handleHistogram.Record(ctx, duration.Seconds(), metrics.L(LabelTopic, topic), metrics.L(LabelDriver, string(m.driver)))
 	}
 }

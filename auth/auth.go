@@ -83,7 +83,9 @@ func New(cfg *Config, opts ...Option) (Authenticator, error) {
 
 	o := defaultOptions()
 	for _, opt := range opts {
-		opt(o)
+		if opt != nil {
+			opt(o)
+		}
 	}
 
 	auth := &jwtAuth{
@@ -229,7 +231,7 @@ func (a *jwtAuth) validateTypedToken(ctx context.Context, tokenString string, ex
 		return nil, ErrInvalidToken
 	}
 
-	a.options.logger.Info("token validated",
+	a.options.logger.DebugContext(ctx, "Token validated",
 		clog.String("user_id", claims.Subject),
 		clog.String("token_type", string(claims.TokenType)),
 	)
@@ -269,27 +271,13 @@ func (a *jwtAuth) RefreshToken(ctx context.Context, refreshToken string) (*Token
 // 默认只读取 header:Authorization (Bearer token)。Query/cookie token 容易
 // 泄漏到 URL、日志和历史记录，只有显式配置 TokenLookup 时才会启用。
 func (a *jwtAuth) ExtractToken(r *http.Request) (string, error) {
-	if a.config.TokenLookup != "" {
-		parts := strings.Split(a.config.TokenLookup, ":")
-		source, key := parts[0], parts[1]
-		token, ok := a.extractFromSource(r, source, key)
-		if !ok {
-			return "", ErrMissingToken
-		}
-		return token, nil
+	// New 已填充并校验 TokenLookup；只读取显式配置的来源。
+	parts := strings.Split(a.config.TokenLookup, ":")
+	token, ok := a.extractFromSource(r, parts[0], parts[1])
+	if !ok {
+		return "", ErrMissingToken
 	}
-
-	if token, ok := a.extractFromSource(r, "header", "Authorization"); ok {
-		return token, nil
-	}
-	if token, ok := a.extractFromSource(r, "query", "token"); ok {
-		return token, nil
-	}
-	if token, ok := a.extractFromSource(r, "cookie", "jwt"); ok {
-		return token, nil
-	}
-
-	return "", ErrMissingToken
+	return token, nil
 }
 
 // extractFromSource 从指定来源提取 token。

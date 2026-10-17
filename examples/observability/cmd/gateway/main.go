@@ -83,7 +83,7 @@ func run() (retErr error) {
 	}
 	defer func() {
 		if retErr != nil {
-			obs.Logger.Fatal("Gateway stopped with error", clog.Error(retErr))
+			obs.Logger.Error("Gateway stopped with error", clog.Error(retErr))
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()

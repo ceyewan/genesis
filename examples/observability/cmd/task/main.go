@@ -61,7 +61,7 @@ func run() (retErr error) {
 	}
 	defer func() {
 		if retErr != nil {
-			obs.Logger.Fatal("Task stopped with error", clog.Error(retErr))
+			obs.Logger.Error("Task stopped with error", clog.Error(retErr))
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()

@@ -37,7 +37,9 @@ func NewKafka(cfg *KafkaConfig, opts ...Option) (KafkaConnector, error) {
 
 	opt := &options{}
 	for _, o := range opts {
-		o(opt)
+		if o != nil {
+			o(opt)
+		}
 	}
 	opt.applyDefaults()
 
@@ -50,6 +52,9 @@ func NewKafka(cfg *KafkaConfig, opts ...Option) (KafkaConnector, error) {
 
 // Connect 建立连接
 func (c *kafkaConnector) Connect(ctx context.Context) error {
+	if ctx == nil {
+		return xerrors.Wrap(ErrConfig, "connect context is nil")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

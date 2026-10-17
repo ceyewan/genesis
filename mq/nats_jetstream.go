@@ -467,7 +467,7 @@ func (s *jetStreamSubscription) Unsubscribe() error {
 
 func (s *jetStreamSubscription) Drain(ctx context.Context) error {
 	if ctx == nil {
-		return xerrors.New("mq subscription drain context is nil")
+		return xerrors.Wrap(ErrInvalidConfig, "mq subscription drain context is nil")
 	}
 	s.drainOnce.Do(s.cons.Drain)
 	select {

@@ -33,7 +33,13 @@ func main() {
 	// 1. 创建基础组件 (Level 0)
 	logger := initLogger()
 	meter := initMetrics(ctx, logger)
-	defer meter.Shutdown(ctx)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := meter.Shutdown(shutdownCtx); err != nil {
+			logger.Error("Shutdown metrics failed", clog.Error(err))
+		}
+	}()
 
 	logger.Info("=== Genesis Connector 综合示例演示启动 ===")
 
@@ -64,7 +70,7 @@ func runRedisExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 	}
 
 	// 2. 创建实例 (Fail-fast: 验证配置)
-	conn, err := connector.NewRedis(cfg, connector.WithLogger(logger))
+	conn, err := connector.NewRedis(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
 	if err != nil {
 		logger.Error("创建 Redis 连接器失败", clog.Error(err))
 		return
@@ -109,7 +115,7 @@ func runMySQLExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 		MaxOpenConns: 20,
 	}
 
-	conn, err := connector.NewMySQL(cfg, connector.WithLogger(logger))
+	conn, err := connector.NewMySQL(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
 	if err != nil {
 		logger.Error("创建 MySQL 连接器失败", clog.Error(err))
 		return
@@ -141,7 +147,7 @@ func runEtcdExample(ctx context.Context, logger clog.Logger, meter metrics.Meter
 		DialTimeout: 5 * time.Second,
 	}
 
-	conn, err := connector.NewEtcd(cfg, connector.WithLogger(logger))
+	conn, err := connector.NewEtcd(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
 	if err != nil {
 		logger.Error("创建 Etcd 连接器失败", clog.Error(err))
 		return
@@ -199,7 +205,7 @@ func runKafkaExample(ctx context.Context, logger clog.Logger, meter metrics.Mete
 		RequestTimeout: 5 * time.Second,
 	}
 
-	conn, err := connector.NewKafka(cfg, connector.WithLogger(logger))
+	conn, err := connector.NewKafka(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
 	if err != nil {
 		logger.Error("创建 Kafka 连接器失败", clog.Error(err))
 		return
@@ -223,7 +229,7 @@ func runSQLiteExample(ctx context.Context, logger clog.Logger, meter metrics.Met
 		Path: "file::memory:?cache=shared",
 	}
 
-	conn, err := connector.NewSQLite(cfg, connector.WithLogger(logger))
+	conn, err := connector.NewSQLite(cfg, connector.WithLogger(logger), connector.WithMeter(meter))
 	if err != nil {
 		logger.Error("创建 SQLite 连接器失败", clog.Error(err))
 		return

@@ -14,7 +14,7 @@ import (
 func TestDynamicDiscoveryAndRejoin(t *testing.T) {
 	// Registry 的 resolver 是进程全局状态，这个初始化测试不能并行。
 	conn := testkit.NewEtcdContainerConnector(t)
-	reg, err := registry.New(conn, &registry.Config{Namespace: "/test/" + testkit.NewID()})
+	reg, err := registry.New(&registry.Config{Namespace: "/test/" + testkit.NewID()}, registry.WithEtcdConnector(conn))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reg.Close()) })
 	ctx, cancel := testkit.NewContext(t, 15*time.Second)

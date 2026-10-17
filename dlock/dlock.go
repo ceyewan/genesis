@@ -27,7 +27,6 @@
 package dlock
 
 import (
-	"github.com/ceyewan/genesis/clog"
 	"github.com/ceyewan/genesis/xerrors"
 )
 
@@ -36,6 +35,8 @@ import (
 // 通过 cfg.Driver 选择后端，连接器通过 Option 注入：
 //   - DriverRedis: WithRedisConnector
 //   - DriverEtcd: WithEtcdConnector
+//
+// Etcd Session 在首次加锁时按需创建；New 不执行远端 RPC。
 func New(cfg *Config, opts ...Option) (Locker, error) {
 	if cfg == nil {
 		return nil, ErrConfigNil
@@ -50,12 +51,14 @@ func New(cfg *Config, opts ...Option) (Locker, error) {
 
 	opt := options{}
 	for _, o := range opts {
-		o(&opt)
+		if o != nil {
+			o(&opt)
+		}
 	}
 
 	logger := opt.logger
 	if logger != nil {
-		logger = logger.With(clog.String("component", "dlock"))
+		logger = logger.WithNamespace("dlock")
 	}
 
 	switch cfg.Driver {

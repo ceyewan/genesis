@@ -31,9 +31,14 @@ type etcdLocker struct {
 	acquireMu sync.Mutex
 	acquiring map[string]struct{}
 
-	closeOnce sync.Once
-	closeErr  error
-	closed    bool
+	closeOnce     sync.Once
+	closeErr      error
+	closed        bool
+	ctx           context.Context
+	cancel        context.CancelFunc
+	workers       sync.WaitGroup
+	initializing  *sessionAttempt
+	cleanupErrors []error
 }
 
 type etcdLockEntry struct {
@@ -61,16 +66,12 @@ func newEtcd(conn connector.EtcdConnector, cfg *Config, logger clog.Logger) (Loc
 	if client == nil {
 		return nil, xerrors.Wrap(ErrConnectorNil, "etcd connector is not connected")
 	}
-	// 创建默认 session，用于非 TTL 锁（或默认 TTL）
-	// 注意：concurrency.Session 默认 TTL 是 60s，会自动续期
-	session, err := concurrency.NewSession(client, concurrency.WithTTL(int(cfg.DefaultTTL.Seconds())))
-	if err != nil {
-		return nil, xerrors.Wrap(err, "failed to create etcd session")
-	}
-
+	// New 不进行远端 I/O；Session 在首次加锁时按需创建。
+	ctx, cancel := context.WithCancel(client.Ctx())
 	return &etcdLocker{
 		client:    client,
-		session:   session,
+		ctx:       ctx,
+		cancel:    cancel,
 		cfg:       cfg,
 		logger:    logger,
 		locks:     make(map[string]*etcdLockEntry),
@@ -86,7 +87,9 @@ func (l *etcdLocker) Lock(ctx context.Context, key string, opts ...LockOption) e
 func (l *etcdLocker) TryLock(ctx context.Context, key string, opts ...LockOption) (bool, error) {
 	err := l.lock(ctx, key, true, opts...)
 	if err != nil {
-		if xerrors.Is(err, concurrency.ErrLocked) {
+		// Only clean contention is a successful negative result. A combined
+		// cleanup failure must remain visible to the caller.
+		if err == concurrency.ErrLocked {
 			return false, nil
 		}
 		return false, err
@@ -95,17 +98,39 @@ func (l *etcdLocker) TryLock(ctx context.Context, key string, opts ...LockOption
 }
 
 func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...LockOption) error {
+	if ctx == nil {
+		return xerrors.Wrap(ErrInvalidConfig, "lock context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := validateKey(key); err != nil {
 		return err
 	}
-	// Reserve the key before checking or contacting etcd. The default session is
-	// shared by all locks in this Locker, and etcd/concurrency treats another
-	// mutex with the same prefix and lease as the same owner. Only one local
-	// acquisition for a key may therefore enter the distributed protocol.
+	// Reserve before taking the state mutex or contacting etcd: duplicate
+	// contenders must not enter the shared lease's distributed protocol.
 	if !l.reserveAcquisition(key) {
 		return xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
-	defer l.releaseAcquisition(key)
+	tracked := false
+	defer func() {
+		l.releaseAcquisition(key)
+		if tracked {
+			l.workers.Done()
+		}
+	}()
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return ErrClosed
+	}
+	l.workers.Add(1)
+	tracked = true
+	l.mu.Unlock()
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(l.ctx, cancel)
+	defer stop()
+	defer cancel()
 
 	// 检查本地是否已持有锁（防止同一 locker 重复获取同一把锁）
 	l.mu.RLock()
@@ -117,7 +142,6 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 		l.mu.RUnlock()
 		return xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
-	defaultSession := l.session
 	l.mu.RUnlock()
 
 	ttl, err := resolveLockTTL(l.cfg.DefaultTTL, opts...)
@@ -133,12 +157,12 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 	// 如果指定了 TTL，创建新的 session
 	var session *concurrency.Session
 	if ttl != l.cfg.DefaultTTL {
-		session, err = concurrency.NewSession(l.client, concurrency.WithTTL(int(ttl.Seconds())))
-		if err != nil {
-			return xerrors.Wrap(err, "failed to create etcd session")
-		}
+		session, err = l.createSession(ctx, ttl)
 	} else {
-		session = defaultSession
+		session, err = l.defaultSession(ctx)
+	}
+	if err != nil {
+		return err
 	}
 
 	mutex := concurrency.NewMutex(session, etcdKey)
@@ -153,9 +177,14 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 	}
 
 	if lockErr != nil {
-		// 如果是新创建的 session 且加锁失败，需要关闭
+		// 如果是新创建的 session 且加锁失败，需要关闭。
+		var cleanupErr error
 		if ttl != l.cfg.DefaultTTL && session != nil {
-			_ = session.Close()
+			cleanupErr = l.closeSession(session)
+			l.recordCleanupError(cleanupErr)
+		}
+		if cleanupErr != nil {
+			return xerrors.Combine(lockErr, cleanupErr)
 		}
 		if xerrors.Is(lockErr, concurrency.ErrLocked) {
 			return concurrency.ErrLocked
@@ -175,18 +204,12 @@ func (l *etcdLocker) lock(ctx context.Context, key string, try bool, opts ...Loc
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()
-		_ = mutex.Unlock(ctx)
-		if entry.isTTL && entry.session != nil {
-			_ = entry.session.Close()
-		}
+		l.cleanupAcquisition(entry)
 		return ErrClosed
 	}
 	if _, exists := l.locks[key]; exists {
 		l.mu.Unlock()
-		_ = mutex.Unlock(ctx)
-		if entry.isTTL && entry.session != nil {
-			_ = entry.session.Close()
-		}
+		l.cleanupAcquisition(entry)
 		return xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
 	l.locks[key] = entry
@@ -252,7 +275,9 @@ func (l *etcdLocker) Unlock(ctx context.Context, key string) error {
 
 	// 如果是 TTL session，需要关闭它
 	if entry.isTTL && entry.session != nil {
-		_ = entry.session.Close()
+		if err := l.closeSession(entry.session); err != nil {
+			return err
+		}
 	}
 
 	if l.logger != nil {
@@ -333,6 +358,9 @@ func (l *etcdLocker) Close() error {
 		defaultSession := l.session
 		l.session = nil
 		l.mu.Unlock()
+		l.cancel()
+		// All in-flight creators must finish reclaiming late leases before Close returns.
+		l.workers.Wait()
 
 		var errs []error
 		for key, entry := range entries {
@@ -345,18 +373,21 @@ func (l *etcdLocker) Close() error {
 			entry.lostOnce.Do(func() { close(entry.lostCh) })
 
 			if entry.isTTL && entry.session != nil {
-				if err := entry.session.Close(); err != nil {
+				if err := l.closeSession(entry.session); err != nil {
 					errs = append(errs, xerrors.Wrapf(err, "failed to close ttl session for key: %s", key))
 				}
 			}
 		}
 
 		if defaultSession != nil {
-			if err := defaultSession.Close(); err != nil {
+			if err := l.closeSession(defaultSession); err != nil {
 				errs = append(errs, xerrors.Wrap(err, "failed to close default etcd session"))
 			}
 		}
 
+		l.mu.Lock()
+		errs = append(errs, l.cleanupErrors...)
+		l.mu.Unlock()
 		l.closeErr = xerrors.Combine(errs...)
 	})
 	return l.closeErr

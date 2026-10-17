@@ -10,6 +10,7 @@ import (
 )
 
 type loggerSharedState struct {
+	mu        sync.RWMutex
 	handler   slog.Handler
 	closeOnce sync.Once
 	closeErr  error
@@ -126,7 +127,12 @@ func (l *loggerImpl) With(fields ...Field) Logger {
 
 // 内部方法
 func (l *loggerImpl) log(ctx context.Context, level Level, msg string, fields ...Field) {
-	if l.shared == nil || l.shared.closed.Load() {
+	if l.shared == nil {
+		return
+	}
+	l.shared.mu.RLock()
+	defer l.shared.mu.RUnlock()
+	if l.shared.closed.Load() {
 		return
 	}
 
@@ -192,6 +198,8 @@ func (l *loggerImpl) Close() error {
 	}
 
 	l.shared.closeOnce.Do(func() {
+		l.shared.mu.Lock()
+		defer l.shared.mu.Unlock()
 		l.shared.closed.Store(true)
 		if h, ok := l.shared.handler.(interface{ Close() error }); ok {
 			l.shared.closeErr = h.Close()

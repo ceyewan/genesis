@@ -7,7 +7,7 @@
 ## 组件定位
 
 - 配置驱动：通过 `Config.Driver` 选择底层实现（mysql / postgresql / sqlite），无需关心 DSN 构造和驱动注册细节
-- 借用模型：`db` 借用 `connector` 中的客户端，`Close()` 为 no-op，连接生命周期由 `connector` 负责
+- 借用模型：`db` 复用 Connector 的 SQL 池，但拥有独立 GORM 句柄；`Close()` 释放自身语句缓存，不关闭连接池
 - 原生体验：`DB(ctx)` 直接返回 `*gorm.DB`，业务继续使用熟悉的 GORM API，不引入新的查询抽象
 - 自动可观测：通过 `WithLogger` 接入 `clog` SQL 日志（支持慢查询标注），注入 `WithTracer` 后生成数据库 span
 
@@ -52,7 +52,7 @@ err = database.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
 type DB interface {
     DB(ctx context.Context) *gorm.DB
     Transaction(ctx context.Context, fn func(ctx context.Context, tx *gorm.DB) error) error
-    Close() error // no-op，借用模型
+    Close() error // 释放自身语句缓存，不关闭借用池
 }
 ```
 
@@ -78,7 +78,21 @@ type DB interface {
 
 ### 资源所有权
 
-`connector` 拥有连接生命周期，`db` 只借用，无需调用 `db.Close()`：
+`connector` 拥有 SQL 连接池，`db` 创建独立的 GORM 实例并只借用该池；`db.Close()` 不关闭连接池。
+每个 DB 的 Logger、回调、插件及 Trace 注入彼此隔离。SQLite（包括 `:memory:`）复用原池，不另开数据库。
+构造失败也不会关闭借用池。
+
+继承范围限于命名策略、时间函数、事务/迁移/查询设置、方言配置和 SQL clause 列表等行为配置；
+Connector 上自行安装的插件和回调不再隐式继承，应在对应组件的 GORM 实例上显式安装，且在并发使用前完成。
+
+```go
+// 创建后的 db.DB(ctx) 暴露组件自己的 GORM 句柄。
+if err := database.DB(ctx).Use(myPlugin); err != nil {
+    return err
+}
+```
+
+标准接入方式：
 
 ```go
 mysqlConn, err := connector.NewMySQL(&cfg.MySQL, connector.WithLogger(logger))
@@ -97,7 +111,8 @@ database, err := db.New(&db.Config{Driver: "mysql"},
 if err != nil {
     return err
 }
-// database.Close() 是 no-op，可以不调用
+// 释放组件自己创建的预编译语句缓存；连接池仍由 mysqlConn 关闭。
+defer database.Close()
 ```
 
 ### 事务
@@ -113,7 +128,7 @@ err := database.Transaction(ctx, func(ctx context.Context, tx *gorm.DB) error {
 
 ### SQL 日志
 
-默认输出全部 SQL，慢查询（默认 >200ms）自动标注为 `slow sql`，SQL 错误标注为 `sql error`。使用 `WithSlowThreshold` 可以调整阈值，测试环境可用 `WithSilentMode()` 关闭。
+普通 SQL 使用 Debug 级别，默认 Info 日志配置下不输出；慢查询（默认 >200ms）以 Warn 级别标注为 `Slow SQL`，SQL 错误以 Error 级别标注为 `SQL error`。日志会透传请求 Context，支持 trace_id / span_id 关联。使用 `WithSlowThreshold` 可以调整阈值；`WithSilentMode()` 关闭 SQL 日志且跳过 SQL 日志字符串格式化。
 
 ## 错误
 

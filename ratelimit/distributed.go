@@ -49,7 +49,9 @@ local allow_at_most = now + fill_time
 
 if new_refreshed <= allow_at_most then
   -- 令牌足够，请求被允许
-  redis.call("SET", KEYS[1], new_refreshed, "EX", math.ceil(fill_time * 2))
+  -- Redis 的隐式数字转字符串仅保留 14 位有效数字；显式保留 double 精度。
+  -- 保持秒级存储格式，兼容已有 key，避免升级时重置桶。
+  redis.call("SET", KEYS[1], string.format("%.17g", new_refreshed), "EX", math.ceil(fill_time * 2))
   
   -- 计算剩余可用令牌数
   local remaining_tokens = math.floor((allow_at_most - new_refreshed) / interval_per_token)

@@ -70,7 +70,9 @@ func NewAllocator(cfg *AllocatorConfig, opts ...Option) (Allocator, error) {
 	// 应用选项
 	opt := options{}
 	for _, o := range opts {
-		o(&opt)
+		if o != nil {
+			o(&opt)
+		}
 	}
 
 	switch config.Driver {
@@ -218,6 +220,11 @@ func (a *redisAllocator) Allocate(ctx context.Context) (int64, error) {
 // KeepAlive 启动后台保活并返回错误通道。
 func (a *redisAllocator) KeepAlive(ctx context.Context) <-chan error {
 	errCh := make(chan error, 1)
+	if ctx == nil {
+		errCh <- xerrors.Wrap(ErrInvalidInput, "keepalive context is nil")
+		close(errCh)
+		return errCh
+	}
 	fail := func(err error) <-chan error {
 		errCh <- err
 		close(errCh)
@@ -507,6 +514,11 @@ func (a *etcdAllocator) Allocate(ctx context.Context) (int64, error) {
 // KeepAlive 启动后台保活并返回错误通道。
 func (a *etcdAllocator) KeepAlive(ctx context.Context) <-chan error {
 	errCh := make(chan error, 1)
+	if ctx == nil {
+		errCh <- xerrors.Wrap(ErrInvalidInput, "keepalive context is nil")
+		close(errCh)
+		return errCh
+	}
 	fail := func(err error) <-chan error {
 		errCh <- err
 		close(errCh)

@@ -30,6 +30,7 @@ type memoryStore struct {
 	stopCh     chan struct{}
 	closeOnce  sync.Once
 	workerWG   sync.WaitGroup
+	closed     bool
 }
 
 func newMemoryStore(prefix string) Store {
@@ -150,7 +151,13 @@ func (ms *memoryStore) reserveEntryLocked(entryKey string, now time.Time) error 
 
 func (ms *memoryStore) Close() error {
 	ms.closeOnce.Do(func() {
+		ms.mu.Lock()
+		ms.closed = true
+		clear(ms.locks)
+		clear(ms.results)
+		clear(ms.entries)
 		close(ms.stopCh)
+		ms.mu.Unlock()
 	})
 	ms.workerWG.Wait()
 	return nil
@@ -171,6 +178,9 @@ func (ms *memoryStore) Lock(ctx context.Context, key string, ttl time.Duration) 
 
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
+	if ms.closed {
+		return "", false, ErrClosed
+	}
 
 	ms.removeExpiredEntryLocked(entryKey, now)
 	if _, ok := ms.results[resultKey]; ok {
@@ -205,6 +215,10 @@ func (ms *memoryStore) Unlock(ctx context.Context, key string, token LockToken) 
 	entryKey := ms.prefix + key
 	lockKey := entryKey + lockSuffix
 	ms.mu.Lock()
+	if ms.closed {
+		ms.mu.Unlock()
+		return ErrClosed
+	}
 	if entry, ok := ms.locks[lockKey]; ok && entry.token == token {
 		delete(ms.locks, lockKey)
 	}
@@ -230,6 +244,10 @@ func (ms *memoryStore) SetResult(ctx context.Context, key string, val []byte, tt
 	valCopy := append([]byte(nil), val...)
 
 	ms.mu.Lock()
+	if ms.closed {
+		ms.mu.Unlock()
+		return ErrClosed
+	}
 	ms.removeExpiredEntryLocked(entryKey, now)
 	if token != "" {
 		entry, ok := ms.locks[lockKey]
@@ -265,6 +283,9 @@ func (ms *memoryStore) GetResult(ctx context.Context, key string) ([]byte, error
 
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
+	if ms.closed {
+		return nil, ErrClosed
+	}
 
 	ms.removeExpiredEntryLocked(entryKey, now)
 	entry, ok := ms.results[resultKey]
@@ -292,6 +313,9 @@ func (ms *memoryStore) Refresh(ctx context.Context, key string, token LockToken,
 
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
+	if ms.closed {
+		return ErrClosed
+	}
 
 	ms.removeExpiredEntryLocked(entryKey, now)
 	entry, ok := ms.locks[lockKey]
@@ -312,6 +336,10 @@ func (ms *memoryStore) DeleteResult(ctx context.Context, key string) error {
 	resultKey := entryKey + resultSuffix
 
 	ms.mu.Lock()
+	if ms.closed {
+		ms.mu.Unlock()
+		return ErrClosed
+	}
 	delete(ms.results, resultKey)
 	ms.reconcileEntryLocked(entryKey)
 	ms.mu.Unlock()

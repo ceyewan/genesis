@@ -167,6 +167,8 @@ func (c *redisCache) HGetAll(ctx context.Context, key string, destMap any) error
 
 	if v.IsNil() {
 		v.Set(reflect.MakeMap(v.Type()))
+	} else {
+		v.Clear()
 	}
 	elemType := v.Type().Elem()
 	for k, valStr := range result {
@@ -251,13 +253,13 @@ func (c *redisCache) ZRangeByScore(ctx context.Context, key string, min, max flo
 // --- 批量操作（Batch Operations） ---
 
 func (c *redisCache) MGet(ctx context.Context, keys []string, destSlice any) error {
-	if len(keys) == 0 {
-		return nil
-	}
-
 	v := reflect.ValueOf(destSlice)
-	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Slice {
-		return xerrors.New("destSlice must be a pointer to slice")
+	if v.Kind() != reflect.Pointer || v.IsNil() || v.Elem().Kind() != reflect.Slice {
+		return xerrors.Wrap(ErrInvalidDestination, "destSlice must be a non-nil pointer to slice")
+	}
+	if len(keys) == 0 {
+		v.Elem().Set(reflect.MakeSlice(v.Elem().Type(), 0, 0))
+		return nil
 	}
 
 	prefixedKeys := make([]string, len(keys))
@@ -356,8 +358,8 @@ func normalizeRedisError(err error) error {
 
 func (c *redisCache) unmarshalSlice(data []string, destSlice any) error {
 	v := reflect.ValueOf(destSlice)
-	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Slice {
-		return xerrors.New("destSlice must be a pointer to slice")
+	if v.Kind() != reflect.Pointer || v.IsNil() || v.Elem().Kind() != reflect.Slice {
+		return xerrors.Wrap(ErrInvalidDestination, "destSlice must be a non-nil pointer to slice")
 	}
 	sliceVal := v.Elem()
 	elemType := sliceVal.Type().Elem()

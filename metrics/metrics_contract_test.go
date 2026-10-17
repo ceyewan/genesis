@@ -2,138 +2,113 @@ package metrics
 
 import (
 	"context"
-	"errors"
+	"strconv"
 	"sync"
 	"testing"
-	"time"
 
-	"go.opentelemetry.io/otel/metric"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/require"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 func TestNewRejectsInvalidServeMuxPattern(t *testing.T) {
-	_, err := New(&Config{
-		ServiceName: "invalid-pattern-test",
-		Port:        9090,
-		Path:        "/{",
-	})
-	if !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("New() error = %v, want ErrInvalidConfig", err)
-	}
+	_, err := New(&Config{ServiceName: "invalid-pattern-test", Port: 9090, Path: "/{"})
+	require.ErrorIs(t, err, ErrInvalidConfig)
 }
 
-func TestGaugeStateAndRecordAreLinearized(t *testing.T) {
-	tests := []struct {
-		name       string
-		first      func(*gaugeImpl)
-		second     func(*gaugeImpl)
-		wantRecord []float64
-	}{
-		{
-			name:       "set then increment",
-			first:      func(g *gaugeImpl) { g.Set(context.Background(), 10) },
-			second:     func(g *gaugeImpl) { g.Inc(context.Background()) },
-			wantRecord: []float64{10, 11},
-		},
-		{
-			name:       "increment then decrement",
-			first:      func(g *gaugeImpl) { g.Inc(context.Background()) },
-			second:     func(g *gaugeImpl) { g.Dec(context.Background()) },
-			wantRecord: []float64{1, 0},
-		},
-		{
-			name:       "decrement then set",
-			first:      func(g *gaugeImpl) { g.Dec(context.Background()) },
-			second:     func(g *gaugeImpl) { g.Set(context.Background(), 10) },
-			wantRecord: []float64{-1, 10},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			recorder := newBlockingFloat64Gauge()
-			gauge := &gaugeImpl{g: recorder, values: make(map[string]float64)}
-
-			firstDone := make(chan struct{})
-			go func() {
-				defer close(firstDone)
-				tt.first(gauge)
-			}()
-			<-recorder.firstEntered
-
-			secondStarted := make(chan struct{})
-			secondDone := make(chan struct{})
-			go func() {
-				close(secondStarted)
-				defer close(secondDone)
-				tt.second(gauge)
-			}()
-			<-secondStarted
-
-			select {
-			case <-secondDone:
-				t.Fatal("second update completed before the first Record returned")
-			case <-time.After(100 * time.Millisecond):
-			}
-
-			close(recorder.releaseFirst)
-			<-firstDone
-			<-secondDone
-
-			if got := recorder.recordedValues(); !equalFloat64s(got, tt.wantRecord) {
-				t.Fatalf("recorded values = %v, want %v", got, tt.wantRecord)
+func TestGaugeAndUpDownCounterUseNativeAggregations(t *testing.T) {
+	t.Parallel()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+	meter := &meterImpl{meter: provider.Meter("test")}
+	gauge, err := meter.Gauge("temperature", "Current temperature", nil)
+	require.NoError(t, err)
+	counter, err := meter.UpDownCounter("inflight", "In-flight requests", WithUnit("{request}"))
+	require.NoError(t, err)
+	gauge.Set(t.Context(), 10, L("node", "one"))
+	gauge.Set(t.Context(), 25, L("node", "one"))
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Go(func() {
+			for range 100 {
+				counter.Add(t.Context(), 1, L("b", "two"), L("a", "one"))
 			}
 		})
 	}
-}
-
-type blockingFloat64Gauge struct {
-	metric.Float64Gauge
-
-	firstEntered chan struct{}
-	releaseFirst chan struct{}
-
-	mu      sync.Mutex
-	calls   int
-	records []float64
-}
-
-func newBlockingFloat64Gauge() *blockingFloat64Gauge {
-	return &blockingFloat64Gauge{
-		firstEntered: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
-	}
-}
-
-func (g *blockingFloat64Gauge) Record(_ context.Context, value float64, _ ...metric.RecordOption) {
-	g.mu.Lock()
-	g.calls++
-	call := g.calls
-	g.mu.Unlock()
-
-	if call == 1 {
-		close(g.firstEntered)
-		<-g.releaseFirst
-	}
-
-	g.mu.Lock()
-	g.records = append(g.records, value)
-	g.mu.Unlock()
-}
-
-func (g *blockingFloat64Gauge) recordedValues() []float64 {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return append([]float64(nil), g.records...)
-}
-
-func equalFloat64s(a, b []float64) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	wg.Wait()
+	counter.Add(t.Context(), -5, L("a", "one"), L("b", "two"))
+	var data metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &data))
+	require.Len(t, data.ScopeMetrics, 1)
+	require.Len(t, data.ScopeMetrics[0].Metrics, 2)
+	for _, metric := range data.ScopeMetrics[0].Metrics {
+		switch metric.Name {
+		case "temperature":
+			points := metric.Data.(metricdata.Gauge[float64]).DataPoints
+			require.Len(t, points, 1)
+			require.Equal(t, float64(25), points[0].Value)
+		case "inflight":
+			sum := metric.Data.(metricdata.Sum[float64])
+			require.False(t, sum.IsMonotonic)
+			require.Len(t, sum.DataPoints, 1)
+			require.Equal(t, float64(1995), sum.DataPoints[0].Value)
 		}
 	}
-	return true
+}
+
+func TestConfiguredCardinalityLimitProducesOverflow(t *testing.T) {
+	meter, err := New(&Config{ServiceName: "cardinality-test", CardinalityLimit: 3})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, meter.Shutdown(context.Background())) })
+	gauge, err := meter.Gauge("audit_cardinality_gauge", "Bounded gauge")
+	require.NoError(t, err)
+	counter, err := meter.UpDownCounter("audit_cardinality_inflight", "Bounded increments")
+	require.NoError(t, err)
+	for i := range 100 {
+		gauge.Set(t.Context(), float64(i), L("key", strconv.Itoa(i)))
+		counter.Add(t.Context(), 1, L("key", strconv.Itoa(i)))
+	}
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	seen := 0
+	for _, family := range families {
+		if family.GetName() != "audit_cardinality_gauge" && family.GetName() != "audit_cardinality_inflight" {
+			continue
+		}
+		seen++
+		require.LessOrEqual(t, len(family.Metric), 3)
+		var overflow bool
+		var total float64
+		for _, point := range family.Metric {
+			for _, label := range point.Label {
+				if (label.GetName() == "otel.metric.overflow" || label.GetName() == "otel_metric_overflow") && label.GetValue() == "true" {
+					overflow = true
+				}
+			}
+			if point.Gauge != nil {
+				total += point.GetGauge().GetValue()
+			}
+		}
+		require.True(t, overflow, "%s", family.String())
+		if family.GetName() == "audit_cardinality_inflight" {
+			require.Equal(t, float64(100), total)
+		}
+	}
+	require.Equal(t, 2, seen)
+}
+
+func TestCardinalityDefaultsAndValidation(t *testing.T) {
+	_, err := New(&Config{ServiceName: "invalid-limit", CardinalityLimit: -1})
+	require.ErrorIs(t, err, ErrInvalidConfig)
+	cfg := &Config{ServiceName: "default-limit"}
+	meter, err := New(cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, meter.Shutdown(context.Background())) })
+	require.Zero(t, cfg.CardinalityLimit, "constructor must not mutate caller config")
+	require.Equal(t, defaultCardinalityLimit, meter.(*meterImpl).config.CardinalityLimit)
+	counter, err := Discard().UpDownCounter("discard", "No op", nil)
+	require.NoError(t, err)
+	counter.Add(t.Context(), -1)
 }

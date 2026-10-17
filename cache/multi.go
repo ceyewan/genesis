@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"hash/fnv"
 	"math"
 	"time"
 
@@ -15,7 +16,7 @@ const multiExclusiveWeight int64 = math.MaxInt64
 
 type multiCache struct {
 	// 协调等待遵守请求取消，不提供跨实例失效协议。
-	gate        *semaphore.Weighted
+	gates       [256]*semaphore.Weighted
 	local       Local
 	remote      KV
 	localTTL    time.Duration
@@ -24,24 +25,34 @@ type multiCache struct {
 }
 
 func newMulti(local Local, remote KV, cfg *MultiConfig) (Multi, error) {
-	return &multiCache{
-		gate:        semaphore.NewWeighted(multiExclusiveWeight),
+	c := &multiCache{
 		local:       local,
 		remote:      remote,
 		localTTL:    cfg.LocalTTL,
 		backfillTTL: cfg.BackfillTTL,
 		failOpen:    *cfg.FailOpenOnLocalError,
-	}, nil
+	}
+	for n := range c.gates {
+		c.gates[n] = semaphore.NewWeighted(multiExclusiveWeight)
+	}
+	return c, nil
+}
+
+func (c *multiCache) gateFor(key string) *semaphore.Weighted {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return c.gates[h.Sum32()%uint32(len(c.gates))]
 }
 
 func (c *multiCache) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
 	if ttl < 0 {
 		return ErrInvalidTTL
 	}
-	if err := c.gate.Acquire(ctx, multiExclusiveWeight); err != nil {
+	gate := c.gateFor(key)
+	if err := gate.Acquire(ctx, multiExclusiveWeight); err != nil {
 		return err
 	}
-	defer c.gate.Release(multiExclusiveWeight)
+	defer gate.Release(multiExclusiveWeight)
 	if err := c.remote.Set(ctx, key, value, ttl); err != nil {
 		return err
 	}
@@ -52,10 +63,11 @@ func (c *multiCache) Set(ctx context.Context, key string, value any, ttl time.Du
 }
 
 func (c *multiCache) Get(ctx context.Context, key string, dest any) error {
-	if err := c.gate.Acquire(ctx, 1); err != nil {
+	gate := c.gateFor(key)
+	if err := gate.Acquire(ctx, 1); err != nil {
 		return err
 	}
-	defer c.gate.Release(1)
+	defer gate.Release(1)
 	err := c.local.Get(ctx, key, dest)
 	if err == nil {
 		return nil
@@ -74,10 +86,11 @@ func (c *multiCache) Get(ctx context.Context, key string, dest any) error {
 }
 
 func (c *multiCache) Delete(ctx context.Context, key string) error {
-	if err := c.gate.Acquire(ctx, multiExclusiveWeight); err != nil {
+	gate := c.gateFor(key)
+	if err := gate.Acquire(ctx, multiExclusiveWeight); err != nil {
 		return err
 	}
-	defer c.gate.Release(multiExclusiveWeight)
+	defer gate.Release(multiExclusiveWeight)
 	if err := c.remote.Delete(ctx, key); err != nil {
 		return err
 	}
@@ -88,10 +101,11 @@ func (c *multiCache) Delete(ctx context.Context, key string) error {
 }
 
 func (c *multiCache) Has(ctx context.Context, key string) (bool, error) {
-	if err := c.gate.Acquire(ctx, 1); err != nil {
+	gate := c.gateFor(key)
+	if err := gate.Acquire(ctx, 1); err != nil {
 		return false, err
 	}
-	defer c.gate.Release(1)
+	defer gate.Release(1)
 	ok, err := c.local.Has(ctx, key)
 	if err != nil {
 		if !c.failOpen {
@@ -108,10 +122,11 @@ func (c *multiCache) Expire(ctx context.Context, key string, ttl time.Duration) 
 	if ttl < 0 {
 		return false, ErrInvalidTTL
 	}
-	if err := c.gate.Acquire(ctx, multiExclusiveWeight); err != nil {
+	gate := c.gateFor(key)
+	if err := gate.Acquire(ctx, multiExclusiveWeight); err != nil {
 		return false, err
 	}
-	defer c.gate.Release(multiExclusiveWeight)
+	defer gate.Release(multiExclusiveWeight)
 	ok, err := c.remote.Expire(ctx, key, ttl)
 	if err != nil {
 		return false, err

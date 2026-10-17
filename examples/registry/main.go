@@ -41,11 +41,11 @@ func main() {
 	}
 
 	// 3. 创建 Registry 实例
-	reg, err := registry.New(etcdConn, &registry.Config{
+	reg, err := registry.New(&registry.Config{
 		Namespace:     "/genesis/services",
 		DefaultTTL:    30 * time.Second,
 		RetryInterval: 1 * time.Second,
-	}, registry.WithLogger(logger))
+	}, registry.WithEtcdConnector(etcdConn), registry.WithLogger(logger))
 	if err != nil {
 		logger.Error("failed to create registry", clog.Error(err))
 		return

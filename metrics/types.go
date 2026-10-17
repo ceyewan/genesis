@@ -8,11 +8,14 @@ type Counter interface {
 	Add(ctx context.Context, val float64, labels ...Label)
 }
 
-// Gauge 仪表盘接口，用于记录可以任意增减的瞬时值
+// Gauge 记录由调用方计算的瞬时值，不保存标签状态。
 type Gauge interface {
 	Set(ctx context.Context, val float64, labels ...Label)
-	Inc(ctx context.Context, labels ...Label)
-	Dec(ctx context.Context, labels ...Label)
+}
+
+// UpDownCounter 累加正负增量，例如正在处理的请求数。
+type UpDownCounter interface {
+	Add(ctx context.Context, val float64, labels ...Label)
 }
 
 // Histogram 直方图接口，用于记录值的分布情况
@@ -24,6 +27,7 @@ type Histogram interface {
 type Meter interface {
 	Counter(name, desc string, opts ...MetricOption) (Counter, error)
 	Gauge(name, desc string, opts ...MetricOption) (Gauge, error)
+	UpDownCounter(name, desc string, opts ...MetricOption) (UpDownCounter, error)
 	Histogram(name, desc string, opts ...MetricOption) (Histogram, error)
 	// Shutdown 释放 Meter 持有的资源。
 	//

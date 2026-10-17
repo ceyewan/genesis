@@ -112,6 +112,7 @@ func (i *idem) Execute(ctx context.Context, key string, fn func(ctx context.Cont
 
 	// 执行业务逻辑
 	result, err := fn(execCtx)
+	stopRefresh()
 	// 处理执行结果
 	if err != nil {
 		if i.logger != nil {
@@ -169,8 +170,8 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 	if fn == nil {
 		return false, xerrors.Wrap(ErrInvalidConfig, "consume callback is nil")
 	}
-	if ttl < 0 {
-		return false, xerrors.Wrap(ErrInvalidConfig, "consume ttl must not be negative")
+	if ttl < 0 || (ttl > 0 && ttl < time.Millisecond) {
+		return false, xerrors.Wrap(ErrInvalidConfig, "consume ttl must be zero or at least one millisecond")
 	}
 	if ttl == 0 {
 		ttl = i.cfg.DefaultTTL
@@ -225,7 +226,9 @@ func (i *idem) Consume(ctx context.Context, key string, ttl time.Duration, fn fu
 	stopRefresh, refreshErrCh := i.startLockRefresh(key, token, cancel)
 	defer stopRefresh()
 
-	if err := fn(execCtx); err != nil {
+	err = fn(execCtx)
+	stopRefresh()
+	if err != nil {
 		if i.logger != nil {
 			i.logger.Error("consume execution failed", clog.Error(err), clog.String("key", key))
 		}
@@ -424,6 +427,10 @@ func (i *idem) startLockRefresh(key string, token LockToken, onFailure context.C
 			select {
 			case <-ticker.C:
 				if err := rs.Refresh(stopCtx, key, token, i.cfg.LockTTL); err != nil {
+					// Cancellation used to join the worker is not an ownership failure.
+					if stopCtx.Err() != nil && xerrors.Is(err, context.Canceled) {
+						return
+					}
 					select {
 					case errCh <- err:
 					default:

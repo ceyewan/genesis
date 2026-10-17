@@ -53,7 +53,9 @@ func NewSequencer(cfg *SequencerConfig, opts ...Option) (Sequencer, error) {
 	// 应用选项
 	opt := options{}
 	for _, o := range opts {
-		o(&opt)
+		if o != nil {
+			o(&opt)
+		}
 	}
 
 	meter := opt.Meter

@@ -80,6 +80,11 @@ func TestConcurrentMetricOperations(t *testing.T) {
 		t.Fatalf("Failed to create gauge: %v", err)
 	}
 
+	inflight, err := meter.UpDownCounter("concurrent_inflight", "并发请求数")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	histogram, err := meter.Histogram("concurrent_histogram", "并发测试直方图")
 	if err != nil {
 		t.Fatalf("Failed to create histogram: %v", err)
@@ -103,7 +108,8 @@ func TestConcurrentMetricOperations(t *testing.T) {
 
 				// 操作仪表盘
 				gauge.Set(ctx, float64(j), L("goroutine", string(rune('A'+id))))
-				gauge.Inc(ctx, L("type", "increment"))
+				inflight.Add(ctx, 1, L("type", "increment"))
+				inflight.Add(ctx, -1, L("type", "increment"))
 
 				// 操作直方图
 				histogram.Record(ctx, float64(j)*0.01, L("goroutine", string(rune('A'+id))))

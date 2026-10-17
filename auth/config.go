@@ -12,19 +12,19 @@ import (
 // Config Auth 配置
 type Config struct {
 	// JWT 配置
-	SecretKey     string   `mapstructure:"secret_key"`     // 签名密钥（至少 32 字符）
-	SigningMethod string   `mapstructure:"signing_method"` // 签名方法: HS256（目前只支持）
-	Issuer        string   `mapstructure:"issuer"`         // 签发者
-	Audience      []string `mapstructure:"audience"`       // 接收者
+	SecretKey     string   `mapstructure:"secret_key" json:"secret_key" yaml:"secret_key"`             // 签名密钥（至少 32 字符）
+	SigningMethod string   `mapstructure:"signing_method" json:"signing_method" yaml:"signing_method"` // 签名方法: HS256（目前只支持）
+	Issuer        string   `mapstructure:"issuer" json:"issuer" yaml:"issuer"`                         // 签发者
+	Audience      []string `mapstructure:"audience" json:"audience" yaml:"audience"`                   // 接收者
 
 	// Token 有效期
-	AccessTokenTTL  time.Duration `mapstructure:"access_token_ttl"`  // Access Token TTL，默认 15m
-	RefreshTokenTTL time.Duration `mapstructure:"refresh_token_ttl"` // Refresh Token TTL，默认 7d
+	AccessTokenTTL  time.Duration `mapstructure:"access_token_ttl" json:"access_token_ttl" yaml:"access_token_ttl"`    // Access Token TTL，默认 15m
+	RefreshTokenTTL time.Duration `mapstructure:"refresh_token_ttl" json:"refresh_token_ttl" yaml:"refresh_token_ttl"` // Refresh Token TTL，默认 7d
 
 	// Token 提取配置（可选，覆盖安全默认值 header:Authorization）
 	// 可指定单一来源如 "header:Authorization" 或 "query:token"
-	TokenLookup   string `mapstructure:"token_lookup"`    // 提取方式，默认 header:Authorization
-	TokenHeadName string `mapstructure:"token_head_name"` // Header 前缀，默认 Bearer
+	TokenLookup   string `mapstructure:"token_lookup" json:"token_lookup" yaml:"token_lookup"`          // 提取方式，默认 header:Authorization
+	TokenHeadName string `mapstructure:"token_head_name" json:"token_head_name" yaml:"token_head_name"` // Header 前缀，默认 Bearer
 }
 
 // setDefaults 设置默认值

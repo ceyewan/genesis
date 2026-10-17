@@ -136,8 +136,11 @@ func (r *etcdResolver) start() {
 		return
 	}
 
-	// 初始获取服务列表（全量初始化缓存）
-	r.initializeCache(r.ctx)
+	// Watch 自带初始快照，并从同一 revision 续接增量事件。
+	r.cacheMu.Lock()
+	r.initialized = true
+	r.pushStateLocked()
+	r.cacheMu.Unlock()
 
 	// 持续监听变化并增量更新
 	for {
@@ -152,46 +155,6 @@ func (r *etcdResolver) start() {
 			r.handleEvent(event)
 		}
 	}
-}
-
-// initializeCache 初始化本地缓存（全量拉取一次）
-func (r *etcdResolver) initializeCache(ctx context.Context) {
-	instances, err := r.registry.GetService(ctx, r.serviceName)
-	if err != nil {
-		if !xerrors.Is(err, context.Canceled) && !xerrors.Is(err, context.DeadlineExceeded) {
-			r.registry.logger.Error("failed to initialize resolver cache",
-				clog.String("service_name", r.serviceName),
-				clog.Error(err))
-		}
-		return
-	}
-
-	r.cacheMu.Lock()
-	defer r.cacheMu.Unlock()
-
-	// 清空并重建缓存
-	r.localCache = make(map[resolverCacheKey]resolver.Address)
-	for _, instance := range instances {
-		for _, endpoint := range instance.Endpoints {
-			addr := parseGRPCEndpoint(endpoint)
-			if addr != "" {
-				// 使用 instanceID 作为 key，一个实例可能有多个 endpoint
-				key := resolverCacheKey{instanceID: instance.ID, addr: addr}
-				r.localCache[key] = resolver.Address{
-					Addr:       addr,
-					ServerName: instance.Name,
-					Attributes: nil,
-				}
-			}
-		}
-	}
-
-	r.initialized = true
-	r.pushStateLocked()
-
-	r.registry.logger.Debug("resolver cache initialized",
-		clog.String("service_name", r.serviceName),
-		clog.Int("count", len(r.localCache)))
 }
 
 // handleEvent 处理服务变化事件，增量更新本地缓存
@@ -277,7 +240,7 @@ func (r *etcdResolver) pushStateLocked() {
 }
 
 // ResolveNow 立即重新解析（gRPC 可能会调用此方法）
-// 此方法采用全量刷新，作为兜底机制
+// Watch 是唯一数据源；此提示只重推最新缓存，重连与压缩恢复由 Watch 负责。
 func (r *etcdResolver) ResolveNow(opts resolver.ResolveNowOptions) {
 	r.lifecycleMu.Lock()
 	if r.closed {
@@ -287,7 +250,11 @@ func (r *etcdResolver) ResolveNow(opts resolver.ResolveNowOptions) {
 	r.workers.Add(1)
 	r.lifecycleMu.Unlock()
 	defer r.workers.Done()
-	r.initializeCache(r.ctx)
+	r.cacheMu.Lock()
+	defer r.cacheMu.Unlock()
+	if r.initialized {
+		r.pushStateLocked()
+	}
 }
 
 // Close 关闭 resolver
