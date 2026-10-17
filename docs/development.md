@@ -2,8 +2,8 @@
 
 ## 环境要求
 
-- Go 1.26 或更高版本；CI 验证 1.26.0 与固定补丁版本 1.26.5。
-- golangci-lint 2.12.2。
+- Go 最低版本以 `go.mod` 为准，CI 验证版本以工作流为准。
+- golangci-lint 等质量工具的固定版本见 `Makefile` 与工作流。
 - Docker，用于 Testcontainers 集成测试和可运行示例。
 - Node.js，用于 Markdown 检查。
 
@@ -27,14 +27,15 @@ make example-all
 `make check` 运行普通测试、lint、现代化检查、API 清单与兼容性检查、文档检查和
 示例编译。涉及并发或生命周期时，还需运行 `make test-race`。
 `test-fast` 是显式选定的无 Docker 包与用例，方便本地反馈，不代表全部单测通过，
-也不替代任何普通/race 容器门禁。Fuzz 与性能命令见[性能基线](./performance.md)。
+也不替代任何普通/race 容器门禁。Fuzz 与性能命令见[性能测试](./performance.md)。
 
 `make example-all` 只运行可自行结束的独立示例。场景示例通过
 `make example-<name>` 单独运行；可观测性完整验收见
 [示例说明](../examples/observability/README.md)。
 `examples-check` 仅编译；`examples-scenarios` 真实运行四个治理/数据访问场景测试；
-`examples-external-check` 在临时外部 module 编译 MQ/DLock 示例和生产装配文档。
-后两者与全量测试都会执行行为验收，真实后端缺失会失败。
+`examples-external-check` 在临时外部 module 编译文档引用的 MQ、DLock、Connector
+和缓存查询示例，验证公开 API 接入不依赖仓库 internal 包。
+场景验收和全量测试使用真实后端，后端缺失会失败；外部复制检查只编译，不连接服务。
 
 ## 测试与资源
 
@@ -48,14 +49,19 @@ make example-all
 
 日常 CI 检查最低 Go 版本、全量普通和竞态测试、lint、Markdown 与链接、
 工作流语法、Proto、导出注释、API 兼容性和独立示例运行。
-测试和示例结果保存 14 天，用于排查问题，不维护发布哈希取证链。
+测试和示例日志用于排查问题；保留策略见工作流，不维护发布哈希取证链。
 
 Genesis CI 不检出或验证 Resonance 等下游仓库。下游项目负责自己的集成测试；
 发布者按[发布流程](./release.md)完成本库验收。CI 不自动发布或部署。
 
 ## 文档约定
 
-组件使用说明集中在各包 README 和 GoDoc；跨组件说明集中在本目录。
-旧博客和发布记录仅作历史参考，不作为当前行为或发布状态的依据。
-API 基线、兼容性例外和迁移说明仍属于活跃契约资料，不能随历史文档一起删除。
-不为一次 AI 工作过程新增长期文档。
+- API、配置、默认值和错误语义放在 GoDoc，不在 docs 再抄完整声明与字段表。
+- 组件 README 提供最短接入路径，完整可运行代码放 examples；文档引用代码而非复制。
+- docs 只保留跨组件操作指南、迁移动作、政策和源码无法解释的设计取舍。
+- 不强制一组件一篇博客，不维护重复总结、旧版本计划或一次工作过程的验收日志。
+- 历史资料查 Git 标签、提交和 Releases，不为删除文档另建一套归档目录。
+- [API 检查输入](./api/README.md)供 CI 使用；基线与已批准例外不能随历史文档删除。
+
+迁移路径时同步修复 Markdown、Go 注释和 Makefile 引用，并运行 `make markdown-check`。
+修改 API 资料还需运行三项 API 检查，不能只确认链接可达。

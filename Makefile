@@ -24,7 +24,7 @@ help:
 	@echo "  make test      - 运行全量测试（含真实容器）"
 	@echo "  make test-fast - 运行选定的无 Docker 开发反馈测试"
 	@echo "  make examples-scenarios - 真实后端场景行为验收"
-	@echo "  make examples-external-check - 外部复制与装配文档编译验收"
+	@echo "  make examples-external-check - 外部 module 示例复制编译验收"
 	@echo "  make lint      - 运行代码检查"
 	@echo "  make markdown-check - 检查 Markdown 格式和仓库内链接"
 	@echo "  make buf-lint  - 检查 internal example proto 定义"
@@ -115,10 +115,10 @@ modernize-check:
 	rm -f "$$out_file"
 
 api-inventory:
-	@go run ./internal/cmd/apiinventory -write docs/v1-api-inventory.md
+	@go run ./internal/cmd/apiinventory -write docs/api/inventory.md
 
 api-inventory-check:
-	@go run ./internal/cmd/apiinventory -check docs/v1-api-inventory.md
+	@go run ./internal/cmd/apiinventory -check docs/api/inventory.md
 
 api-baseline-check:
 	@baseline_dir=$$(mktemp -d); \
@@ -127,14 +127,14 @@ api-baseline-check:
 	go run ./internal/cmd/apiinventory \
 		-dir "$$baseline_dir" \
 		-legacy-public-examples \
-		-check docs/api-baselines/v1.0.0-rc.1.md
+		-check docs/api/baselines/v1.0.0-rc.1.md
 
 api-compat-check:
 	@go run ./internal/cmd/apiinventory \
-		-compat-baseline docs/api-baselines/v1.0.0-rc.1.md \
-		-allow-breaking docs/v1-api-compat-allowlist.md \
-		-expect-breaking docs/v1-api-compat-expected.md \
-		-allow-removals docs/v1-api-compat-removals.md
+		-compat-baseline docs/api/baselines/v1.0.0-rc.1.md \
+		-allow-breaking docs/api/compat-allowlist.md \
+		-expect-breaking docs/api/compat-expected.md \
+		-allow-removals docs/api/compat-removals.md
 
 exported-comments: lint-tool-check
 	@golangci-lint run --config .golangci-doc.yml ./...

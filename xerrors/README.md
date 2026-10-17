@@ -107,5 +107,5 @@ port := xerrors.MustOK(loadBootstrapPort())
 ## 相关文档
 
 - `go doc -all ./xerrors`
-- [历史设计博客](../docs/genesis-xerrors-blog.md)
+- [依赖与能力边界](../docs/design/dependency-boundaries.md)
 - [示例代码](../examples/xerrors/main.go)

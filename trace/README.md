@@ -146,5 +146,5 @@ defer consumeSpan.End()
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/trace)
-- [历史可观测性博客](../docs/genesis-observability-blog.md)
+- [可观测性设计取舍](../docs/design/observability.md)
 - [Genesis 文档目录](../docs/README.md)

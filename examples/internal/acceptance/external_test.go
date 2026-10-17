@@ -20,31 +20,14 @@ func TestExamplesCopyToExternalModule(t *testing.T) {
 	// replace 只用于编译当前候选源码；外部 module 名称使 internal 导入仍被 Go 拒绝。
 	module := "module example.org/genesis-consumer\n\ngo 1.26\n\nrequire github.com/ceyewan/genesis v1.0.0-rc.3\nreplace github.com/ceyewan/genesis => " + filepath.ToSlash(root) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o644))
-	for _, name := range []string{"mq", "dlock"} {
+	// 文档直接引用可运行代码；外部复制验收编译同一份源码，不维护文档代码副本。
+	for _, name := range []string{"mq", "dlock", "connector", "cached-query"} {
 		data, err := os.ReadFile(filepath.Join(root, "examples", name, "main.go"))
 		require.NoError(t, err)
 		dest := filepath.Join(dir, name)
 		require.NoError(t, os.MkdirAll(dest, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(dest, "main.go"), data, 0o644))
 	}
-	doc, err := os.ReadFile(filepath.Join(root, "docs", "production.md"))
-	require.NoError(t, err)
-	blocks := strings.SplitN(string(doc), "```go\n", 2)
-	require.Len(t, blocks, 2)
-	code := strings.SplitN(blocks[1], "```", 2)[0]
-	imports := `package bootstrap
-import (
- "context"
- "time"
- "github.com/ceyewan/genesis/cache"
- "github.com/ceyewan/genesis/clog"
- "github.com/ceyewan/genesis/connector"
- "github.com/ceyewan/genesis/xerrors"
-)
-`
-	bootstrap := filepath.Join(dir, "bootstrap")
-	require.NoError(t, os.MkdirAll(bootstrap, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(bootstrap, "bootstrap.go"), []byte(imports+code), 0o644))
 	for _, args := range [][]string{{"mod", "tidy"}, {"test", "-run", "^$", "./..."}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			// race 缓存不能代替普通构建缓存，每个阶段独立预留冷构建预算。
