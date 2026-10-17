@@ -61,7 +61,7 @@ Genesis CI 不检出或验证 Resonance 等下游仓库。下游项目负责自�
 - docs 只保留跨组件操作指南、迁移动作、政策和源码无法解释的设计取舍。
 - 不强制一组件一篇博客，不维护重复总结、旧版本计划或一次工作过程的验收日志。
 - 历史资料查 Git 标签、提交和 Releases，不为删除文档另建一套归档目录。
-- [API 检查输入](./api/README.md)供 CI 使用；基线与已批准例外不能随历史文档删除。
+- [API 检查输入](./api/README.md)供 CI 使用；稳定基线发布后冻结，不维护预发行兼容例外。
 
 迁移路径时同步修复 Markdown、Go 注释和 Makefile 引用，并运行 `make markdown-check`。
-修改 API 资料还需运行三项 API 检查，不能只确认链接可达。
+修改 API 资料还需运行 `make api-inventory-check api-compat-check`，不能只确认链接可达。

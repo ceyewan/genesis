@@ -12,27 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/tools/go/packages"
+	"github.com/stretchr/testify/require"
 )
-
-func TestInventoryHeaderDescribesTestkitImportability(t *testing.T) {
-	module := &packages.Module{Path: "example.com/module"}
-	withoutTestkit := inventoryHeader([]*packages.Package{{
-		PkgPath: "example.com/module/trace",
-		Module:  module,
-	}})
-	if strings.Contains(withoutTestkit, "`testkit` is included") {
-		t.Fatalf("internalized testkit is still described as public: %s", withoutTestkit)
-	}
-
-	withTestkit := inventoryHeader([]*packages.Package{{
-		PkgPath: "example.com/module/testkit",
-		Module:  module,
-	}})
-	if !strings.Contains(withTestkit, "`testkit` is included because it is an importable module package") {
-		t.Fatalf("public baseline testkit explanation is missing: %s", withTestkit)
-	}
-}
 
 func TestPackageEntriesCanonicalPublicSurface(t *testing.T) {
 	first := packageEntriesForSource(t, `
@@ -163,7 +144,7 @@ func TestGenerateIncludesPromotedJWTRegisteredClaimsMethods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inventory, err := generate(moduleDir, false)
+	inventory, err := generate(moduleDir)
 	if err != nil {
 		t.Fatalf("generate module inventory: %v", err)
 	}
@@ -200,153 +181,49 @@ func TestGenerateRejectsImportableExamplePackageOutsideInternal(t *testing.T) {
 	writeModuleFile("examples/demo/main.go", "package main\nfunc main() {}\n")
 	writeModuleFile("examples/demo/internal/proto/proto.go", "package proto\ntype Internal struct{}\n")
 
-	if _, err := generate(moduleDir, false); err != nil {
+	if _, err := generate(moduleDir); err != nil {
 		t.Fatalf("main and internal example packages should be accepted: %v", err)
 	}
 
 	writeModuleFile("examples/demo/proto/proto.go", "package proto\ntype Public struct{}\n")
-	_, err := generate(moduleDir, false)
+	_, err := generate(moduleDir)
 	if err == nil || !strings.Contains(err.Error(), "importable example package must move under internal") {
 		t.Fatalf("public example package was not rejected: %v", err)
 	}
-	if _, err := generate(moduleDir, true); err != nil {
-		t.Fatalf("explicit frozen-baseline mode rejected a legacy example package: %v", err)
-	}
 }
 
-func TestCheckCompatibilityRequiresStrictReplacementPair(t *testing.T) {
-	baseline := []byte("## `pkg`\n\n- func: `func Change(int) string`\n- func: `func Keep()`\n")
-	current := []byte("## `pkg`\n\n- func: `func Change(string) string`\n- func: `func Keep()`\n")
-	dir := t.TempDir()
-	baselinePath := writeTestFile(t, dir, "baseline.md", baseline)
-	allowPath := writeTestFile(t, dir, "allow.md", []byte("## `pkg`\n\n- func: `func Change(int) string`\n"))
-	expectedPath := writeTestFile(t, dir, "expected.md", []byte("## `pkg`\n\n- func: `func Change(string) string`\n"))
-
-	if err := checkCompatibility(current, baselinePath, "", "", ""); err == nil {
-		t.Fatal("unreviewed signature change passed compatibility check")
-	}
-	if err := checkCompatibility(current, baselinePath, allowPath, expectedPath, ""); err != nil {
-		t.Fatalf("strict reviewed replacement failed compatibility check: %v", err)
-	}
-}
-
-func TestCheckCompatibilityRejectsMismatchedPair(t *testing.T) {
-	baseline := []byte("## `pkg`\n\n- func: `func Change(int)`\n")
-	current := []byte("## `pkg`\n\n- func: `func Renamed(string)`\n")
-	dir := t.TempDir()
-	baselinePath := writeTestFile(t, dir, "baseline.md", baseline)
-	allowPath := writeTestFile(t, dir, "allow.md", baseline)
-	expectedPath := writeTestFile(t, dir, "expected.md", current)
-
-	err := checkCompatibility(current, baselinePath, allowPath, expectedPath, "")
-	if err == nil || !strings.Contains(err.Error(), "missing expected replacement") {
-		t.Fatalf("mismatched one-entry old/new sets were not rejected as an invalid pair: %v", err)
-	}
-}
-
-func TestCheckCompatibilityRejectsExpectedReplacementDrift(t *testing.T) {
-	baseline := []byte("## `pkg`\n\n- func: `func Change(int)`\n")
-	allow := baseline
-	expected := []byte("## `pkg`\n\n- func: `func Change(string)`\n")
-	dir := t.TempDir()
-	baselinePath := writeTestFile(t, dir, "baseline.md", baseline)
-	allowPath := writeTestFile(t, dir, "allow.md", allow)
-	expectedPath := writeTestFile(t, dir, "expected.md", expected)
-
-	tests := map[string][]byte{
-		"changed again": []byte("## `pkg`\n\n- func: `func Change(bool)`\n"),
-		"deleted":       []byte("## `pkg`\n"),
-	}
-	for name, current := range tests {
-		t.Run(name, func(t *testing.T) {
-			err := checkCompatibility(current, baselinePath, allowPath, expectedPath, "")
-			if err == nil || !strings.Contains(err.Error(), "approved replacement is not current") {
-				t.Fatalf("replacement drift passed compatibility check: %v", err)
-			}
-		})
-	}
-}
-
-func TestCheckCompatibilityRejectsStaleAndUnpairedExceptions(t *testing.T) {
-	inventory := []byte("## `pkg`\n\n- func: `func Keep()`\n")
-	dir := t.TempDir()
-	baselinePath := writeTestFile(t, dir, "baseline.md", inventory)
-	allowPath := writeTestFile(t, dir, "allow.md", inventory)
-	expectedPath := writeTestFile(t, dir, "expected.md", []byte("## `pkg`\n\n- func: `func Keep(string)`\n"))
-
-	if err := checkCompatibility(inventory, baselinePath, allowPath, expectedPath, ""); err == nil || !strings.Contains(err.Error(), "no longer needed") {
-		t.Fatalf("stale compatibility exception passed: %v", err)
-	}
-	if err := checkCompatibility(inventory, baselinePath, allowPath, "", ""); err == nil || !strings.Contains(err.Error(), "must be supplied together") {
-		t.Fatalf("unpaired compatibility file passed: %v", err)
-	}
-}
-
-func TestCheckCompatibilityRequiresExplicitExactRemoval(t *testing.T) {
-	baseline := []byte("## `pkg`\n\n- func: `func Keep()`\n- func: `func Remove()`\n")
-	current := []byte("## `pkg`\n\n- func: `func Keep()`\n")
-	dir := t.TempDir()
-	baselinePath := writeTestFile(t, dir, "baseline.md", baseline)
-	removalsPath := writeTestFile(t, dir, "removals.md", []byte("## `pkg`\n\n- func: `func Remove()`\n"))
-
-	if err := checkCompatibility(current, baselinePath, "", "", ""); err == nil {
-		t.Fatal("unreviewed removal passed compatibility check")
-	}
-	if err := checkCompatibility(current, baselinePath, "", "", removalsPath); err != nil {
-		t.Fatalf("reviewed exact removal failed compatibility check: %v", err)
-	}
-}
-
-func TestCheckCompatibilityRejectsInvalidRemovalException(t *testing.T) {
-	baseline := []byte("## `pkg`\n\n- func: `func Remove(int)`\n")
-	dir := t.TempDir()
-	baselinePath := writeTestFile(t, dir, "baseline.md", baseline)
-
-	tests := map[string]struct {
+func TestCheckCompatibilityPreservesStableAPI(t *testing.T) {
+	t.Parallel()
+	baseline := []byte("## `pkg`\n\n- func: `func Keep(int) string`\n")
+	baselinePath := writeTestFile(t, t.TempDir(), "baseline.md", baseline)
+	tests := []struct {
+		name    string
 		current []byte
-		removal []byte
-		want    string
+		wantErr bool
 	}{
-		"still current": {
-			current: baseline,
-			removal: baseline,
-			want:    "approved removal is still current",
-		},
-		"not in baseline": {
-			current: []byte("## `pkg`\n"),
-			removal: []byte("## `pkg`\n\n- func: `func Missing()`\n"),
-			want:    "approved removal is not present in baseline",
-		},
-		"signature change disguised as removal": {
-			current: []byte("## `pkg`\n\n- func: `func Remove(string)`\n"),
-			removal: baseline,
-			want:    "approved removal has a current replacement",
-		},
+		{name: "unchanged", current: baseline},
+		{name: "addition", current: append(bytes.Clone(baseline), []byte("- func: `func Added()`\n")...)},
+		{name: "signature change", current: []byte("## `pkg`\n\n- func: `func Keep(string) string`\n"), wantErr: true},
+		{name: "removal", current: []byte("## `pkg`\n"), wantErr: true},
+		{name: "rename", current: []byte("## `pkg`\n\n- func: `func Renamed(int) string`\n"), wantErr: true},
 	}
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			removalsPath := writeTestFile(t, t.TempDir(), "removals.md", test.removal)
-			err := checkCompatibility(test.current, baselinePath, "", "", removalsPath)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("invalid removal exception was not rejected with %q: %v", test.want, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := checkCompatibility(tt.current, baselinePath)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "func Keep(int) string")
+				return
 			}
+			require.NoError(t, err)
 		})
 	}
 }
 
-func TestCheckCompatibilityRejectsReplacementAndRemovalOverlap(t *testing.T) {
-	baseline := []byte("## `pkg`\n\n- func: `func Change(int)`\n")
-	current := []byte("## `pkg`\n\n- func: `func Change(string)`\n")
-	dir := t.TempDir()
-	baselinePath := writeTestFile(t, dir, "baseline.md", baseline)
-	allowPath := writeTestFile(t, dir, "allow.md", baseline)
-	expectedPath := writeTestFile(t, dir, "expected.md", current)
-	removalsPath := writeTestFile(t, dir, "removals.md", baseline)
-
-	err := checkCompatibility(current, baselinePath, allowPath, expectedPath, removalsPath)
-	if err == nil || !strings.Contains(err.Error(), "approved as both replacement and removal") {
-		t.Fatalf("overlapping replacement/removal exception passed: %v", err)
-	}
+func TestCheckCompatibilityRejectsEmptyBaseline(t *testing.T) {
+	t.Parallel()
+	baselinePath := writeTestFile(t, t.TempDir(), "baseline.md", []byte("# Empty baseline\n"))
+	require.ErrorContains(t, checkCompatibility([]byte("## `pkg`\n\n- func: `func Keep()`\n"), baselinePath), "baseline contains no exported declarations")
 }
 
 func TestParseInventoryRejectsDuplicateAPISlot(t *testing.T) {

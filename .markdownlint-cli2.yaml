@@ -26,5 +26,3 @@ ignores:
   - "node_modules/**"
   - "docs/api/baselines/**"
   - "docs/api/inventory.md"
-  - "docs/api/compat-allowlist.md"
-  - "docs/api/compat-expected.md"
