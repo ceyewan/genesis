@@ -51,25 +51,37 @@ func TestRedisFrozenClockCannotRefillBucket(t *testing.T) {
 	}
 }
 
-func TestRedisTokenBucketUsesSeparateVersionedKeys(t *testing.T) {
+func TestRedisTokenBucketKeepsOriginalKeyAndConvertsLegacyBalance(t *testing.T) {
 	conn := testkit.NewRedisContainerConnector(t)
 	limiter, err := newDistributed(&DistributedConfig{}, conn, clog.Discard(), metrics.Discard())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, limiter.Close()) })
-	limit := Limit{Rate: 1, Burst: 1}
-	newKey := limiter.(*distributedLimiter).buildKey("legacy", limit)
-	oldKey := strings.TrimSuffix(newKey, ":v2")
-	require.NotEqual(t, oldKey, newKey)
-	require.NoError(t, conn.GetClient().Set(t.Context(), oldKey, "1700000000.123456", 0).Err())
-	allowed, err := limiter.Allow(t.Context(), "legacy", limit)
+	impl := limiter.(*distributedLimiter)
+	key := impl.buildKey("legacy", Limit{Rate: 10, Burst: 10})
+	require.Equal(t, impl.prefix+"legacy:rate=10:burst=10", key)
+	client := conn.GetClient()
+	// At 10 tokens/s, 0.5s of future TAT represents 5 consumed tokens.
+	require.NoError(t, client.Set(t.Context(), key, "1700000000.5", 0).Err())
+	script := frozenLimiterScript(1700000000, 0)
+	result, err := script.Run(t.Context(), client, []string{key}, 10, 10, 6).Slice()
 	require.NoError(t, err)
-	require.True(t, allowed)
-	require.Equal(t, "1700000000.123456", conn.GetClient().Get(t.Context(), oldKey).Val())
-	state, err := conn.GetClient().HGetAll(t.Context(), newKey).Result()
+	require.EqualValues(t, 0, result[0], "conversion must not reset the bucket to full")
+	require.Equal(t, "5,1700000000000000", client.Get(t.Context(), key).Val())
+	require.Equal(t, "string", client.Type(t.Context(), key).Val())
+	result, err = script.Run(t.Context(), client, []string{key}, 10, 10, 5).Slice()
 	require.NoError(t, err)
-	require.Len(t, state, 2)
-	require.Equal(t, "0", state["tokens"])
-	require.NotEmpty(t, state["last_us"])
+	require.EqualValues(t, 1, result[0])
+	require.Equal(t, "0,1700000000000000", client.Get(t.Context(), key).Val())
+}
+
+func TestRedisTokenBucketRejectsInvalidStoredState(t *testing.T) {
+	client := testkit.NewRedisContainerClient(t)
+	for _, state := range []string{"broken", "1,broken"} {
+		require.NoError(t, client.Set(t.Context(), "invalid-state", state, 0).Err())
+		_, err := frozenLimiterScript(1700000000, 0).Run(t.Context(), client, []string{"invalid-state"}, 10, 10, 1).Result()
+		require.Error(t, err)
+		require.Equal(t, state, client.Get(t.Context(), "invalid-state").Val(), "invalid state must not be silently reset")
+	}
 }
 
 func TestDistributedLimitNumericBounds(t *testing.T) {

@@ -20,35 +20,53 @@ const (
 	maxRedisTTLSeconds         = maxRedisExactInteger / 1000
 )
 
-// luaScript is a standard token bucket: refill by elapsed time, cap at Burst,
-// then consume n tokens. State contains only remaining tokens and last update.
-// Integer microseconds avoid adding tiny intervals to absolute Unix seconds.
+// luaScript 实现普通令牌桶，以 "tokens,last_us" 字符串保存剩余令牌和更新时间。
+// 沿用原 Key 及字符串类型；旧的单时间戳值在首次读取时折算为剩余令牌。
+// 所有读、补充、扣减及写入在同一次 Lua 调用中完成。
 const luaScript = `
+-- KEYS[1]：限流状态键。
+-- ARGV[1]：Rate，每秒补充的令牌数。
+-- ARGV[2]：Burst，桶容量；ARGV[3]：本次申请的令牌数。
+-- 返回：{是否允许（1/0）, 剩余完整令牌数}。
 local rate = tonumber(ARGV[1])
 local capacity = tonumber(ARGV[2])
 local requested = tonumber(ARGV[3])
 if requested > capacity then return {0, 0} end
 
+-- 1. 使用 Redis 统一时钟，先以整数微秒做差，再换算为秒。
 local time_parts = redis.call("TIME")
 local now = tonumber(time_parts[1]) * 1000000 + tonumber(time_parts[2])
-local state = redis.call("HMGET", KEYS[1], "tokens", "last_us")
-local tokens = tonumber(state[1]) or capacity
-local last = tonumber(state[2]) or now
--- A backward clock step must not refill tokens or move the reference backward.
+local tokens, last = capacity, now
+local state = redis.call("GET", KEYS[1])
+if state then
+  local saved_tokens, saved_last = string.match(state, "^([^,]+),([^,]+)$")
+  if saved_tokens then
+    tokens, last = tonumber(saved_tokens), tonumber(saved_last)
+    if not tokens or not last then return redis.error_reply("invalid token bucket state") end
+  else
+    -- 旧值是理论放行时间。未偿还时间 * Rate 即已消耗额度，不能直接重置满桶。
+    local previous = tonumber(state)
+    if not previous then return redis.error_reply("invalid legacy token bucket state") end
+    tokens = math.max(0, capacity - math.max(0, previous * 1000000 - now) / 1000000 * rate)
+  end
+end
+-- 2. available = min(Burst, tokens + elapsed_seconds * Rate)。
+-- 时钟回退时不补充令牌，也不把参考时间往回移动。
 now = math.max(now, last)
 local elapsed = (now - last) / 1000000
 tokens = math.min(capacity, tokens + elapsed * rate)
 
+-- 3. 令牌足够才扣减；拒绝请求也保存已补充的小数令牌。
 local allowed = 0
 if requested <= tokens then
   tokens = tokens - requested
   allowed = 1
 end
--- Preserve fractional tokens and integer microseconds without Lua's implicit
--- 14-significant-digit conversion when passing numbers to Redis commands.
-redis.call("HSET", KEYS[1], "tokens", string.format("%.17g", tokens),
-  "last_us", string.format("%.0f", now))
-redis.call("EXPIRE", KEYS[1], math.max(1, math.ceil(2 * capacity / rate)))
+-- 4. 显式格式化，避免 Lua 隐式转字符串时丢失令牌小数或微秒时间精度。
+-- TTL 取两倍回满时间（最短 1 秒），使过期时的桶已恢复满额。
+-- SET 同时替换状态及 TTL；不先删旧键，避免转换中途丢弃状态。
+local value = string.format("%.17g,%.0f", tokens, now)
+redis.call("SET", KEYS[1], value, "EX", math.max(1, math.ceil(2 * capacity / rate)))
 return {allowed, math.floor(tokens)}
 `
 
@@ -56,8 +74,7 @@ func validRedisLimit(limit Limit) bool {
 	if !limit.valid() || int64(limit.Burst) > maxRedisExactInteger {
 		return false
 	}
-	// Keep expiration arithmetic representable by Redis and Lua. This also
-	// rejects extremely small rates whose full refill horizon overflows.
+	// 限制过期时间在 Redis/Lua 可安全表示的范围内，拒绝导致溢出的极小 Rate。
 	horizon := 2 * float64(limit.Burst) / limit.Rate
 	return !math.IsInf(horizon, 1) && horizon <= float64(maxRedisTTLSeconds)
 }
@@ -209,7 +226,7 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 
 func (l *distributedLimiter) buildKey(key string, limit Limit) string {
 	return fmt.Sprintf(
-		"%s%s:rate=%s:burst=%d:v2",
+		"%s%s:rate=%s:burst=%d",
 		l.prefix,
 		key,
 		strconv.FormatFloat(limit.Rate, 'g', -1, 64),
