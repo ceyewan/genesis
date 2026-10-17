@@ -1,7 +1,7 @@
 # Genesis pre-v1 approved API replacements
 
 This file is consumed by `make api-compat-check` together with
-`v1-api-compat-allowlist.md`. Every entry is the exact approved pre-v1
+`compat-allowlist.md`. Every entry is the exact approved pre-v1
 replacement for one reviewed RC1 signature. The check fails if an approved
 replacement is absent or drifts again.
 

@@ -11,7 +11,7 @@
 
 如果你需要的是“数据库主键”“会话内消息序号”“实例唯一 WorkerID”这几类不同问题，`idgen` 提供的是一组可组合的解法，而不是单一算法。
 
-接口边界以本页与 `go doc -all ./idgen` 为准；[旧设计博客](../docs/genesis-idgen-blog.md)仅供历史参考。
+接口边界查 `go doc -all ./idgen`；能力划分的理由见[状态与并发设计](../docs/design/state-and-concurrency.md)。
 
 ## 适用场景
 

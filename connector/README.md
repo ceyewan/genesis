@@ -59,7 +59,7 @@ conn, err := connector.NewRedis(&connector.RedisConfig{
 TLS 信任链、有效期、主机名或 ACL 失败在 Connect 阶段返回 `ErrConnection`，保留
 底层原因，且不会发布未连接客户端。Connector 不提供 Redis Cluster/Sentinel 或
 动态凭证轮换。新增字段使位置式 RedisConfig 字面量需要改成带字段名的写法，见
-[迁移说明](../docs/v1-migration.md#unreleased-hardening-after-rc3)。
+[迁移说明](../docs/migration.md#unreleased-hardening-after-rc3)。
 
 ## 支持的连接器
 
@@ -138,5 +138,5 @@ go test -race ./connector/... -count=1
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/connector)
-- [历史设计博客](../docs/genesis-connector-blog.md)
+- [依赖与能力边界](../docs/design/dependency-boundaries.md)
 - [Genesis 文档目录](../docs/README.md)

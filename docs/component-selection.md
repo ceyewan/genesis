@@ -30,5 +30,4 @@ Genesis 提供组件，不接管应用生命周期。下面的选择基于当前
 - Redis 广播没有服务端确认/重投保证；需要持久消费进度时选择 consumer group。
 - 多层重试会乘法放大请求。设置整体 deadline，区分永久错误和暂时错误。
 
-具体 TTL、确认、错误分类与所有权见各组件 README、GoDoc，以及
-[API 决策](./v1-api-decisions.md)。
+具体 TTL、确认、错误分类与所有权查各组件 GoDoc，接入代码见组件 README 和 examples。

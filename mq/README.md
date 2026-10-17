@@ -210,5 +210,5 @@ go test -race ./mq/... -count=1
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/mq)
-- [历史设计博客](../docs/genesis-mq-blog.md)
+- [消息系统的设计取舍](../docs/design/service-governance.md)
 - [Genesis 文档目录](../docs/README.md)

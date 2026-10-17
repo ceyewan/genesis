@@ -51,7 +51,7 @@ make examples
 ## 文档
 
 - [文档入口](docs/README.md)
-- [总体设计](docs/design.md)
+- [设计取舍](docs/design.md)
 - [开发指南](docs/development.md)
 - [发布流程](docs/release.md)
 - [示例](examples/README.md)

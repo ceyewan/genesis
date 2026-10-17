@@ -1,6 +1,5 @@
-// Package contract_test exercises the v1.0.0-rc.1 surface exactly as an
-// external consumer sees it. The protected behavior is sourced from
-// docs/v1-api-decisions.md and the Resonance integration call sites.
+// 本文件从外部消费者视角保护构造、错误、所有权与关闭契约。
+// 当前行为依据各组件 GoDoc；固定声明基线见 docs/api/baselines。
 package connector_test
 
 import (

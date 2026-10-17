@@ -124,4 +124,4 @@ make status
 
 - [项目主页](../README.md) - 返回项目主页
 - [开发指南](../docs/development.md) - 了解测试和文档约定
-- [总体设计](../docs/design.md) - 了解现行项目架构
+- [设计取舍](../docs/design.md) - 了解能力边界和组合方式

@@ -153,5 +153,5 @@ go test -race ./cache/... -count=1
 ## 相关文档
 
 - [包文档](https://pkg.go.dev/github.com/ceyewan/genesis/cache)
-- [历史设计博客](../docs/genesis-cache-blog.md)
+- [缓存与并发的设计取舍](../docs/design/state-and-concurrency.md)
 - [Genesis 文档目录](../docs/README.md)
