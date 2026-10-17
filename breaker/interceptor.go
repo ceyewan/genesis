@@ -28,7 +28,9 @@ func (cb *circuitBreaker) UnaryClientInterceptor(opts ...InterceptorOption) grpc
 	// 默认使用服务级别 Key
 	cfg := &interceptorConfig{keyFunc: defaultKeyFunc}
 	for _, opt := range opts {
-		opt(cfg)
+		if opt != nil {
+			opt(cfg)
+		}
 	}
 
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {

@@ -76,7 +76,14 @@ func initRedis(ctx context.Context, logger clog.Logger) (dlock.Locker, func(), e
 		return nil, nil, err
 	}
 
-	return locker, func() { _ = redisConn.Close() }, nil
+	return locker, func() {
+		if err := locker.Close(); err != nil {
+			logger.Error("Close locker failed", clog.Error(err))
+		}
+		if err := redisConn.Close(); err != nil {
+			logger.Error("Close Redis connector failed", clog.Error(err))
+		}
+	}, nil
 }
 
 func initEtcd(ctx context.Context, logger clog.Logger) (dlock.Locker, func(), error) {
@@ -104,7 +111,14 @@ func initEtcd(ctx context.Context, logger clog.Logger) (dlock.Locker, func(), er
 		return nil, nil, err
 	}
 
-	return locker, func() { _ = etcdConn.Close() }, nil
+	return locker, func() {
+		if err := locker.Close(); err != nil {
+			logger.Error("Close locker failed", clog.Error(err))
+		}
+		if err := etcdConn.Close(); err != nil {
+			logger.Error("Close Etcd connector failed", clog.Error(err))
+		}
+	}, nil
 }
 
 func runDemo(ctx context.Context, locker dlock.Locker, logger clog.Logger) {

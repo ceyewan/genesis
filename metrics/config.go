@@ -6,6 +6,8 @@ import (
 	"github.com/ceyewan/genesis/xerrors"
 )
 
+const defaultCardinalityLimit = 2000
+
 // Config 定义全局 metrics 初始化参数。
 //
 // 当前实现采用 Prometheus exporter，并可选在同一进程内暴露 /metrics HTTP 端点。
@@ -27,6 +29,9 @@ type Config struct {
 	Path string `mapstructure:"path" json:"path" yaml:"path"`
 	// EnableRuntime 启用 Go runtime 指标采集。
 	EnableRuntime bool `mapstructure:"enable_runtime" json:"enable_runtime" yaml:"enable_runtime"`
+	// CardinalityLimit 限制每个 Instrument 每次采集的标签组合数（含溢出系列）；0 使用默认 2000。
+	// 超限记录交由 OTel 归入 otel.metric.overflow=true，不在组件内维护标签状态。
+	CardinalityLimit int `json:"cardinality_limit" yaml:"cardinality_limit" mapstructure:"cardinality_limit"`
 	// ServerErrors 接收 Prometheus HTTP Serve 的异步错误；发送非阻塞，建议使用缓冲通道。
 	ServerErrors chan<- error `mapstructure:"-" json:"-" yaml:"-"`
 }
@@ -38,8 +43,11 @@ func (c *Config) validate() error {
 	if strings.TrimSpace(c.ServiceName) == "" {
 		return xerrors.Wrap(ErrInvalidConfig, "service_name is required")
 	}
-	if c.Port < 0 {
-		return xerrors.Wrap(ErrInvalidConfig, "port must be greater than or equal to 0")
+	if c.Port < 0 || c.Port > 65535 {
+		return xerrors.Wrap(ErrInvalidConfig, "port must be between 0 and 65535")
+	}
+	if c.CardinalityLimit < 0 {
+		return xerrors.Wrap(ErrInvalidConfig, "cardinality_limit must not be negative")
 	}
 	if c.Path != "" && !strings.HasPrefix(c.Path, "/") {
 		return xerrors.Wrap(ErrInvalidConfig, "path must start with /")

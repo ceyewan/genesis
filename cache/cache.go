@@ -187,7 +187,9 @@ func NewMulti(local Local, remote Distributed, cfg *MultiConfig) (Multi, error) 
 func buildOptions(opts ...Option) options {
 	opt := options{}
 	for _, o := range opts {
-		o(&opt)
+		if o != nil {
+			o(&opt)
+		}
 	}
 
 	if opt.Logger == nil {

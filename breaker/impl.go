@@ -84,6 +84,9 @@ func (cb *circuitBreaker) Execute(ctx context.Context, key string, fn func() (an
 	if key == "" {
 		return nil, ErrKeyEmpty
 	}
+	if fn == nil {
+		return nil, xerrors.Wrap(ErrInvalidConfig, "execute callback is nil")
+	}
 
 	// 获取或创建熔断器
 	breaker, err := cb.getOrCreateBreaker(key)

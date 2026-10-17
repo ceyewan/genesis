@@ -129,7 +129,7 @@ func basicConfigExample() {
 	fmt.Printf("   - 调试模式: %t (来自 GENESIS_APP_DEBUG)\n\n", cfg.App.Debug)
 
 	fmt.Printf("【LOG 配置组】\n")
-	fmt.Printf("1. .env 文件 (高优先级):\n")
+	fmt.Printf("1. 环境变量或可选 .env 文件 (高优先级):\n")
 	fmt.Printf("   - 日志级别: %s (来自 GENESIS_CLOG_LEVEL)\n", cfg.Logger.Level)
 	fmt.Printf("   - 日志格式: %s (来自 GENESIS_CLOG_FORMAT)\n", cfg.Logger.Format)
 	fmt.Printf("   - 日志输出: %s (来自 GENESIS_CLOG_OUTPUT)\n", cfg.Logger.Output)
@@ -151,7 +151,7 @@ func basicConfigExample() {
 
 	fmt.Printf("\n=== 配置优先级总结 ===\n")
 	fmt.Printf("✓ 环境变量: 只设置 APP 配置组\n")
-	fmt.Printf("✓ .env 文件: 只设置 LOG 配置组\n")
+	fmt.Printf("✓ 日志配置可由 GENESIS_CLOG_* 环境变量或自行创建的 .env 覆盖\n")
 	fmt.Printf("✓ config.dev.yaml: 只设置 REDIS 配置组\n")
 	fmt.Printf("✓ config.yaml: 设置 MYSQL 配置组（及其他默认值）\n")
 	fmt.Printf("\n展示了：环境变量 > .env 文件 > 环境特定配置 > 基础配置\n")

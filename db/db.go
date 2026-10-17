@@ -30,8 +30,8 @@
 //
 // # 资源所有权
 //
-// db 采用借用模型：connector 负责连接生命周期，db.Close() 为 no-op。
-// 应用层只需 defer connector.Close()，无需管理 db 的生命周期。
+// db 采用借用模型：connector 拥有 SQL 池，db 拥有独立 GORM 句柄及语句缓存。
+// 应用层先注册 connector.Close，再注册 db.Close，保证组件先于借用池清理。
 //
 // # 分表
 //
@@ -46,7 +46,6 @@ import (
 	"context"
 
 	"github.com/uptrace/opentelemetry-go-extra/otelgorm"
-	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 
 	"github.com/ceyewan/genesis/clog"
@@ -56,8 +55,6 @@ import (
 // database 是 DB 接口的实现
 type database struct {
 	client *gorm.DB
-	logger clog.Logger
-	tracer trace.Tracer
 }
 
 // DB 定义了数据库组件的核心能力
@@ -82,7 +79,9 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 
 	opt := options{}
 	for _, o := range opts {
-		o(&opt)
+		if o != nil {
+			o(&opt)
+		}
 	}
 	if opt.slowThreshold < 0 {
 		return nil, xerrors.Wrap(ErrInvalidConfig, "slow sql threshold must not be negative")
@@ -117,8 +116,11 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 		return nil, newConnectorNotReadyError(cfg.Driver)
 	}
 
-	// 配置 GORM logger
-	gormDB = gormDB.Session(&gorm.Session{Logger: newGormLogger(opt.logger, opt.silentMode, opt.slowThreshold)})
+	// 仅借用 SQL 连接池；每个组件拥有独立的 GORM 配置、回调和插件。
+	gormDB, err := openBorrowed(gormDB, newGormLogger(opt.logger, opt.silentMode, opt.slowThreshold))
+	if err != nil {
+		return nil, xerrors.Wrap(err, "create isolated gorm handle")
+	}
 
 	// 添加 OpenTelemetry trace 插件
 	if opt.tracer != nil {
@@ -129,17 +131,7 @@ func New(cfg *Config, opts ...Option) (DB, error) {
 		}
 	}
 
-	// 获取 tracer（用于后续可能的 span 创建）
-	var tracer trace.Tracer
-	if opt.tracer != nil {
-		tracer = opt.tracer.Tracer("github.com/ceyewan/genesis/db")
-	}
-
-	return &database{
-		client: gormDB,
-		logger: opt.logger,
-		tracer: tracer,
-	}, nil
+	return &database{client: gormDB}, nil
 }
 
 // DB 获取底层的 *gorm.DB 实例
@@ -164,7 +156,10 @@ func (d *database) Transaction(ctx context.Context, fn func(ctx context.Context,
 }
 
 // Close 关闭组件
-// db 组件采用借用模型，不负责连接的生命周期，因此 Close 为 no-op
+// db 只释放自己创建的语句缓存，不关闭借用的 SQL 连接池。
 func (d *database) Close() error {
+	if statements, ok := d.client.ConnPool.(*gorm.PreparedStmtDB); ok {
+		statements.Close()
+	}
 	return nil
 }

@@ -36,12 +36,18 @@ func Inject(ctx context.Context, carrier map[string]string) {
 	if carrier == nil {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(carrier))
 }
 
 // Extract 从 carrier 中提取 Trace 信息并返回新的 Context
 // 用于 MQ 消费者等场景，还原上游的链路追踪信息
 func Extract(ctx context.Context, carrier map[string]string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(carrier))
 }
 
@@ -131,7 +137,7 @@ func newTracerShutdown(tp *sdktrace.TracerProvider, installedPropagators ...prop
 	var shutdownErr error
 	return func(ctx context.Context) error {
 		if ctx == nil {
-			return xerrors.New("trace shutdown context is nil")
+			return xerrors.Wrap(ErrInvalidConfig, "trace shutdown context is nil")
 		}
 		shutdownOnce.Do(func() {
 			go func() {

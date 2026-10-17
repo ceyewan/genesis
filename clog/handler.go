@@ -72,7 +72,7 @@ func resolveWriter(config *Config, options *options) (io.Writer, io.Closer, erro
 		}
 		return nil, nil, xerrors.Wrap(ErrInvalidConfig, "buffer output requires options.buffer")
 	default:
-		f, err := os.OpenFile(config.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
+		f, err := os.OpenFile(config.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -205,78 +205,48 @@ const (
 // coloredTextHandler 为 TextHandler 添加彩色支持。
 //
 // 结构：coloredTextHandler -> textFactory -> slog.TextHandler
-// 每次 Handle 时用临时 TextHandler 输出到 buffer，再进行着色。
+// 复用 TextHandler 和缓冲区，保留标准库的转义与分组语义。
 type coloredTextHandler struct {
-	textFactory func(io.Writer) slog.Handler
-	writer      io.Writer
-	attrs       []slog.Attr
-	groups      []string
-	mu          *sync.Mutex
+	base  slog.Handler
+	state *coloredTextState
+}
+
+type coloredTextState struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	writer io.Writer
 }
 
 func newColoredTextHandler(textFactory func(io.Writer) slog.Handler, writer io.Writer) slog.Handler {
-	return &coloredTextHandler{
-		textFactory: textFactory,
-		writer:      writer,
-		mu:          &sync.Mutex{},
-	}
+	state := &coloredTextState{writer: writer}
+	return &coloredTextHandler{base: textFactory(&state.buf), state: state}
 }
 
 // Enabled 检查日志级别是否启用。
 func (h *coloredTextHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	base := h.baseHandler(io.Discard)
-	return base.Enabled(ctx, level)
+	return h.base.Enabled(ctx, level)
 }
 
 // Handle 处理日志记录，添加颜色输出。
 func (h *coloredTextHandler) Handle(ctx context.Context, r slog.Record) error {
-	var buf bytes.Buffer
-
-	base := h.baseHandler(&buf)
-	if err := base.Handle(ctx, r); err != nil {
+	h.state.mu.Lock()
+	defer h.state.mu.Unlock()
+	h.state.buf.Reset()
+	if err := h.base.Handle(ctx, r); err != nil {
 		return err
 	}
-
-	coloredOutput := h.colorizeOutput(buf.String(), r.Level)
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	_, err := h.writer.Write([]byte(coloredOutput))
+	_, err := io.WriteString(h.state.writer, h.colorizeOutput(h.state.buf.String(), r.Level))
 	return err
 }
 
 // WithAttrs 返回带有附加属性的新 handler。
 func (h *coloredTextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &coloredTextHandler{
-		textFactory: h.textFactory,
-		writer:      h.writer,
-		attrs:       append(append([]slog.Attr(nil), h.attrs...), attrs...),
-		groups:      append([]string(nil), h.groups...),
-		mu:          h.mu,
-	}
+	return &coloredTextHandler{base: h.base.WithAttrs(attrs), state: h.state}
 }
 
 // WithGroup 返回带有分组的新 handler。
 func (h *coloredTextHandler) WithGroup(name string) slog.Handler {
-	return &coloredTextHandler{
-		textFactory: h.textFactory,
-		writer:      h.writer,
-		attrs:       append([]slog.Attr(nil), h.attrs...),
-		groups:      append(append([]string(nil), h.groups...), name),
-		mu:          h.mu,
-	}
-}
-
-// baseHandler 构建带 attrs/groups 的基础 TextHandler。
-func (h *coloredTextHandler) baseHandler(writer io.Writer) slog.Handler {
-	base := h.textFactory(writer)
-	if len(h.attrs) > 0 {
-		base = base.WithAttrs(h.attrs)
-	}
-	for _, group := range h.groups {
-		base = base.WithGroup(group)
-	}
-	return base
+	return &coloredTextHandler{base: h.base.WithGroup(name), state: h.state}
 }
 
 // colorizeOutput 为日志输出添加 ANSI 颜色。
@@ -378,39 +348,37 @@ func (h *coloredTextHandler) parseKeyValuePairs(line string) []string {
 	var pairs []string
 	var current strings.Builder
 	inQuotes := false
+	escaped := false
 
 	i := 0
 	for i < len(line) {
 		char := line[i]
 
-		if char == '"' {
+		if inQuotes && char == '\\' && !escaped {
+			escaped = true
+			current.WriteByte(char)
+			i++
+			continue
+		}
+		if char == '"' && !escaped {
 			inQuotes = !inQuotes
 			current.WriteByte(char)
 		} else if char == ' ' && !inQuotes {
 			if current.Len() > 0 {
 				pair := current.String()
-				// 处理 key==value 格式，替换为 key=value
-				pair = strings.Replace(pair, "==", "=", 1)
-				// 移除 %!(EXTRA 等特殊标记
-				if idx := strings.Index(pair, "%!(EXTRA"); idx != -1 {
-					pair = pair[:idx]
-				}
+				// 保留值中的等号和格式化文本，不修改用户数据。
 				pairs = append(pairs, pair)
 				current.Reset()
 			}
 		} else {
 			current.WriteByte(char)
 		}
+		escaped = false
 		i++
 	}
 
 	if current.Len() > 0 {
-		pair := current.String()
-		pair = strings.Replace(pair, "==", "=", 1)
-		if idx := strings.Index(pair, "%!(EXTRA"); idx != -1 {
-			pair = pair[:idx]
-		}
-		pairs = append(pairs, pair)
+		pairs = append(pairs, current.String())
 	}
 
 	return pairs

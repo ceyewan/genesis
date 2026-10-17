@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -115,7 +116,7 @@ func distributedExample(ctx context.Context, logger clog.Logger) {
 	// 创建 Redis 连接器
 	redisConn, err := connector.NewRedis(&connector.RedisConfig{
 		Addr:        "127.0.0.1:6379",
-		Password:    "genesis_redis_password",
+		Password:    os.Getenv("REDIS_PASSWORD"),
 		DialTimeout: 2 * time.Second,
 	}, connector.WithLogger(logger))
 	if err != nil {

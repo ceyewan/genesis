@@ -53,11 +53,11 @@ func main() {
 	}
 
 	// 3. 创建 Registry 实例
-	reg, err := registry.New(etcdConn, &registry.Config{
+	reg, err := registry.New(&registry.Config{
 		Namespace:     "/genesis/services",
 		DefaultTTL:    30 * time.Second,
 		RetryInterval: 1 * time.Second,
-	}, registry.WithLogger(logger))
+	}, registry.WithEtcdConnector(etcdConn), registry.WithLogger(logger))
 	if err != nil {
 		logger.Error("failed to create registry", clog.Error(err))
 		return
@@ -93,7 +93,11 @@ func main() {
 		logger.Error("failed to register service 1", clog.Error(err))
 		return
 	}
-	defer reg.Deregister(ctx, service1.ID)
+	defer func() {
+		if err := reg.Deregister(ctx, service1.ID); err != nil {
+			logger.Error("Deregister service 1 failed", clog.Error(err))
+		}
+	}()
 
 	fmt.Printf("✓ 服务实例 1 已注册: %s\n", service1.Endpoints[0])
 
@@ -168,7 +172,11 @@ func main() {
 		logger.Error("failed to register service 2", clog.Error(err))
 		return
 	}
-	defer reg.Deregister(ctx, service2.ID)
+	defer func() {
+		if err := reg.Deregister(ctx, service2.ID); err != nil {
+			logger.Error("Deregister service 2 failed", clog.Error(err))
+		}
+	}()
 
 	fmt.Printf("✓ 服务实例 2 已注册: %s\n", service2.Endpoints[0])
 

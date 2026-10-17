@@ -5,6 +5,14 @@ This file is consumed by `make api-compat-check` together with
 replacement for one reviewed RC1 signature. The check fails if an approved
 replacement is absent or drifts again.
 
+## `auth`
+
+- type: `type Config struct{SecretKey string "mapstructure:\"secret_key\" json:\"secret_key\" yaml:\"secret_key\""; SigningMethod string "mapstructure:\"signing_method\" json:\"signing_method\" yaml:\"signing_method\""; Issuer string "mapstructure:\"issuer\" json:\"issuer\" yaml:\"issuer\""; Audience []string "mapstructure:\"audience\" json:\"audience\" yaml:\"audience\""; AccessTokenTTL time.Duration "mapstructure:\"access_token_ttl\" json:\"access_token_ttl\" yaml:\"access_token_ttl\""; RefreshTokenTTL time.Duration "mapstructure:\"refresh_token_ttl\" json:\"refresh_token_ttl\" yaml:\"refresh_token_ttl\""; TokenLookup string "mapstructure:\"token_lookup\" json:\"token_lookup\" yaml:\"token_lookup\""; TokenHeadName string "mapstructure:\"token_head_name\" json:\"token_head_name\" yaml:\"token_head_name\""}`
+
+## `config`
+
+- type: `type Config struct{Name string "json:\"name\" yaml:\"name\" mapstructure:\"name\""; Paths []string "json:\"paths\" yaml:\"paths\" mapstructure:\"paths\""; FileType string "json:\"file_type\" yaml:\"file_type\" mapstructure:\"file_type\""; EnvPrefix string "json:\"env_prefix\" yaml:\"env_prefix\" mapstructure:\"env_prefix\""}`
+
 ## `breaker`
 
 - type: `type Config struct{MaxKeys int "json:\"max_keys\" yaml:\"max_keys\" mapstructure:\"max_keys\""; MaxRequests uint32 "json:\"max_requests\" yaml:\"max_requests\" mapstructure:\"max_requests\""; Interval time.Duration "json:\"interval\" yaml:\"interval\" mapstructure:\"interval\""; Timeout time.Duration "json:\"timeout\" yaml:\"timeout\" mapstructure:\"timeout\""; FailureRatio float64 "json:\"failure_ratio\" yaml:\"failure_ratio\" mapstructure:\"failure_ratio\""; MinimumRequests uint32 "json:\"minimum_requests\" yaml:\"minimum_requests\" mapstructure:\"minimum_requests\""}`
@@ -40,14 +48,27 @@ replacement is absent or drifts again.
 ## `metrics`
 
 - func: `func New(*Config, ...Option) (Meter, error)`
+- type: `type Config struct{ServiceName string "mapstructure:\"service_name\" json:\"service_name\" yaml:\"service_name\""; Version string "mapstructure:\"version\" json:\"version\" yaml:\"version\""; InstanceID string "mapstructure:\"instance_id\" json:\"instance_id\" yaml:\"instance_id\""; Environment string "mapstructure:\"environment\" json:\"environment\" yaml:\"environment\""; ListenAddress string "mapstructure:\"listen_address\" json:\"listen_address\" yaml:\"listen_address\""; Port int "mapstructure:\"port\" json:\"port\" yaml:\"port\""; Path string "mapstructure:\"path\" json:\"path\" yaml:\"path\""; EnableRuntime bool "mapstructure:\"enable_runtime\" json:\"enable_runtime\" yaml:\"enable_runtime\""; CardinalityLimit int "json:\"cardinality_limit\" yaml:\"cardinality_limit\" mapstructure:\"cardinality_limit\""; ServerErrors chan<- error "mapstructure:\"-\" json:\"-\" yaml:\"-\""}`
+- type: `type GRPCServerMetricsConfig struct{Service string "json:\"service\" yaml:\"service\" mapstructure:\"service\""; RequestTotalName string "json:\"request_total_name\" yaml:\"request_total_name\" mapstructure:\"request_total_name\""; RequestDurationName string "json:\"request_duration_name\" yaml:\"request_duration_name\" mapstructure:\"request_duration_name\""; DurationBuckets []float64 "json:\"duration_buckets\" yaml:\"duration_buckets\" mapstructure:\"duration_buckets\""; StaticLabels []Label "json:\"static_labels\" yaml:\"static_labels\" mapstructure:\"static_labels\""}`
+- type: `type HTTPServerMetricsConfig struct{Service string "json:\"service\" yaml:\"service\" mapstructure:\"service\""; RequestTotalName string "json:\"request_total_name\" yaml:\"request_total_name\" mapstructure:\"request_total_name\""; RequestDurationName string "json:\"request_duration_name\" yaml:\"request_duration_name\" mapstructure:\"request_duration_name\""; DurationBuckets []float64 "json:\"duration_buckets\" yaml:\"duration_buckets\" mapstructure:\"duration_buckets\""; StaticLabels []Label "json:\"static_labels\" yaml:\"static_labels\" mapstructure:\"static_labels\""}`
+- type: `type Gauge interface{Set(context.Context, float64, ...Label)}`
+- type: `type Meter interface{Counter(string, string, ...MetricOption) (Counter, error); Gauge(string, string, ...MetricOption) (Gauge, error); Histogram(string, string, ...MetricOption) (Histogram, error); Shutdown(context.Context) error; UpDownCounter(string, string, ...MetricOption) (UpDownCounter, error)}`
+
+## `mq`
+
+- type: `type RetryConfig struct{MaxRetries int "json:\"max_retries\" yaml:\"max_retries\" mapstructure:\"max_retries\""; InitialBackoff time.Duration "json:\"initial_backoff\" yaml:\"initial_backoff\" mapstructure:\"initial_backoff\""; MaxBackoff time.Duration "json:\"max_backoff\" yaml:\"max_backoff\" mapstructure:\"max_backoff\""; Multiplier float64 "json:\"multiplier\" yaml:\"multiplier\" mapstructure:\"multiplier\""}`
 
 ## `ratelimit`
+
+- type: `type Limit struct{Rate float64 "json:\"rate\" yaml:\"rate\" mapstructure:\"rate\""; Burst int "json:\"burst\" yaml:\"burst\" mapstructure:\"burst\""}`
 
 - type: `type Config struct{Driver DriverType "json:\"driver\" yaml:\"driver\" mapstructure:\"driver\""; Standalone *StandaloneConfig "json:\"standalone\" yaml:\"standalone\" mapstructure:\"standalone\""; Distributed *DistributedConfig "json:\"distributed\" yaml:\"distributed\" mapstructure:\"distributed\""}`
 - type: `type DistributedConfig struct{Prefix string "json:\"prefix\" yaml:\"prefix\" mapstructure:\"prefix\""}`
 - type: `type StandaloneConfig struct{CleanupInterval time.Duration "json:\"cleanup_interval\" yaml:\"cleanup_interval\" mapstructure:\"cleanup_interval\""; IdleTimeout time.Duration "json:\"idle_timeout\" yaml:\"idle_timeout\" mapstructure:\"idle_timeout\""; MaxKeys int "json:\"max_keys\" yaml:\"max_keys\" mapstructure:\"max_keys\""}`
 
 ## `registry`
+
+- func: `func New(*Config, ...Option) (Registry, error)`
 
 - type: `type Config struct{Namespace string "mapstructure:\"namespace\" yaml:\"namespace\" json:\"namespace\""; DefaultTTL time.Duration "mapstructure:\"default_ttl\" yaml:\"default_ttl\" json:\"default_ttl\""; RetryInterval time.Duration "mapstructure:\"retry_interval\" yaml:\"retry_interval\" json:\"retry_interval\""; LeaseFailureBuffer int "mapstructure:\"lease_failure_buffer\" yaml:\"lease_failure_buffer\" json:\"lease_failure_buffer\""}`
 

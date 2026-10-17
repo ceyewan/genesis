@@ -55,7 +55,10 @@ func TestConfigHasMapstructureTags(t *testing.T) {
 }
 
 func TestNewClassifiesMissingAndUnconnectedConnector(t *testing.T) {
-	_, err := New(nil, nil)
+	_, err := New(nil)
+	require.ErrorIs(t, err, ErrConnectorNil)
+	_, err = New(nil, WithEtcdConnector(nil))
+	require.ErrorIs(t, err, ErrConnectorNil)
 	if !errors.Is(err, connector.ErrClientNil) {
 		t.Fatalf("New(nil) error = %v, want connector.ErrClientNil", err)
 	}
@@ -65,12 +68,13 @@ func TestNewClassifiesMissingAndUnconnectedConnector(t *testing.T) {
 		Endpoints: []string{"127.0.0.1:2379"},
 	})
 	require.NoError(t, err)
-	_, err = New(conn, &Config{DefaultTTL: -time.Second})
+	_, err = New(&Config{DefaultTTL: -time.Second}, WithEtcdConnector(conn))
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("New(invalid config) error = %v, want ErrInvalidConfig", err)
 	}
 
-	_, err = New(conn, nil)
+	_, err = New(nil, WithEtcdConnector(conn))
+	require.ErrorIs(t, err, ErrConnectorNil)
 	if !errors.Is(err, connector.ErrClientNil) {
 		t.Fatalf("New(unconnected) error = %v, want connector.ErrClientNil", err)
 	}

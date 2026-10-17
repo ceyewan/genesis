@@ -6,10 +6,38 @@
 
 ## Unreleased hardening after RC3
 
+- Redis 限流改为普通令牌桶，保存剩余令牌与更新时间，沿用原键名和字符串类型，不添加版本后缀。
+  旧单时间戳值在首次读取时原位折算为余额，不直接重置满桶；旧数据已丢失的精度无法恢复。
+  新旧编码不能混写，须停止旧实例后再启用新版本。若曾试运行带后缀版本，其试用键不再读取，按原 TTL 退出。
+  Redis 规则超出 Lua 精确整数或过期时间范围时，
+  现在返回 `ErrInvalidLimit`，详见 [Redis 数值边界](../ratelimit/README.md#2-分布式模式)。
+- MQ 的关闭现在覆盖正在初始化的订阅；初始化取消后仍须等待迟到订阅及 Handler 清理完成。
+  不响应取消的初始化或 Handler 可能使 `Close` 返回超时，不能把它当作成功关闭。
+
+- Registry 改用 `registry.New(cfg, registry.WithEtcdConnector(conn), opts...)`；
+  旧的位置式 connector 参数不再支持。缺失或未连接的 connector 返回 `registry.ErrConnectorNil`，
+  同时匹配 `connector.ErrClientNil`。
+- `auth.Config`、`config.Config`、`mq.RetryConfig`、`ratelimit.Limit` 和 HTTP/gRPC Metrics 配置
+  补齐 JSON/YAML/mapstructure snake_case 标签。持久化配置应按新字段名迁移，例如
+  `config.Config` 的 `FileType` / `filetype` 改为 `file_type`，`EnvPrefix` / `envprefix` 改为 `env_prefix`。
+- `metrics.Gauge` 只保留 `Set`。原 `Gauge.Inc/Dec` 改用 `Meter.UpDownCounter` 的 `Add(+1/-1)`；
+  自定义 Meter 实现和测试桩也必须增加工厂方法。新建的 UpDownCounter 从零开始，不继承 Gauge 的旧状态。
+  `metrics.Config.CardinalityLimit` 默认 2000（0 使用默认），超限维度会归入 OTel 溢出系列；
+  需要保留更多维度的应用应显式提高上限，并迁移位置式 Config 字面量。
+- DB 仅共享 Connector 的 SQL 池，不再共享 GORM 插件/回调。依赖 Connector 上自定义插件或回调的应用，
+  必须改为在组件自己的 `DB(ctx)` 句柄上安装。SQLite 内存库仍复用原连接池。
+- Etcd Locker 改为首次加锁时创建 Session，启动探活不能再依赖 `dlock.New`。
+  加锁请求取消不再影响已经获得的锁的续租；必须使用 `Unlock` / `Close` 释放。
+
 - Redis ACL 新增 `RedisConfig.Username`，位置式字面量必须改为带字段名的写法。
   TLS 通过 `connector.WithRedisTLSConfig` 显式启用；生产配置需可信 CA 和主机名校验。
-- `idem.Execute` / `Consume` 的 nil 回调返回 `ErrInvalidConfig`；`Consume` 的负 TTL
-  不再回退为默认值。依赖这些旧行为的调用方需先修正输入。
+- `idem.Execute` / `Consume` 的 nil 回调返回 `ErrInvalidConfig`；正数 `DefaultTTL`、
+  `LockTTL` 和 `Consume` TTL 小于 1ms 会被拒绝，负 TTL 不再回退为默认值。
+  Memory 存储关闭后的操作返回 `idem.ErrClosed`。依赖这些旧行为的调用方需先修正输入。
+- MQ 的 `Drain(ctx)` 超时只结束当前等待；需要取消 Handler 时调用 `Close()`，
+  不要把等待超时视为强制关闭完成。单个 Subscription 的 Drain 超时行为不变。
+- `dlock`、`idem`、`ratelimit` 的组件日志统一使用 `namespace`，不再添加 `component`；
+  依赖该字段的日志查询需更新。
 - Sequencer 正 TTL 小于一毫秒返回 `ErrInvalidInput`。超过 `2^53` 的整数分配精度
   已修正，耗尽不改变旧值或 TTL；不应依赖旧的浮点失真结果。
 - Redis 广播 `FromLatest` 不再在空读后重置最新位置；检查应用是否曾补偿过漏读。

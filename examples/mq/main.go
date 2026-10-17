@@ -94,6 +94,12 @@ func runDemo(ctx context.Context, mqClient mq.MQ, logger clog.Logger) {
 	demoHeaders(ctx, mqClient, logger, id)
 }
 
+func unsubscribe(logger clog.Logger, sub mq.Subscription) {
+	if err := sub.Unsubscribe(); err != nil {
+		logger.Error("Unsubscribe failed", clog.Error(err))
+	}
+}
+
 // demoBasicPubSub 基础发布订阅演示
 func demoBasicPubSub(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id string) {
 	topic := fmt.Sprintf("demo.basic-%s", id)
@@ -110,7 +116,7 @@ func demoBasicPubSub(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id
 			clog.String("msg_id", msg.ID()),
 		)
 		wg.Done()
-		return nil
+		return msg.Ack()
 	}
 
 	sub, err := mqClient.Subscribe(ctx, topic, handler)
@@ -118,7 +124,7 @@ func demoBasicPubSub(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id
 		logger.Error("订阅失败", clog.Error(err))
 		return
 	}
-	defer sub.Unsubscribe()
+	defer unsubscribe(logger, sub)
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -157,19 +163,19 @@ func demoQueueGroup(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id 
 		}
 	}
 
-	sub1, err := mqClient.Subscribe(ctx, topic, workerHandler("Worker-1"), mq.WithQueueGroup(group))
+	sub1, err := mqClient.Subscribe(ctx, topic, workerHandler("Worker-1"), mq.WithQueueGroup(group), mq.WithAutoAck())
 	if err != nil {
 		logger.Error("订阅失败", clog.Error(err))
 		return
 	}
-	defer sub1.Unsubscribe()
+	defer unsubscribe(logger, sub1)
 
-	sub2, err := mqClient.Subscribe(ctx, topic, workerHandler("Worker-2"), mq.WithQueueGroup(group))
+	sub2, err := mqClient.Subscribe(ctx, topic, workerHandler("Worker-2"), mq.WithQueueGroup(group), mq.WithAutoAck())
 	if err != nil {
 		logger.Error("订阅失败", clog.Error(err))
 		return
 	}
-	defer sub2.Unsubscribe()
+	defer unsubscribe(logger, sub2)
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -242,7 +248,7 @@ func demoMiddleware(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id 
 		logger.Error("订阅失败", clog.Error(err))
 		return
 	}
-	defer sub.Unsubscribe()
+	defer unsubscribe(logger, sub)
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -297,7 +303,7 @@ func demoManualAck(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id s
 		logger.Error("订阅失败", clog.Error(err))
 		return
 	}
-	defer sub.Unsubscribe()
+	defer unsubscribe(logger, sub)
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -330,7 +336,7 @@ func demoHeaders(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id str
 			clog.String("priority", headers.Get("priority")),
 		)
 		wg.Done()
-		return nil
+		return msg.Ack()
 	}
 
 	sub, err := mqClient.Subscribe(ctx, topic, handler)
@@ -338,7 +344,7 @@ func demoHeaders(ctx context.Context, mqClient mq.MQ, logger clog.Logger, id str
 		logger.Error("订阅失败", clog.Error(err))
 		return
 	}
-	defer sub.Unsubscribe()
+	defer unsubscribe(logger, sub)
 
 	time.Sleep(500 * time.Millisecond)
 

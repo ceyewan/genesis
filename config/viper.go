@@ -126,8 +126,12 @@ func (l *loader) Load(ctx context.Context) error {
 	// Commit the new snapshot only after every source has loaded and validated.
 	// A failed reload must leave the last known-good configuration intact.
 	l.v = next
+	if l.loaded {
+		l.notifyWatches()
+	} else {
+		l.captureCurrentValues()
+	}
 	l.loaded = true
-	l.captureCurrentValues()
 
 	return nil
 }
@@ -265,10 +269,15 @@ func (l *loader) materializeEnvironmentForTarget(root string, target any, values
 	if t.Kind() != reflect.Struct {
 		return
 	}
-	l.materializeStructEnvironment(root, t, values)
+	l.materializeStructEnvironment(root, t, values, make(map[reflect.Type]bool))
 }
 
-func (l *loader) materializeStructEnvironment(root string, t reflect.Type, values map[string]any) {
+func (l *loader) materializeStructEnvironment(root string, t reflect.Type, values map[string]any, visiting map[reflect.Type]bool) {
+	if visiting[t] {
+		return
+	}
+	visiting[t] = true
+	defer delete(visiting, t)
 	for field := range t.Fields() {
 		if field.PkgPath != "" {
 			continue
@@ -289,7 +298,7 @@ func (l *loader) materializeStructEnvironment(root string, t reflect.Type, value
 			fieldType = fieldType.Elem()
 		}
 		if fieldType.Kind() == reflect.Struct && fieldType.PkgPath() != "time" {
-			l.materializeStructEnvironment(path, fieldType, values)
+			l.materializeStructEnvironment(path, fieldType, values, visiting)
 			continue
 		}
 		l.materializeEnvironmentValue(path, values)
@@ -346,6 +355,9 @@ func configFieldName(field reflect.StructField) (name string, skip, squash bool)
 
 // Watch 订阅特定配置 key 的变更。
 func (l *loader) Watch(ctx context.Context, key string) (<-chan Event, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	l.mu.RLock()
 	loaded := l.loaded
 	closed := l.closed

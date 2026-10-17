@@ -42,7 +42,6 @@ import (
 	"time"
 
 	"github.com/ceyewan/genesis/clog"
-	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
 	"github.com/ceyewan/genesis/xerrors"
 
@@ -57,7 +56,6 @@ import (
 // 这是标准的工厂函数，支持在不依赖 Container 的情况下独立实例化
 //
 // 参数:
-//   - conn: Etcd 连接器
 //   - cfg: Registry 配置
 //   - opts: 可选参数 (Logger)
 //
@@ -68,13 +66,10 @@ import (
 //		return err
 //	}
 //	defer etcdConn.Close()
-//	registry, _ := registry.New(etcdConn, &registry.Config{
+//	registry, _ := registry.New(&registry.Config{
 //	    Namespace: "/genesis/services",
-//	}, registry.WithLogger(logger))
-func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, error) {
-	if conn == nil {
-		return nil, xerrors.Wrap(connector.ErrClientNil, "etcd connector is required")
-	}
+//	}, registry.WithEtcdConnector(etcdConn), registry.WithLogger(logger))
+func New(cfg *Config, opts ...Option) (Registry, error) {
 	if cfg == nil {
 		cfg = &Config{} // 使用默认配置
 	} else {
@@ -90,12 +85,17 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 	// 应用选项
 	opt := &options{}
 	for _, o := range opts {
-		o(opt)
+		if o != nil {
+			o(opt)
+		}
 	}
 
-	client := conn.GetClient()
+	if opt.etcdConnector == nil {
+		return nil, ErrConnectorNil
+	}
+	client := opt.etcdConnector.GetClient()
 	if client == nil {
-		return nil, xerrors.Wrap(connector.ErrClientNil, "etcd connector is not connected")
+		return nil, xerrors.Wrap(ErrConnectorNil, "etcd connector is not connected")
 	}
 
 	// 设置默认值
@@ -113,16 +113,7 @@ func New(conn connector.EtcdConnector, cfg *Config, opts ...Option) (Registry, e
 	}
 
 	if opt.logger == nil {
-		logger, err := clog.New(&clog.Config{
-			Level:  "info",
-			Format: "console",
-			Output: "stdout",
-		})
-		if err != nil {
-			opt.logger = clog.Discard()
-		} else {
-			opt.logger = logger
-		}
+		opt.logger = clog.Discard()
 	}
 	if opt.meter == nil {
 		opt.meter = metrics.Discard()
@@ -719,7 +710,7 @@ func (r *etcdRegistry) Close() error {
 // 此方法是幂等的，可以安全地并发调用。
 func (r *etcdRegistry) Shutdown(ctx context.Context) error {
 	if ctx == nil {
-		return xerrors.New("registry shutdown context is nil")
+		return xerrors.Wrap(ErrInvalidConfig, "registry shutdown context is nil")
 	}
 
 	shutdownCtx := ctx

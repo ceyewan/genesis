@@ -50,6 +50,10 @@ func (m *testMeter) Counter(name, desc string, opts ...metrics.MetricOption) (me
 	return m.counter, nil
 }
 
+func (m *testMeter) UpDownCounter(name, desc string, opts ...metrics.MetricOption) (metrics.UpDownCounter, error) {
+	return metrics.Discard().UpDownCounter(name, desc, opts...)
+}
+
 func (m *testMeter) Gauge(name, desc string, opts ...metrics.MetricOption) (metrics.Gauge, error) {
 	return nil, nil
 }

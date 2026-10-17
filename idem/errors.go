@@ -34,6 +34,9 @@ var (
 		class:   connector.ErrClientNil,
 	}
 
+	// ErrClosed 表示内置 Memory 存储已经关闭。
+	ErrClosed = xerrors.New("idem: store is closed")
+
 	// ErrKeyEmpty 幂等键为空
 	ErrKeyEmpty = xerrors.New("idem: key is empty")
 

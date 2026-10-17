@@ -38,7 +38,9 @@ func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
 
 	opt := &options{}
 	for _, o := range opts {
-		o(opt)
+		if o != nil {
+			o(opt)
+		}
 	}
 	opt.applyDefaults()
 
@@ -54,6 +56,9 @@ func NewRedis(cfg *RedisConfig, opts ...Option) (RedisConnector, error) {
 
 // Connect 建立连接
 func (c *redisConnector) Connect(ctx context.Context) error {
+	if ctx == nil {
+		return xerrors.Wrap(ErrConfig, "connect context is nil")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

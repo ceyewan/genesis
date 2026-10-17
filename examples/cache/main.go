@@ -154,7 +154,9 @@ func kvExample(logger clog.Logger, redisConn connector.RedisConnector) {
 	logger.Info("缓存存在性检查", clog.Bool("exists", exists))
 
 	// 删除缓存
-	c.Delete(ctx, "route:"+route.UserID)
+	if err := c.Delete(ctx, "route:"+route.UserID); err != nil {
+		logger.Error("Delete cached route failed", clog.Error(err))
+	}
 }
 
 func hashExample(logger clog.Logger, redisConn connector.RedisConnector) {
@@ -174,14 +176,20 @@ func hashExample(logger clog.Logger, redisConn connector.RedisConnector) {
 	userID := "user_1001"
 
 	// 设置字段
-	c.HSet(ctx, "user:"+userID, "name", "Alice")
-	c.HSet(ctx, "user:"+userID, "age", 28)
-	c.HSet(ctx, "user:"+userID, "city", "Beijing")
+	for field, value := range map[string]any{"name": "Alice", "age": 28, "city": "Beijing"} {
+		if err := c.HSet(ctx, "user:"+userID, field, value); err != nil {
+			logger.Error("Set hash field failed", clog.Error(err))
+			return
+		}
+	}
 	logger.Info("已设置用户字段")
 
 	// 获取单个字段
 	var name string
-	c.HGet(ctx, "user:"+userID, "name", &name)
+	if err := c.HGet(ctx, "user:"+userID, "name", &name); err != nil {
+		logger.Error("Get hash field failed", clog.Error(err))
+		return
+	}
 	logger.Info("获取用户名", clog.String("name", name))
 
 	// 原子递增
@@ -190,11 +198,16 @@ func hashExample(logger clog.Logger, redisConn connector.RedisConnector) {
 
 	// 获取所有字段
 	var allFields map[string]string
-	c.HGetAll(ctx, "user:"+userID, &allFields)
+	if err := c.HGetAll(ctx, "user:"+userID, &allFields); err != nil {
+		logger.Error("Get hash failed", clog.Error(err))
+		return
+	}
 	logger.Info("所有字段", clog.Any("fields", allFields))
 
 	// 清理
-	c.HDel(ctx, "user:"+userID, "name", "age", "city")
+	if err := c.HDel(ctx, "user:"+userID, "name", "age", "city"); err != nil {
+		logger.Error("Delete hash fields failed", clog.Error(err))
+	}
 }
 
 func sortedSetExample(logger clog.Logger, redisConn connector.RedisConnector) {
@@ -214,10 +227,12 @@ func sortedSetExample(logger clog.Logger, redisConn connector.RedisConnector) {
 	key := "leaderboard"
 
 	// 添加成员（分数为得分）
-	c.ZAdd(ctx, key, 100, "player_alice")
-	c.ZAdd(ctx, key, 85, "player_bob")
-	c.ZAdd(ctx, key, 92, "player_charlie")
-	c.ZAdd(ctx, key, 78, "player_david")
+	for player, score := range map[string]float64{"player_alice": 100, "player_bob": 85, "player_charlie": 92, "player_david": 78} {
+		if err := c.ZAdd(ctx, key, score, player); err != nil {
+			logger.Error("Add ranked player failed", clog.Error(err))
+			return
+		}
+	}
 	logger.Info("已添加排行榜成员")
 
 	// 获取分数
@@ -226,16 +241,24 @@ func sortedSetExample(logger clog.Logger, redisConn connector.RedisConnector) {
 
 	// 获取前 3 名（分数倒序）
 	var top3 []string
-	c.ZRevRange(ctx, key, 0, 2, &top3)
+	if err := c.ZRevRange(ctx, key, 0, 2, &top3); err != nil {
+		logger.Error("Read ranking failed", clog.Error(err))
+		return
+	}
 	logger.Info("排行榜前 3 名", clog.Any("players", top3))
 
 	// 按分数范围查询
 	var qualified []string
-	c.ZRangeByScore(ctx, key, 80, 100, &qualified)
+	if err := c.ZRangeByScore(ctx, key, 80, 100, &qualified); err != nil {
+		logger.Error("Read score range failed", clog.Error(err))
+		return
+	}
 	logger.Info("分数 >= 80 的玩家", clog.Any("players", qualified))
 
 	// 清理
-	c.ZRem(ctx, key, "player_alice", "player_bob", "player_charlie", "player_david")
+	if err := c.ZRem(ctx, key, "player_alice", "player_bob", "player_charlie", "player_david"); err != nil {
+		logger.Error("Remove ranked players failed", clog.Error(err))
+	}
 }
 
 func batchExample(logger clog.Logger, redisConn connector.RedisConnector) {
@@ -259,19 +282,27 @@ func batchExample(logger clog.Logger, redisConn connector.RedisConnector) {
 		"user:2": UserRoute{UserID: "2", GatewayID: "gw2", ServerID: "sv2"},
 		"user:3": UserRoute{UserID: "3", GatewayID: "gw3", ServerID: "sv3"},
 	}
-	c.MSet(ctx, items, 5*time.Minute)
+	if err := c.MSet(ctx, items, 5*time.Minute); err != nil {
+		logger.Error("Batch set failed", clog.Error(err))
+		return
+	}
 	logger.Info("批量设置完成", clog.Int("count", len(items)))
 
 	// 批量获取
 	keys := []string{"user:1", "user:2", "user:3", "user:999"}
 	var results []UserRoute
-	c.MGet(ctx, keys, &results)
+	if err := c.MGet(ctx, keys, &results); err != nil {
+		logger.Error("Batch get failed", clog.Error(err))
+		return
+	}
 	logger.Info("批量获取结果", clog.Int("count", len(results)))
 
 	// 清理
-	c.Delete(ctx, "user:1")
-	c.Delete(ctx, "user:2")
-	c.Delete(ctx, "user:3")
+	for key := range items {
+		if err := c.Delete(ctx, key); err != nil {
+			logger.Error("Delete cached user failed", clog.Error(err))
+		}
+	}
 
 	// 演示 RawClient() 方法：访问底层 Redis 客户端执行 Pipeline。
 	logger.Info("--- 使用底层客户端执行 Pipeline ---")
@@ -283,8 +314,11 @@ func batchExample(logger clog.Logger, redisConn connector.RedisConnector) {
 		pipe.Get(ctx, "demo:batch:pipe:1")
 		_, _ = pipe.Exec(ctx)
 		logger.Info("Pipeline 执行完成")
-		c.Delete(ctx, "pipe:1")
-		c.Delete(ctx, "pipe:2")
+		for _, key := range []string{"pipe:1", "pipe:2"} {
+			if err := c.Delete(ctx, key); err != nil {
+				logger.Error("Delete pipeline value failed", clog.Error(err))
+			}
+		}
 	}
 }
 
@@ -305,12 +339,18 @@ func localExample(logger clog.Logger) {
 	ctx := context.Background()
 
 	// 设置缓存
-	c.Set(ctx, "local_key", map[string]string{"theme": "dark", "lang": "zh-CN"}, 5*time.Minute)
+	if err := c.Set(ctx, "local_key", map[string]string{"theme": "dark", "lang": "zh-CN"}, 5*time.Minute); err != nil {
+		logger.Error("Set local value failed", clog.Error(err))
+		return
+	}
 	logger.Info("已设置本地缓存")
 
 	// 获取缓存
 	var value map[string]string
-	c.Get(ctx, "local_key", &value)
+	if err := c.Get(ctx, "local_key", &value); err != nil {
+		logger.Error("Get local value failed", clog.Error(err))
+		return
+	}
 	logger.Info("获取到本地缓存", clog.Any("value", value))
 }
 

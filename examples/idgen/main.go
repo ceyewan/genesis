@@ -115,7 +115,11 @@ func snowflakeAllocatorExample() {
 		log.Printf("Failed to allocate WorkerID: %v\n", err)
 		return
 	}
-	defer allocator.Stop()
+	defer func() {
+		if err := allocator.Stop(); err != nil {
+			log.Printf("Stop allocator failed: %v", err)
+		}
+	}()
 
 	// 监听保活失败
 	go func() {

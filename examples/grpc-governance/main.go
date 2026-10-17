@@ -203,7 +203,7 @@ func run(ctx context.Context) (err error) {
 	if err := conn.Connect(ctx); err != nil {
 		return xerrors.Wrap(err, "connect Etcd; run make up for this example")
 	}
-	reg, err := registry.New(conn, &registry.Config{Namespace: "/genesis/scenarios/" + rand.Text()}, registry.WithLogger(logger))
+	reg, err := registry.New(&registry.Config{Namespace: "/genesis/scenarios/" + rand.Text()}, registry.WithEtcdConnector(conn), registry.WithLogger(logger))
 	if err != nil {
 		return err
 	}

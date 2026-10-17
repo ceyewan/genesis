@@ -538,6 +538,7 @@ func TestMQ_AutoAckBehavior(t *testing.T) {
 		testMsg := &mockMessage{ackError: ackErr}
 		meter := newConsumeRecordingMeter()
 		m := &mq{logger: clog.Discard(), meter: meter, driver: DriverNATSJetStream}
+		m.initMetrics()
 		wrapped := m.wrapHandler("test.topic", func(Message) error {
 			return nil
 		}, subscribeOptions{AutoAck: true})
@@ -903,7 +904,7 @@ func (c consumeRecordingCounter) Add(_ context.Context, _ float64, labels ...met
 
 // newMQ 创建一个用于测试的 MQ 实例
 func newMQ(transport transport, logger clog.Logger, meter metrics.Meter) MQ {
-	return &mq{
+	m := &mq{
 		transport:     transport,
 		logger:        logger,
 		meter:         meter,
@@ -911,4 +912,6 @@ func newMQ(transport transport, logger clog.Logger, meter metrics.Meter) MQ {
 		subscriptions: make(map[Subscription]struct{}),
 		lifecycleDone: make(chan struct{}),
 	}
+	m.initMetrics()
+	return m
 }

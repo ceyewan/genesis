@@ -40,7 +40,9 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc {
 		},
 	}
 	for _, o := range opts {
-		o(&opt)
+		if o != nil {
+			o(&opt)
+		}
 	}
 
 	return func(c *gin.Context) {
@@ -123,6 +125,7 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc {
 		execCtx, cancel := context.WithCancel(requestCtx)
 		defer cancel()
 		c.Request = c.Request.WithContext(execCtx)
+		defer func() { c.Request = c.Request.WithContext(requestCtx) }()
 
 		stopRefresh, refreshErrCh := i.startLockRefresh(key, token, cancel)
 		defer stopRefresh()
@@ -136,6 +139,7 @@ func (i *idem) GinMiddleware(opts ...MiddlewareOption) gin.HandlerFunc {
 
 		// 继续处理请求
 		c.Next()
+		stopRefresh()
 
 		// 如果请求成功，缓存响应
 		if refreshErr := collectRefreshError(refreshErrCh); refreshErr != nil {

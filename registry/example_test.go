@@ -18,7 +18,7 @@ func Example() {
 	if err := conn.Connect(ctx); err != nil {
 		return
 	}
-	reg, err := registry.New(conn, nil)
+	reg, err := registry.New(nil, registry.WithEtcdConnector(conn))
 	if err != nil {
 		return
 	}

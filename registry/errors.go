@@ -1,8 +1,14 @@
 package registry
 
-import "github.com/ceyewan/genesis/xerrors"
+import (
+	"github.com/ceyewan/genesis/connector"
+	"github.com/ceyewan/genesis/xerrors"
+)
 
 var (
+	// ErrConnectorNil 表示 Etcd connector 缺失或未连接，同时匹配 connector.ErrClientNil。
+	ErrConnectorNil = xerrors.Wrap(connector.ErrClientNil, "registry: etcd connector is required")
+
 	// ErrInvalidConfig 表示 registry 配置无效。
 	ErrInvalidConfig = xerrors.New("registry: invalid config")
 

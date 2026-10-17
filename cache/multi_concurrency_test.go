@@ -38,7 +38,7 @@ func TestMultiBackfillCannotOverwriteMutation(t *testing.T) {
 			go func() { var value string; readDone <- multi.Get(ctx, "key", &value) }()
 			<-remote.read
 			// TryAcquire 确定读回填仍持有协调额度，不依赖 Sleep 猜测 goroutine 时序。
-			require.False(t, multi.(*multiCache).gate.TryAcquire(multiExclusiveWeight))
+			require.False(t, multi.(*multiCache).gateFor("key").TryAcquire(multiExclusiveWeight))
 			writeDone := make(chan error, 1)
 			go func() {
 				if remove {

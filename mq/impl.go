@@ -23,10 +23,23 @@ type mq struct {
 	mu            sync.Mutex
 	subscriptions map[Subscription]struct{}
 	cleanupWG     sync.WaitGroup
+	initializing  map[*subscriptionInit]struct{}
+	initWG        sync.WaitGroup
+	forced        bool // Protected by mu; also applies to subscriptions that return late.
+	cleanupErrors []error
 	lifecycleOnce sync.Once
 	lifecycleDone chan struct{}
 	lifecycleErr  error
+	forceOnce     sync.Once
+	forceErr      error
+
+	publishCounter   metrics.Counter
+	consumeCounter   metrics.Counter
+	publishHistogram metrics.Histogram
+	handleHistogram  metrics.Histogram
 }
+
+type subscriptionInit struct{ cancel context.CancelFunc }
 
 // Publish 发布消息
 func (m *mq) Publish(ctx context.Context, topic string, data []byte, opts ...PublishOption) error {
@@ -40,7 +53,9 @@ func (m *mq) Publish(ctx context.Context, topic string, data []byte, opts ...Pub
 	// 应用选项
 	o := defaultPublishOptions()
 	for _, opt := range opts {
-		opt(&o)
+		if opt != nil {
+			opt(&o)
+		}
 	}
 
 	// 发布消息
@@ -68,31 +83,80 @@ func (m *mq) Subscribe(ctx context.Context, topic string, handler Handler, opts 
 	// 应用选项
 	o := defaultSubscribeOptions()
 	for _, opt := range opts {
-		opt(&o)
+		if opt != nil {
+			opt(&o)
+		}
 	}
 
-	wrappedHandler := m.wrapHandler(topic, handler, o)
-	sub, err := m.transport.Subscribe(ctx, topic, wrappedHandler, o)
-	if err != nil {
-		return nil, err
+	if ctx == nil {
+		return nil, xerrors.Wrap(ErrInvalidConfig, "subscribe context is nil")
 	}
-
+	ctx, cancel := context.WithCancel(ctx)
+	pending := &subscriptionInit{cancel: cancel}
 	m.mu.Lock()
 	if m.closed.Load() {
 		m.mu.Unlock()
-		_ = sub.Unsubscribe()
+		cancel()
 		return nil, ErrClosed
 	}
+	if m.initializing == nil {
+		m.initializing = make(map[*subscriptionInit]struct{})
+	}
+	m.initializing[pending] = struct{}{}
+	// Register before transport I/O: delivery can start before Subscribe returns.
+	m.initWG.Add(1)
+	m.mu.Unlock()
+	defer m.initWG.Done()
+
+	sub, err := m.transport.Subscribe(ctx, topic, m.wrapHandler(topic, handler, o), o)
+	m.mu.Lock()
+	delete(m.initializing, pending)
+	closed, forced := m.closed.Load(), m.forced
+	if sub == nil {
+		m.mu.Unlock()
+		cancel()
+		if err == nil {
+			err = xerrors.Wrap(ErrInvalidConfig, "transport returned a nil subscription")
+		}
+		if closed {
+			err = xerrors.Combine(ErrClosed, err)
+		}
+		return nil, err
+	}
+	// Also register late subscriptions so a concurrent Close can escalate a
+	// graceful late Drain. initWG prevents cleanupWG.Wait from racing this Add.
 	m.subscriptions[sub] = struct{}{}
 	m.cleanupWG.Add(1)
 	m.mu.Unlock()
 	go func() {
 		defer m.cleanupWG.Done()
+		defer cancel()
 		<-sub.Done()
 		m.mu.Lock()
 		delete(m.subscriptions, sub)
 		m.mu.Unlock()
 	}()
+	if closed || err != nil {
+		var cleanupErr error
+		if forced || err != nil {
+			cancel()
+			cleanupErr = sub.Unsubscribe()
+		} else {
+			cleanupErr = sub.Drain(context.Background())
+		}
+		<-sub.Done()
+		if cleanupErr != nil {
+			m.mu.Lock()
+			if m.closed.Load() {
+				m.cleanupErrors = append(m.cleanupErrors, cleanupErr)
+			}
+			m.mu.Unlock()
+		}
+		if closed {
+			err = xerrors.Combine(ErrClosed, err)
+		}
+		return nil, xerrors.Combine(err, cleanupErr)
+	}
 	return sub, nil
 }
 
@@ -100,21 +164,57 @@ func (m *mq) Subscribe(ctx context.Context, topic string, handler Handler, opts 
 func (m *mq) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return m.shutdown(ctx, false)
+	// Force-close remains available after any Drain caller has timed out.
+	m.forceOnce.Do(func() {
+		m.mu.Lock()
+		m.closed.Store(true)
+		m.forced = true
+		cancels := make([]context.CancelFunc, 0, len(m.initializing))
+		for pending := range m.initializing {
+			cancels = append(cancels, pending.cancel)
+		}
+		subs := make([]Subscription, 0, len(m.subscriptions))
+		for sub := range m.subscriptions {
+			subs = append(subs, sub)
+		}
+		m.mu.Unlock()
+		for _, cancel := range cancels {
+			cancel()
+		}
+		var errs []error
+		for _, sub := range subs {
+			if err := sub.Unsubscribe(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		m.forceErr = xerrors.Combine(errs...)
+	})
+	return xerrors.Combine(m.forceErr, m.shutdown(ctx))
 }
 
 func (m *mq) Drain(ctx context.Context) error {
 	if ctx == nil {
-		return xerrors.New("mq drain context is nil")
+		return xerrors.Wrap(ErrInvalidConfig, "mq drain context is nil")
 	}
-	return m.shutdown(ctx, true)
+	return m.shutdown(ctx)
 }
 
-func (m *mq) shutdown(ctx context.Context, graceful bool) error {
+func (m *mq) shutdown(ctx context.Context) error {
 	m.lifecycleOnce.Do(func() {
+		m.mu.Lock()
 		m.closed.Store(true)
+		// Capture ready subscriptions at the admission barrier. Initializers
+		// that finish later see closed and perform their own tracked cleanup.
+		var subs []Subscription
+		if !m.forced {
+			for sub := range m.subscriptions {
+				subs = append(subs, sub)
+			}
+		}
+		m.mu.Unlock()
 		go func() {
-			m.lifecycleErr = m.shutdownSubscriptions(ctx, graceful)
+			// The first caller's deadline must not control shared cleanup.
+			m.lifecycleErr = m.shutdownSubscriptions(subs)
 			close(m.lifecycleDone)
 		}()
 	})
@@ -127,36 +227,28 @@ func (m *mq) shutdown(ctx context.Context, graceful bool) error {
 	}
 }
 
-func (m *mq) shutdownSubscriptions(ctx context.Context, graceful bool) error {
-	m.mu.Lock()
-	subs := make([]Subscription, 0, len(m.subscriptions))
-	for sub := range m.subscriptions {
-		subs = append(subs, sub)
-	}
-	m.mu.Unlock()
-
+func (m *mq) shutdownSubscriptions(subs []Subscription) error {
 	var errs []error
+	var wg sync.WaitGroup
+	var errsMu sync.Mutex
 	for _, sub := range subs {
-		if graceful {
-			if err := sub.Drain(ctx); err != nil {
+		wg.Go(func() {
+			if err := sub.Drain(context.Background()); err != nil {
+				errsMu.Lock()
 				errs = append(errs, err)
+				errsMu.Unlock()
 			}
-			continue
-		}
-		if err := sub.Unsubscribe(); err != nil {
-			errs = append(errs, err)
-		}
+		})
 	}
-	if !graceful {
-		for _, sub := range subs {
-			select {
-			case <-sub.Done():
-			case <-ctx.Done():
-				errs = append(errs, xerrors.Wrap(ctx.Err(), "wait for mq subscription"))
-			}
-		}
-	}
+	// Stop existing intake first: a slow initializer must not delay every
+	// ready subscription's Drain. Late results clean themselves up, and all
+	// cleanupWG.Add calls happen before their matching initWG.Done.
+	m.initWG.Wait()
+	wg.Wait()
 	m.cleanupWG.Wait()
+	m.mu.Lock()
+	errs = append(errs, m.cleanupErrors...)
+	m.mu.Unlock()
 	if err := m.transport.Close(); err != nil {
 		errs = append(errs, err)
 	}
@@ -208,6 +300,14 @@ func (m *mq) wrapHandler(topic string, handler Handler, opts subscribeOptions) H
 	}
 }
 
+// initMetrics 在构造时缓存 instrument；可观测性失败不阻断消息收发。
+func (m *mq) initMetrics() {
+	m.publishCounter, _ = m.meter.Counter(MetricPublishTotal, "Total number of messages published")
+	m.consumeCounter, _ = m.meter.Counter(MetricConsumeTotal, "Total number of messages consumed")
+	m.publishHistogram, _ = m.meter.Histogram(MetricPublishDuration, "Publish latency in seconds", metrics.WithUnit("s"))
+	m.handleHistogram, _ = m.meter.Histogram(MetricHandleDuration, "Message handler duration in seconds", metrics.WithUnit("s"))
+}
+
 // recordPublishMetrics 记录发布指标
 func (m *mq) recordPublishMetrics(ctx context.Context, topic string, err error, duration time.Duration) {
 	status := "success"
@@ -216,12 +316,12 @@ func (m *mq) recordPublishMetrics(ctx context.Context, topic string, err error, 
 	}
 	driver := string(m.driver)
 
-	if counter, counterErr := m.meter.Counter(MetricPublishTotal, "Total number of messages published"); counterErr == nil {
-		counter.Inc(ctx, metrics.L(LabelTopic, topic), metrics.L(LabelStatus, status), metrics.L(LabelDriver, driver))
+	if m.publishCounter != nil {
+		m.publishCounter.Inc(ctx, metrics.L(LabelTopic, topic), metrics.L(LabelStatus, status), metrics.L(LabelDriver, driver))
 	}
 
-	if histogram, histErr := m.meter.Histogram(MetricPublishDuration, "Publish latency in seconds", metrics.WithUnit("s")); histErr == nil {
-		histogram.Record(ctx, duration.Seconds(), metrics.L(LabelTopic, topic), metrics.L(LabelDriver, driver))
+	if m.publishHistogram != nil {
+		m.publishHistogram.Record(ctx, duration.Seconds(), metrics.L(LabelTopic, topic), metrics.L(LabelDriver, driver))
 	}
 }
 
@@ -231,14 +331,14 @@ func (m *mq) recordConsumeMetrics(ctx context.Context, topic string, err error) 
 	if err != nil {
 		status = "error"
 	}
-	if counter, counterErr := m.meter.Counter(MetricConsumeTotal, "Total number of messages consumed"); counterErr == nil {
-		counter.Inc(ctx, metrics.L(LabelTopic, topic), metrics.L(LabelStatus, status), metrics.L(LabelDriver, string(m.driver)))
+	if m.consumeCounter != nil {
+		m.consumeCounter.Inc(ctx, metrics.L(LabelTopic, topic), metrics.L(LabelStatus, status), metrics.L(LabelDriver, string(m.driver)))
 	}
 }
 
 // recordHandleDuration 记录处理耗时
 func (m *mq) recordHandleDuration(ctx context.Context, topic string, duration time.Duration) {
-	if histogram, err := m.meter.Histogram(MetricHandleDuration, "Message handler duration in seconds", metrics.WithUnit("s")); err == nil {
-		histogram.Record(ctx, duration.Seconds(), metrics.L(LabelTopic, topic), metrics.L(LabelDriver, string(m.driver)))
+	if m.handleHistogram != nil {
+		m.handleHistogram.Record(ctx, duration.Seconds(), metrics.L(LabelTopic, topic), metrics.L(LabelDriver, string(m.driver)))
 	}
 }

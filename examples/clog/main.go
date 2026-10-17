@@ -9,6 +9,8 @@ import (
 	"github.com/ceyewan/genesis/clog"
 )
 
+type contextKey string
+
 // 自定义错误类型
 type ValidationError struct {
 	Field   string
@@ -74,17 +76,17 @@ func contextExample() {
 		Format: "json",
 		Output: "stdout",
 	},
-		clog.WithContextField("trace_id", "trace_id"),
-		clog.WithContextField("user_id", "user_id"),
-		clog.WithContextField("request_id", "request_id"),
+		clog.WithContextField(contextKey("trace_id"), "trace_id"),
+		clog.WithContextField(contextKey("user_id"), "user_id"),
+		clog.WithContextField(contextKey("request_id"), "request_id"),
 	)
 	defer logger.Close()
 
 	// 模拟微服务调用链
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "trace_id", "trace-abc-123")
-	ctx = context.WithValue(ctx, "user_id", "user-456")
-	ctx = context.WithValue(ctx, "request_id", "req-789")
+	ctx = context.WithValue(ctx, contextKey("trace_id"), "trace-abc-123")
+	ctx = context.WithValue(ctx, contextKey("user_id"), "user-456")
+	ctx = context.WithValue(ctx, contextKey("request_id"), "req-789")
 
 	// 在处理请求时使用 Context
 	logger.InfoContext(ctx, "处理用户请求",

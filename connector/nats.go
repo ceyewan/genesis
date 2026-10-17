@@ -37,7 +37,9 @@ func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
 
 	opt := &options{}
 	for _, o := range opts {
-		o(opt)
+		if o != nil {
+			o(opt)
+		}
 	}
 	opt.applyDefaults()
 
@@ -53,6 +55,9 @@ func NewNATS(cfg *NATSConfig, opts ...Option) (NATSConnector, error) {
 
 // Connect 建立连接
 func (c *natsConnector) Connect(ctx context.Context) error {
+	if ctx == nil {
+		return xerrors.Wrap(ErrConfig, "connect context is nil")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -123,7 +128,7 @@ type natsConnectResult struct {
 
 func (c *natsConnector) connectWithContext(ctx context.Context, opts ...nats.Option) (*nats.Conn, error) {
 	if ctx == nil {
-		return nil, xerrors.New("nats connect context is nil")
+		return nil, xerrors.Wrap(ErrConfig, "nats connect context is nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

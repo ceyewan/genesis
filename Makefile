@@ -53,12 +53,15 @@ test:
 # Explicit pure-package subset; never replaces ordinary/race integration gates.
 test-fast:
 	@go test -count=1 ./auth ./breaker ./clog ./config ./metrics ./trace ./xerrors ./internal/cmd/... ./examples/resilient-service
-	@go test -count=1 ./cache -run '^(TestLocal|TestMultiBackfillCannotOverwriteMutation|TestMultiAllowsDocumentedStaleTTL|TestMultiCoordinationHonorsCancellation|TestMultiAlreadyCanceledContext|Fuzz)'
+	@go test -count=1 ./cache -run '^(TestLocal|TestMultiBackfillCannotOverwriteMutation|TestMultiAllowsDocumentedStaleTTL|TestMultiCoordinationHonorsCancellation|TestMultiAlreadyCanceledContext|TestMultiSlowWriteDoesNotBlockUnrelatedL1Hit|TestSliceDestinationErrorsAndEmptyMGet|Fuzz)'
 	@go test -count=1 ./examples/cached-query -run '^(TestLocalConcurrentRebuild|TestRebuild)'
 	@go test -count=1 ./examples/grpc-governance -run '^TestDiscoveryRequiresConsecutiveSuccessfulCalls$$'
-	@go test -count=1 ./connector -run '^TestRedisTLSConfig'
+	@go test -count=1 ./connector -run '^(TestRedisTLSConfig|TestConnectRejectsNilContextBeforeIO|TestNilConnectorOptionIsIgnored|TestPublicConfigSerializationTagsAreConsistent)'
 	@go test -count=1 ./idgen -run '^(TestGeneratorMetricsFailure|TestSequencerSubmillisecondTTLIsRejected|Fuzz)'
-	@go test -count=1 ./idem -run '^(TestInvalidCallbackAndTTLPrecedeStorage|TestConsumeZeroTTLStillUsesDefault)'
+	@go test -count=1 ./idem -run '^(TestInvalidCallbackAndTTLPrecedeStorage|TestConsumeZeroTTLStillUsesDefault|TestCompletionJoinsRefreshBeforeCommit|TestGinMiddlewareRestoresRequestContext|TestSubmillisecondTTLRejected|TestMemoryStoreRejectsOperationsAfterClose)'
+	@go test -count=1 ./mq -run '^(TestDrainTimeoutDoesNotPreventForceClose|TestDrainCallerDeadlineDoesNotCancelSharedCleanup|TestMessageHotPathReusesInstruments|TestCloseTracksAllConcurrentInitializers|TestCloseWaitsForInitializingSubscription|TestClosePreservesLateSubscriptionCleanupError|TestCloseCannotSucceedBeforeUncooperativeInitializerReturns|TestDrainStartsReadySubscriptionsBeforeWaitingForInitialization|TestDrainIncludesLateSubscriptionAndCloseCanEscalate)'
+	@go test -count=1 ./db -run '^(TestGormLogger|TestNewRejectsNegativeSlowThreshold|TestBorrowedPool|TestGormInitializeFailure|TestBorrowedHandle)'
+	@go test -count=1 ./ratelimit -run '^(TestStandaloneReclaimsIdleKeysAtCapacity|TestDistributedLimitNumericBounds)$$'
 
 test-race:
 	@echo "运行 race tests..."
@@ -172,7 +175,7 @@ status:
 # 显示所有示例
 examples:
 	@echo "列出所有示例:"
-	@for d in examples/*; do if [ -f "$d/main.go" ]; then echo "  - $(basename $d)"; fi; done
+	@for d in examples/*; do if [ -f "$$d/main.go" ]; then echo "  - $$(basename "$$d")"; fi; done
 
 example-%:
 	@echo "运行 $* 示例..."

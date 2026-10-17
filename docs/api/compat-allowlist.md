@@ -24,6 +24,19 @@ prevents attacker-controlled keys from growing the in-memory limiter without a
 hard ceiling. Consumers using positional struct literals must migrate to keyed
 literals.
 
+The audit follow-up approves the config tags below, the unified Registry
+constructor, and the Gauge/UpDownCounter split. Gauge increment/decrement methods
+are removed explicitly in compat-removals.md; Meter implementers must add
+UpDownCounter. Metrics also gains a bounded cardinality configuration.
+
+## `auth`
+
+- type: `type Config struct{SecretKey string "mapstructure:\"secret_key\""; SigningMethod string "mapstructure:\"signing_method\""; Issuer string "mapstructure:\"issuer\""; Audience []string "mapstructure:\"audience\""; AccessTokenTTL time.Duration "mapstructure:\"access_token_ttl\""; RefreshTokenTTL time.Duration "mapstructure:\"refresh_token_ttl\""; TokenLookup string "mapstructure:\"token_lookup\""; TokenHeadName string "mapstructure:\"token_head_name\""}`
+
+## `config`
+
+- type: `type Config struct{Name string; Paths []string; FileType string; EnvPrefix string}`
+
 ## `breaker`
 
 - type: `type Config struct{MaxKeys int "json:\"max_keys\" yaml:\"max_keys\""; MaxRequests uint32 "json:\"max_requests\" yaml:\"max_requests\""; Interval time.Duration "json:\"interval\" yaml:\"interval\""; Timeout time.Duration "json:\"timeout\" yaml:\"timeout\""; FailureRatio float64 "json:\"failure_ratio\" yaml:\"failure_ratio\""; MinimumRequests uint32 "json:\"minimum_requests\" yaml:\"minimum_requests\""}`
@@ -63,14 +76,27 @@ new transport option does not alter the constructor or Connector interfaces.
 ## `metrics`
 
 - func: `func New(*Config) (Meter, error)`
+- type: `type Config struct{ServiceName string "mapstructure:\"service_name\" json:\"service_name\" yaml:\"service_name\""; Version string "mapstructure:\"version\" json:\"version\" yaml:\"version\""; InstanceID string "mapstructure:\"instance_id\" json:\"instance_id\" yaml:\"instance_id\""; Environment string "mapstructure:\"environment\" json:\"environment\" yaml:\"environment\""; ListenAddress string "mapstructure:\"listen_address\" json:\"listen_address\" yaml:\"listen_address\""; Port int "mapstructure:\"port\" json:\"port\" yaml:\"port\""; Path string "mapstructure:\"path\" json:\"path\" yaml:\"path\""; EnableRuntime bool "mapstructure:\"enable_runtime\" json:\"enable_runtime\" yaml:\"enable_runtime\""; ServerErrors chan<- error "mapstructure:\"-\" json:\"-\" yaml:\"-\""}`
+- type: `type GRPCServerMetricsConfig struct{Service string; RequestTotalName string; RequestDurationName string; DurationBuckets []float64; StaticLabels []Label}`
+- type: `type HTTPServerMetricsConfig struct{Service string; RequestTotalName string; RequestDurationName string; DurationBuckets []float64; StaticLabels []Label}`
+- type: `type Gauge interface{Dec(context.Context, ...Label); Inc(context.Context, ...Label); Set(context.Context, float64, ...Label)}`
+- type: `type Meter interface{Counter(string, string, ...MetricOption) (Counter, error); Gauge(string, string, ...MetricOption) (Gauge, error); Histogram(string, string, ...MetricOption) (Histogram, error); Shutdown(context.Context) error}`
+
+## `mq`
+
+- type: `type RetryConfig struct{MaxRetries int; InitialBackoff time.Duration; MaxBackoff time.Duration; Multiplier float64}`
 
 ## `ratelimit`
+
+- type: `type Limit struct{Rate float64; Burst int}`
 
 - type: `type Config struct{Driver DriverType "json:\"driver\" yaml:\"driver\""; Standalone *StandaloneConfig "json:\"standalone\" yaml:\"standalone\""; Distributed *DistributedConfig "json:\"distributed\" yaml:\"distributed\""}`
 - type: `type DistributedConfig struct{Prefix string "json:\"prefix\" yaml:\"prefix\""}`
 - type: `type StandaloneConfig struct{CleanupInterval time.Duration "json:\"cleanup_interval\" yaml:\"cleanup_interval\""; IdleTimeout time.Duration "json:\"idle_timeout\" yaml:\"idle_timeout\""}`
 
 ## `registry`
+
+- func: `func New(github.com/ceyewan/genesis/connector.EtcdConnector, *Config, ...Option) (Registry, error)`
 
 - type: `type Config struct{Namespace string "yaml:\"namespace\" json:\"namespace\""; DefaultTTL time.Duration "yaml:\"default_ttl\" json:\"default_ttl\""; RetryInterval time.Duration "yaml:\"retry_interval\" json:\"retry_interval\""; LeaseFailureBuffer int "yaml:\"lease_failure_buffer\" json:\"lease_failure_buffer\""}`
 

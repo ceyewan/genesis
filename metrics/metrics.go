@@ -12,9 +12,7 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -50,6 +48,9 @@ func New(cfg *Config, opts ...Option) (Meter, error) {
 		return nil, err
 	}
 	config := *cfg
+	if config.CardinalityLimit == 0 {
+		config.CardinalityLimit = defaultCardinalityLimit
+	}
 	cfg = &config
 
 	options := applyOptions(opts...)
@@ -68,6 +69,7 @@ func New(cfg *Config, opts ...Option) (Meter, error) {
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(prometheusExporter),
 		sdkmetric.WithResource(res),
+		sdkmetric.WithCardinalityLimit(cfg.CardinalityLimit),
 	)
 
 	if cfg.EnableRuntime {
@@ -172,7 +174,9 @@ type meterImpl struct {
 func (m *meterImpl) Counter(name, desc string, opts ...MetricOption) (Counter, error) {
 	options := &metricOptions{}
 	for _, o := range opts {
-		o(options)
+		if o != nil {
+			o(options)
+		}
 	}
 
 	otelOpts := []metric.Float64CounterOption{metric.WithDescription(desc)}
@@ -190,7 +194,9 @@ func (m *meterImpl) Counter(name, desc string, opts ...MetricOption) (Counter, e
 func (m *meterImpl) Gauge(name, desc string, opts ...MetricOption) (Gauge, error) {
 	options := &metricOptions{}
 	for _, o := range opts {
-		o(options)
+		if o != nil {
+			o(options)
+		}
 	}
 
 	otelOpts := []metric.Float64GaugeOption{metric.WithDescription(desc)}
@@ -202,13 +208,33 @@ func (m *meterImpl) Gauge(name, desc string, opts ...MetricOption) (Gauge, error
 	if err != nil {
 		return nil, err
 	}
-	return &gaugeImpl{g: g, values: make(map[string]float64)}, nil
+	return &gaugeImpl{g: g}, nil
+}
+
+func (m *meterImpl) UpDownCounter(name, desc string, opts ...MetricOption) (UpDownCounter, error) {
+	options := &metricOptions{}
+	for _, o := range opts {
+		if o != nil {
+			o(options)
+		}
+	}
+	otelOpts := []metric.Float64UpDownCounterOption{metric.WithDescription(desc)}
+	if options.Unit != "" {
+		otelOpts = append(otelOpts, metric.WithUnit(options.Unit))
+	}
+	counter, err := m.meter.Float64UpDownCounter(name, otelOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return &upDownCounterImpl{c: counter}, nil
 }
 
 func (m *meterImpl) Histogram(name, desc string, opts ...MetricOption) (Histogram, error) {
 	options := &metricOptions{}
 	for _, o := range opts {
-		o(options)
+		if o != nil {
+			o(options)
+		}
 	}
 
 	otelOpts := []metric.Float64HistogramOption{metric.WithDescription(desc)}
@@ -228,7 +254,7 @@ func (m *meterImpl) Histogram(name, desc string, opts ...MetricOption) (Histogra
 
 func (m *meterImpl) Shutdown(ctx context.Context) error {
 	if ctx == nil {
-		return xerrors.New("metrics shutdown context is nil")
+		return xerrors.Wrap(ErrInvalidConfig, "metrics shutdown context is nil")
 	}
 	m.shutdownOnce.Do(func() {
 		go func() {
@@ -280,36 +306,16 @@ func (c *counterImpl) Add(ctx context.Context, val float64, labels ...Label) {
 	c.c.Add(ctx, val, metric.WithAttributes(toAttributes(labels)...))
 }
 
-type gaugeImpl struct {
-	g      metric.Float64Gauge
-	values map[string]float64
-	mu     sync.Mutex
-}
+type gaugeImpl struct{ g metric.Float64Gauge }
 
 func (g *gaugeImpl) Set(ctx context.Context, val float64, labels ...Label) {
-	key := labelKey(labels)
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.values[key] = val
 	g.g.Record(ctx, val, metric.WithAttributes(toAttributes(labels)...))
 }
 
-func (g *gaugeImpl) Inc(ctx context.Context, labels ...Label) {
-	key := labelKey(labels)
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.values[key]++
-	val := g.values[key]
-	g.g.Record(ctx, val, metric.WithAttributes(toAttributes(labels)...))
-}
+type upDownCounterImpl struct{ c metric.Float64UpDownCounter }
 
-func (g *gaugeImpl) Dec(ctx context.Context, labels ...Label) {
-	key := labelKey(labels)
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.values[key]--
-	val := g.values[key]
-	g.g.Record(ctx, val, metric.WithAttributes(toAttributes(labels)...))
+func (c *upDownCounterImpl) Add(ctx context.Context, val float64, labels ...Label) {
+	c.c.Add(ctx, val, metric.WithAttributes(toAttributes(labels)...))
 }
 
 type histogramImpl struct {
@@ -330,6 +336,10 @@ func (n *noopMeter) Gauge(name, desc string, opts ...MetricOption) (Gauge, error
 	return &noopGauge{}, nil
 }
 
+func (n *noopMeter) UpDownCounter(name, desc string, opts ...MetricOption) (UpDownCounter, error) {
+	return &noopUpDownCounter{}, nil
+}
+
 func (n *noopMeter) Histogram(name, desc string, opts ...MetricOption) (Histogram, error) {
 	return &noopHistogram{}, nil
 }
@@ -346,8 +356,10 @@ func (n *noopCounter) Add(ctx context.Context, val float64, labels ...Label) {}
 type noopGauge struct{}
 
 func (n *noopGauge) Set(ctx context.Context, val float64, labels ...Label) {}
-func (n *noopGauge) Inc(ctx context.Context, labels ...Label)              {}
-func (n *noopGauge) Dec(ctx context.Context, labels ...Label)              {}
+
+type noopUpDownCounter struct{}
+
+func (n *noopUpDownCounter) Add(ctx context.Context, val float64, labels ...Label) {}
 
 type noopHistogram struct{}
 
@@ -362,36 +374,4 @@ func toAttributes(labels []Label) []attribute.KeyValue {
 		attrs[i] = attribute.String(l.Key, l.Value)
 	}
 	return attrs
-}
-
-func labelKey(labels []Label) string {
-	if len(labels) == 0 {
-		return ""
-	}
-
-	normalized := make([]Label, len(labels))
-	copy(normalized, labels)
-	sort.Slice(normalized, func(i, j int) bool {
-		if normalized[i].Key == normalized[j].Key {
-			return normalized[i].Value < normalized[j].Value
-		}
-		return normalized[i].Key < normalized[j].Key
-	})
-
-	var b strings.Builder
-	for i, l := range normalized {
-		if i > 0 {
-			b.WriteByte('|')
-		}
-		writeLabelPart(&b, l.Key)
-		b.WriteByte('=')
-		writeLabelPart(&b, l.Value)
-	}
-	return b.String()
-}
-
-func writeLabelPart(b *strings.Builder, s string) {
-	b.WriteString(strconv.Itoa(len(s)))
-	b.WriteByte(':')
-	b.WriteString(s)
 }

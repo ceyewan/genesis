@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -40,7 +41,7 @@ func main() {
 	// 2. 创建 Redis 连接器
 	redisConn, err := connector.NewRedis(&connector.RedisConfig{
 		Addr:         "127.0.0.1:6379",
-		Password:     "genesis_redis_password",
+		Password:     os.Getenv("REDIS_PASSWORD"),
 		DB:           0,
 		PoolSize:     10,
 		MinIdleConns: 5,
@@ -79,7 +80,7 @@ func main() {
 
 	// 5. 启动 HTTP 服务器
 	fmt.Println("=== 启动 HTTP 服务器 ===")
-	httpServer, httpAddr := startHTTPServer(appLogger, idem)
+	httpServer, httpAddr := startHTTPServer(idem)
 	defer httpServer.Close()
 	fmt.Printf("✓ HTTP 服务器已启动: http://%s\n\n", httpAddr)
 
@@ -126,7 +127,7 @@ func startGRPCServer(logger clog.Logger, idem idem.Idempotency) (*grpc.Server, s
 }
 
 // startHTTPServer 启动 HTTP 服务器
-func startHTTPServer(logger clog.Logger, idem idem.Idempotency) (*http.Server, string) {
+func startHTTPServer(idem idem.Idempotency) (*http.Server, string) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 

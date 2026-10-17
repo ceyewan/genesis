@@ -123,16 +123,16 @@ func WithDeadLetter(pub MQ, dlTopic string, maxRetries int, logger clog.Logger) 
 // RetryConfig 重试配置
 type RetryConfig struct {
 	// MaxRetries 最大重试次数（不含首次执行）
-	MaxRetries int
+	MaxRetries int `json:"max_retries" yaml:"max_retries" mapstructure:"max_retries"`
 
 	// InitialBackoff 初始退避时间
-	InitialBackoff time.Duration
+	InitialBackoff time.Duration `json:"initial_backoff" yaml:"initial_backoff" mapstructure:"initial_backoff"`
 
 	// MaxBackoff 最大退避时间
-	MaxBackoff time.Duration
+	MaxBackoff time.Duration `json:"max_backoff" yaml:"max_backoff" mapstructure:"max_backoff"`
 
 	// Multiplier 退避倍数
-	Multiplier float64
+	Multiplier float64 `json:"multiplier" yaml:"multiplier" mapstructure:"multiplier"`
 }
 
 // DefaultRetryConfig returns a fresh default configuration. Returning a value

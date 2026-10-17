@@ -68,10 +68,10 @@ func main() {
 		panic(err)
 	}
 
-	reg, err := registry.New(etcdConn, &registry.Config{
+	reg, err := registry.New(&registry.Config{
 		Namespace:  "/genesis/services",
 		DefaultTTL: 30 * time.Second,
-	}, registry.WithLogger(logger))
+	}, registry.WithEtcdConnector(etcdConn), registry.WithLogger(logger))
 	if err != nil {
 		panic(err)
 	}
@@ -190,7 +190,7 @@ defer conn.Close()
 | `DefaultTTL` | 默认租约时长，默认 `30s`，必须为 `0` 或 `>= 1s` |
 | `RetryInterval` | watch / resolver 重试间隔，默认 `1s` |
 
-`New(conn, nil)` 明确允许，等价于空配置。构造器会复制非 nil 配置后再应用默认值，不修改调用方对象。
+`New(nil, WithEtcdConnector(conn))` 明确允许，等价于空配置。未注入或未连接的 connector 返回 `ErrConnectorNil`，同时匹配 `connector.ErrClientNil`。构造器会复制非 nil 配置后再应用默认值，不修改调用方对象。
 
 `WithMeter` 可注入内部指标，覆盖成功注册、发出的 watch event 和非预期 lease failure。
 
@@ -204,7 +204,7 @@ if err != nil { return err }
 defer etcdConn.Close()
 if err := etcdConn.Connect(ctx); err != nil { return err }
 
-reg, err := registry.New(etcdConn, cfg)
+reg, err := registry.New(cfg, registry.WithEtcdConnector(etcdConn))
 if err != nil { return err }
 defer reg.Close()
 ```

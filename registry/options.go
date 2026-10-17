@@ -2,6 +2,7 @@ package registry
 
 import (
 	"github.com/ceyewan/genesis/clog"
+	"github.com/ceyewan/genesis/connector"
 	"github.com/ceyewan/genesis/metrics"
 )
 
@@ -10,8 +11,14 @@ type Option func(*options)
 
 // options 选项结构
 type options struct {
-	logger clog.Logger
-	meter  metrics.Meter
+	logger        clog.Logger
+	meter         metrics.Meter
+	etcdConnector connector.EtcdConnector
+}
+
+// WithEtcdConnector 注入已连接的 Etcd 连接器；Registry 只借用它。
+func WithEtcdConnector(conn connector.EtcdConnector) Option {
+	return func(o *options) { o.etcdConnector = conn }
 }
 
 // WithMeter 注入 registry 内部注册、watch 和 lease failure 指标。

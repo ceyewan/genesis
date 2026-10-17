@@ -28,7 +28,6 @@ linters:
       - deploy
       - third_party$
       - builtin$
-      - (^|/)examples/
     rules:
       - path: _test\.go
         linters:
@@ -52,4 +51,3 @@ formatters:
       - deploy
       - third_party$
       - builtin$
-      - (^|/)examples/

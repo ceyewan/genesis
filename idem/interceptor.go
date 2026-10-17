@@ -35,7 +35,9 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 		},
 	}
 	for _, o := range opts {
-		o(&opt)
+		if o != nil {
+			o(&opt)
+		}
 	}
 
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
@@ -126,6 +128,7 @@ func (i *idem) UnaryServerInterceptor(opts ...InterceptorOption) grpc.UnaryServe
 		defer stopRefresh()
 
 		result, err := handler(execCtx, req)
+		stopRefresh()
 
 		if err == nil && result != nil {
 			if msg, ok := result.(proto.Message); ok {

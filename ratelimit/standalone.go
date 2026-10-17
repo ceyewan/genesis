@@ -199,6 +199,13 @@ func (l *standaloneLimiter) acquireLimiter(key string, limit Limit) (string, *li
 		return cacheKey, wrapper, nil
 	}
 	if len(l.limiters) >= l.maxKeys {
+		for key, wrapper := range l.limiters {
+			if wrapper.active == 0 && now.Sub(wrapper.lastSeen) > l.cfg.IdleTimeout {
+				delete(l.limiters, key)
+			}
+		}
+	}
+	if len(l.limiters) >= l.maxKeys {
 		return "", nil, ErrKeyLimitExceeded
 	}
 

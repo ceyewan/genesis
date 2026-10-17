@@ -40,7 +40,7 @@ func TestMultiCoordinationHonorsCancellation(t *testing.T) {
 	multi, err := NewMulti(local, remote, nil)
 	require.NoError(t, err)
 	writeDone := make(chan error, 1)
-	go func() { writeDone <- multi.Set(ctx, "slow", "value", time.Minute) }()
+	go func() { writeDone <- multi.Set(ctx, "hot", "value", time.Minute) }()
 	// 即使断言失败也释放远端 I/O，并等待写操作结束后再关闭 Local。
 	t.Cleanup(func() {
 		close(remote.release)
@@ -72,7 +72,7 @@ func TestMultiCoordinationHonorsCancellation(t *testing.T) {
 			case err := <-done:
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 			case <-time.After(time.Second):
-				t.Fatal("Canceled operation is still waiting for an unrelated write")
+				t.Fatal("Canceled operation is still waiting for a same-key write")
 			}
 		})
 	}

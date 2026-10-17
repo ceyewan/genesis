@@ -85,6 +85,19 @@ type Locker interface {
 
 非法 TTL 会返回 `ErrInvalidTTL`，不会再静默回退到默认值。
 
+## Etcd Session 与预算
+
+Etcd 的 `New` 只检查本地配置和 connector，不发起 RPC；可用性错误会在首次加锁时暴露。
+默认 Session 按需共享创建，创建任务有独立的 5 秒上限，每个等待者仅受自己的 Context 约束；
+某个等待者超时不会取消其他等待者的初始化，失败后允许后续调用重试。
+自定义 TTL 的租约创建受本次请求 Context 和 5 秒上限共同约束。
+
+`Grant` 使用创建预算，`KeepAlive` 使用 Locker 生命周期：成功获锁后取消加锁请求 Context 不会停止续租。
+应通过 `Unlock` / `Close` 释放锁；业务仍需监控 `Lost`。
+`Close` 取消初始化和未完成的获取/解锁，等待已登记的获取、解锁及迟到租约清理完成；撤销租约使用独立的 2 秒预算。
+主动解锁与关闭共享每条锁记录的串行释放状态：成功释放不会重复调用底层 Mutex 或撤销 Session，失败的解锁可由关闭重试。
+后端不可用时回收错误会返回，无法撤销的租约只能等待 TTL 到期，不保证网络故障下立即删除。
+
 ## 推荐场景
 
 ### 任务竞选
@@ -132,7 +145,7 @@ return updateInventory(ctx, productID)
 
 ## 日志与资源释放
 
-通过 `WithLogger` 注入 `clog.Logger` 后，组件会自动附加 `component=dlock` 字段，并在加锁、解锁、续期失败、所有权丢失等关键事件上输出结构化日志。
+通过 `WithLogger` 注入 `clog.Logger` 后，组件会自动追加 `dlock` 日志命名空间，并在加锁、解锁、续期失败、所有权丢失等关键事件上输出结构化日志。
 
 `dlock` 不拥有底层 Redis / Etcd 连接，因此：
 

@@ -66,11 +66,11 @@ func (c *Config) validate() error {
 	if c == nil {
 		return ErrConfigNil
 	}
-	if c.DefaultTTL < 0 {
-		return xerrors.Wrap(ErrInvalidConfig, "idem: default_ttl must be greater than or equal to 0")
+	if c.DefaultTTL < 0 || (c.DefaultTTL > 0 && c.DefaultTTL < time.Millisecond) {
+		return xerrors.Wrap(ErrInvalidConfig, "idem: default_ttl must be zero or at least one millisecond")
 	}
-	if c.LockTTL < 0 {
-		return xerrors.Wrap(ErrInvalidConfig, "idem: lock_ttl must be greater than or equal to 0")
+	if c.LockTTL < 0 || (c.LockTTL > 0 && c.LockTTL < time.Millisecond) {
+		return xerrors.Wrap(ErrInvalidConfig, "idem: lock_ttl must be zero or at least one millisecond")
 	}
 	if c.WaitTimeout < 0 {
 		return xerrors.Wrap(ErrInvalidConfig, "idem: wait_timeout must be greater than or equal to 0")

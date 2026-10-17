@@ -54,10 +54,13 @@ import (
 // 接口定义 (Interface Definitions)
 // ========================================
 
-// Limit 定义限流规则（令牌桶算法）
+// Limit 定义限流规则（令牌桶算法）。
+// Redis 使用微秒时钟和浮点令牌，适合流量治理，不保证纳秒调度或精确配额结算。
+// Redis 驱动拒绝超出 Lua 精确整数范围的 Burst，或过期时间无法安全表示的规则，
+// 返回 ErrInvalidLimit。
 type Limit struct {
-	Rate  float64 // 令牌生成速率（每秒生成多少个令牌）
-	Burst int     // 令牌桶容量（突发最大请求数）
+	Rate  float64 `json:"rate" yaml:"rate" mapstructure:"rate"`    // 令牌生成速率（每秒生成多少个令牌）
+	Burst int     `json:"burst" yaml:"burst" mapstructure:"burst"` // 令牌桶容量（突发最大请求数）
 }
 
 func (l Limit) valid() bool {
@@ -310,7 +313,9 @@ func New(cfg *Config, opts ...Option) (Limiter, error) {
 	// 应用选项（需要先提取 WithRedisConnector）
 	o := options{}
 	for _, opt := range opts {
-		opt(&o)
+		if opt != nil {
+			opt(&o)
+		}
 	}
 
 	if o.logger == nil {
@@ -320,7 +325,7 @@ func New(cfg *Config, opts ...Option) (Limiter, error) {
 		o.meter = metrics.Discard()
 	}
 
-	logger := o.logger.With(clog.String("component", "ratelimit"))
+	logger := o.logger.WithNamespace("ratelimit")
 
 	switch cfg.Driver {
 	case DriverStandalone:

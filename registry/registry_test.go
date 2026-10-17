@@ -33,11 +33,11 @@ func setupRegistry(t *testing.T, namespace string) Registry {
 	etcdConn := setupEtcdConn(t)
 	logger := testkit.NewLogger()
 
-	reg, err := New(etcdConn, &Config{
+	reg, err := New(&Config{
 		Namespace:     namespace,
 		DefaultTTL:    10 * time.Second,
 		RetryInterval: 500 * time.Millisecond,
-	}, WithLogger(logger))
+	}, WithEtcdConnector(etcdConn), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create registry: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestNew(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg, err := New(tt.conn, tt.cfg, tt.opts...)
+			reg, err := New(tt.cfg, append([]Option{WithEtcdConnector(tt.conn)}, tt.opts...)...)
 			if tt.expectError {
 				if err == nil {
 					t.Error("Expected error but got none")
@@ -107,7 +107,7 @@ func TestNew(t *testing.T) {
 
 	t.Run("constructor copies config before defaults", func(t *testing.T) {
 		cfg := &Config{}
-		reg, err := New(etcdConn, cfg)
+		reg, err := New(cfg, WithEtcdConnector(etcdConn))
 		require.NoError(t, err)
 		defer reg.Close()
 		require.Empty(t, cfg.Namespace)
@@ -127,16 +127,16 @@ func TestNewSingleton(t *testing.T) {
 	etcdConn := setupEtcdConn(t)
 	logger := testkit.NewLogger()
 
-	reg1, err := New(etcdConn, &Config{
+	reg1, err := New(&Config{
 		Namespace: "/test/singleton1",
-	}, WithLogger(logger))
+	}, WithEtcdConnector(etcdConn), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create registry1: %v", err)
 	}
 
-	reg2, err := New(etcdConn, &Config{
+	reg2, err := New(&Config{
 		Namespace: "/test/singleton2",
-	}, WithLogger(logger))
+	}, WithEtcdConnector(etcdConn), WithLogger(logger))
 	if err != ErrRegistryAlreadyInitialized {
 		t.Errorf("Expected ErrRegistryAlreadyInitialized, got %v", err)
 	}
@@ -149,9 +149,9 @@ func TestNewSingleton(t *testing.T) {
 		t.Fatalf("Failed to close registry1: %v", err)
 	}
 
-	reg3, err := New(etcdConn, &Config{
+	reg3, err := New(&Config{
 		Namespace: "/test/singleton3",
-	}, WithLogger(logger))
+	}, WithEtcdConnector(etcdConn), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create registry3 after close: %v", err)
 	}
@@ -634,10 +634,10 @@ func TestWatchReconnectAndRecoverIntegration(t *testing.T) {
 	require.NoError(t, conn.Connect(ctx))
 	t.Cleanup(func() { _ = conn.Close() })
 
-	reg, err := New(conn, &Config{
+	reg, err := New(&Config{
 		Namespace:     "/test/watch-reconnect-" + testkit.NewID(),
 		RetryInterval: 50 * time.Millisecond,
-	}, WithLogger(testkit.NewLogger()))
+	}, WithEtcdConnector(conn), WithLogger(testkit.NewLogger()))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = reg.Close() })
 
@@ -684,9 +684,9 @@ func TestClose(t *testing.T) {
 	etcdConn := setupEtcdConn(t)
 	logger := testkit.NewLogger()
 
-	reg, err := New(etcdConn, &Config{
+	reg, err := New(&Config{
 		Namespace: "/test/close",
-	}, WithLogger(logger))
+	}, WithEtcdConnector(etcdConn), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create registry: %v", err)
 	}
@@ -1027,10 +1027,10 @@ func TestDefaultTTL(t *testing.T) {
 	logger := testkit.NewLogger()
 
 	// 创建不设置 TTL 的 Registry（使用默认 TTL）
-	reg, err := New(etcdConn, &Config{
+	reg, err := New(&Config{
 		Namespace: "/test/default-ttl",
 		// DefaultTTL 为 0，应使用默认值 30s
-	}, WithLogger(logger))
+	}, WithEtcdConnector(etcdConn), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create registry: %v", err)
 	}
@@ -1068,9 +1068,9 @@ func TestNamespaceIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// 创建两个不同命名空间的 Registry
-	reg1, err := New(etcdConn, &Config{
+	reg1, err := New(&Config{
 		Namespace: "/test/ns1",
-	}, WithLogger(logger))
+	}, WithEtcdConnector(etcdConn), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("Failed to create registry1: %v", err)
 	}

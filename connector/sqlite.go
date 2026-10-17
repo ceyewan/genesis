@@ -48,7 +48,9 @@ func NewSQLite(cfg *SQLiteConfig, opts ...Option) (SQLiteConnector, error) {
 
 	opt := &options{}
 	for _, o := range opts {
-		o(opt)
+		if o != nil {
+			o(opt)
+		}
 	}
 	opt.applyDefaults()
 
@@ -63,6 +65,9 @@ func NewSQLite(cfg *SQLiteConfig, opts ...Option) (SQLiteConnector, error) {
 
 // Connect 建立连接
 func (c *sqliteConnector) Connect(ctx context.Context) error {
+	if ctx == nil {
+		return xerrors.Wrap(ErrConfig, "connect context is nil")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

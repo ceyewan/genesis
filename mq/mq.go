@@ -48,12 +48,13 @@ type MQ interface {
 	Subscribe(ctx context.Context, topic string, handler Handler, opts ...SubscribeOption) (Subscription, error)
 
 	// Drain 停止接收新消息并等待所有已交付 Handler 完成。
-	// 达到 ctx deadline 后会取消 Handler context 并返回；Go 无法强制终止
-	// 忽略 context 的 Handler，因此这类 Handler 仍可能继续运行。
+	// ctx 仅限制当前调用者的等待，不中断其他调用者共享的清理。
+	// 超时后可调用 Close 取消 Handler context；Go 无法强制终止忽略 context 的 Handler。
 	Drain(ctx context.Context) error
 
 	// Close 关闭 MQ 客户端
-	// 注意：此方法会停止并等待当前订阅，但底层连接由 Connector 管理，不会被关闭。
+	// 停止并等待已有及初始化中的订阅，最多等待 5 秒；超时不代表 Handler 已退出。
+	// 底层连接由 Connector 管理，不会被关闭。
 	Close() error
 }
 
@@ -97,14 +98,16 @@ func New(cfg *Config, opts ...Option) (MQ, error) {
 		return nil, err
 	}
 
-	return &mq{
+	m := &mq{
 		transport:     transport,
 		logger:        o.logger,
 		meter:         o.meter,
 		driver:        cfg.Driver,
 		subscriptions: make(map[Subscription]struct{}),
 		lifecycleDone: make(chan struct{}),
-	}, nil
+	}
+	m.initMetrics()
+	return m, nil
 }
 
 // newTransport 根据配置创建对应的 transport 实现
@@ -137,7 +140,9 @@ func newTransport(cfg *Config, o *options) (transport, error) {
 func applyOptions(opts ...Option) *options {
 	o := &options{}
 	for _, opt := range opts {
-		opt(o)
+		if opt != nil {
+			opt(o)
+		}
 	}
 
 	// 设置默认 Logger

@@ -38,7 +38,9 @@ func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
 
 	opt := &options{}
 	for _, o := range opts {
-		o(opt)
+		if o != nil {
+			o(opt)
+		}
 	}
 	opt.applyDefaults()
 
@@ -53,6 +55,9 @@ func NewMySQL(cfg *MySQLConfig, opts ...Option) (MySQLConnector, error) {
 
 // Connect 建立连接
 func (c *mysqlConnector) Connect(ctx context.Context) error {
+	if ctx == nil {
+		return xerrors.Wrap(ErrConfig, "connect context is nil")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

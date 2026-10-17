@@ -66,8 +66,13 @@ if code := xerrors.GetCode(err); code == "USER_NOT_FOUND" {
 `Must` 和 `MustOK` 只建议用于应用启动、依赖装配或测试辅助代码：
 
 ```go
-cfg := xerrors.Must(config.Load("config.yaml"))
-logger := xerrors.Must(clog.New(&cfg.Log))
+loader := xerrors.Must(config.New(&config.Config{Name: "config", Paths: []string{"."}}))
+defer loader.Close()
+if err := loader.Load(context.Background()); err != nil {
+    panic(err) // 仅用于启动阶段。
+}
+logger := xerrors.Must(clog.New(clog.NewDevDefaultConfig("app")))
+defer logger.Close()
 port := xerrors.MustOK(loadBootstrapPort())
 ```
 

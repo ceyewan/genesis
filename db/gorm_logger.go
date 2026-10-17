@@ -46,46 +46,49 @@ func (l *gormLogger) LogMode(level logger.LogLevel) logger.Interface {
 // Info 记录 info 级别日志
 func (l *gormLogger) Info(ctx context.Context, msg string, data ...any) {
 	if l.level >= logger.Info {
-		l.logger.Info(fmt.Sprintf(msg, data...))
+		l.logger.InfoContext(ctx, fmt.Sprintf(msg, data...))
 	}
 }
 
 // Warn 记录 warn 级别日志
 func (l *gormLogger) Warn(ctx context.Context, msg string, data ...any) {
 	if l.level >= logger.Warn {
-		l.logger.Warn(fmt.Sprintf(msg, data...))
+		l.logger.WarnContext(ctx, fmt.Sprintf(msg, data...))
 	}
 }
 
 // Error 记录 error 级别日志
 func (l *gormLogger) Error(ctx context.Context, msg string, data ...any) {
 	if l.level >= logger.Error {
-		l.logger.Error(fmt.Sprintf(msg, data...))
+		l.logger.ErrorContext(ctx, fmt.Sprintf(msg, data...))
 	}
 }
 
 // Trace 记录 SQL 执行日志
 func (l *gormLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	if l.level <= logger.Silent {
+		return
+	}
 	elapsed := time.Since(begin)
 
 	sql, rows := fc()
 
 	switch {
 	case err != nil && l.level >= logger.Error:
-		l.logger.Error("sql error",
+		l.logger.ErrorContext(ctx, "SQL error",
 			clog.String("duration", elapsed.String()),
 			clog.String("sql", sql),
 			clog.Int64("rows", rows),
 			clog.Error(err),
 		)
 	case elapsed > l.slowThreshold && l.level >= logger.Warn:
-		l.logger.Warn("slow sql",
+		l.logger.WarnContext(ctx, "Slow SQL",
 			clog.String("duration", elapsed.String()),
 			clog.String("sql", sql),
 			clog.Int64("rows", rows),
 		)
 	case l.level >= logger.Info:
-		l.logger.Debug("sql",
+		l.logger.DebugContext(ctx, "SQL",
 			clog.String("duration", elapsed.String()),
 			clog.String("sql", sql),
 			clog.Int64("rows", rows),

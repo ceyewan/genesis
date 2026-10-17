@@ -16,12 +16,13 @@ import (
 )
 
 type redisLocker struct {
-	client *redis.Client
-	cfg    *Config
-	logger clog.Logger
-	locks  map[string]*redisLockEntry
-	lost   boundedTombstones[*redisLockEntry]
-	mu     sync.RWMutex
+	client    *redis.Client
+	cfg       *Config
+	logger    clog.Logger
+	locks     map[string]*redisLockEntry
+	acquiring map[string]struct{}
+	lost      boundedTombstones[*redisLockEntry]
+	mu        sync.RWMutex
 
 	closeOnce sync.Once
 	closeErr  error
@@ -199,8 +200,20 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 		l.mu.Unlock()
 		return nil, xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
 	}
-	l.lost.Delete(key)
+	if _, exists := l.acquiring[key]; exists {
+		l.mu.Unlock()
+		return nil, xerrors.Wrapf(ErrLockAlreadyHeld, "key: %s", key)
+	}
+	if l.acquiring == nil {
+		l.acquiring = make(map[string]struct{})
+	}
+	l.acquiring[key] = struct{}{}
 	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		delete(l.acquiring, key)
+		l.mu.Unlock()
+	}()
 
 	// 生成随机 token
 	randBytes := make([]byte, 16)
@@ -231,7 +244,9 @@ func (l *redisLocker) acquireLock(ctx context.Context, key string, opts ...LockO
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()
-		_, _ = l.client.Eval(ctx, delScript, []string{redisKey}, token).Result()
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		_, _ = l.client.Eval(cleanupCtx, delScript, []string{redisKey}, token).Result()
 		return nil, ErrClosed
 	}
 	if _, exists := l.locks[key]; exists {

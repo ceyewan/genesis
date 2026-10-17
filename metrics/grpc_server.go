@@ -21,11 +21,11 @@ var defaultGRPCDurationBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1,
 
 // GRPCServerMetricsConfig 配置可重用的 gRPC 服务器指标
 type GRPCServerMetricsConfig struct {
-	Service             string
-	RequestTotalName    string
-	RequestDurationName string
-	DurationBuckets     []float64
-	StaticLabels        []Label
+	Service             string    `json:"service" yaml:"service" mapstructure:"service"`
+	RequestTotalName    string    `json:"request_total_name" yaml:"request_total_name" mapstructure:"request_total_name"`
+	RequestDurationName string    `json:"request_duration_name" yaml:"request_duration_name" mapstructure:"request_duration_name"`
+	DurationBuckets     []float64 `json:"duration_buckets" yaml:"duration_buckets" mapstructure:"duration_buckets"`
+	StaticLabels        []Label   `json:"static_labels" yaml:"static_labels" mapstructure:"static_labels"`
 }
 
 // DefaultGRPCServerMetricsConfig 返回默认的 gRPC 服务器指标配置

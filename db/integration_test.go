@@ -280,7 +280,7 @@ func TestDBClose(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// db 组件采用借用模型，Close 是 no-op
+	// db 采用借用模型，Close 不关闭 Connector 的 SQL 连接池。
 	err = database.Close()
 	require.NoError(t, err)
 

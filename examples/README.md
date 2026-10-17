@@ -79,9 +79,9 @@ go run main.go
 # 或者直接运行
 go run examples/cache/main.go
 
-# 带配置文件运行
+# 从示例目录加载 config.yaml 和可选的 config.<环境>.yaml / .env
 cd examples/config
-go run main.go -config config.yaml
+go run main.go
 ```
 
 ## 📝 示例说明

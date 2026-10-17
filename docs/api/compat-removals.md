@@ -1,7 +1,7 @@
-# Genesis v1.0.0-rc.2 approved API removals
+# Genesis pre-v1 approved API removals
 
 This file is consumed by `make api-compat-check`. Every entry is an exact RC1
-API that the approved RC2 surface decision removes without a replacement. The
+API that an approved pre-v1 surface decision removes without a replacement. The
 check rejects entries that are absent from the immutable RC1 baseline, remain
 in the current candidate, disguise a signature replacement, or overlap the
 paired replacement files.
@@ -15,6 +15,14 @@ The two standard-library HTTP wrappers are removed from `trace`. They were
 zero-logic aliases with no known consumer and exposed a pinned
 `otelhttp.Option` / `*otelhttp.Transport` contract. Callers migrate directly to
 `otelhttp.NewHandler` and `otelhttp.NewTransport`.
+
+The audit follow-up removes Gauge.Inc/Dec. Callers recording deltas migrate
+to Meter.UpDownCounter and Add(+1/-1); Gauge retains only Set.
+
+## `metrics`
+
+- method: `func (Gauge).Dec(context.Context, ...Label)`
+- method: `func (Gauge).Inc(context.Context, ...Label)`
 
 ## `testkit`
 

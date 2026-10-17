@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"sync/atomic"
 
@@ -14,54 +15,69 @@ import (
 	"github.com/ceyewan/genesis/xerrors"
 )
 
-// luaScript 令牌桶算法的 Lua 脚本
-const luaScript = `
--- 令牌桶算法的纯时间戳实现 (Token Bucket with Timestamp)
--- KEYS[1]: 限流器的唯一键
--- ARGV[1]: 速率 (rate, 每秒允许的请求数)
--- ARGV[2]: 桶容量 (capacity, 峰值/并发容量)
--- ARGV[3]: 本次请求需要消耗的令牌数 (tokens_to_consume)
+const (
+	maxRedisExactInteger int64 = 1<<53 - 1
+	maxRedisTTLSeconds         = maxRedisExactInteger / 1000
+)
 
+// luaScript 实现普通令牌桶，以 "tokens,last_us" 字符串保存剩余令牌和更新时间。
+// 沿用原 Key 及字符串类型；旧的单时间戳值在首次读取时折算为剩余令牌。
+// 所有读、补充、扣减及写入在同一次 Lua 调用中完成。
+const luaScript = `
+-- KEYS[1]：限流状态键。
+-- ARGV[1]：Rate，每秒补充的令牌数。
+-- ARGV[2]：Burst，桶容量；ARGV[3]：本次申请的令牌数。
+-- 返回：{是否允许（1/0）, 剩余完整令牌数}。
 local rate = tonumber(ARGV[1])
 local capacity = tonumber(ARGV[2])
 local requested = tonumber(ARGV[3])
+if requested > capacity then return {0, 0} end
 
+-- 1. 使用 Redis 统一时钟，先以整数微秒做差，再换算为秒。
 local time_parts = redis.call("TIME")
-local now = tonumber(time_parts[1]) + tonumber(time_parts[2]) / 1000000
-
--- 每个令牌代表的时间间隔（秒）
-local interval_per_token = 1 / rate
--- 桶装满所需要的时间
-local fill_time = capacity * interval_per_token
-
--- 获取上一次的状态（即下一次允许放行的时间戳）
-local last_refreshed = tonumber(redis.call("GET", KEYS[1]))
-if last_refreshed == nil then
-  last_refreshed = now
+local now = tonumber(time_parts[1]) * 1000000 + tonumber(time_parts[2])
+local tokens, last = capacity, now
+local state = redis.call("GET", KEYS[1])
+if state then
+  local saved_tokens, saved_last = string.match(state, "^([^,]+),([^,]+)$")
+  if saved_tokens then
+    tokens, last = tonumber(saved_tokens), tonumber(saved_last)
+    if not tokens or not last then return redis.error_reply("invalid token bucket state") end
+  else
+    -- 旧值是理论放行时间。未偿还时间 * Rate 即已消耗额度，不能直接重置满桶。
+    local previous = tonumber(state)
+    if not previous then return redis.error_reply("invalid legacy token bucket state") end
+    tokens = math.max(0, capacity - math.max(0, previous * 1000000 - now) / 1000000 * rate)
+  end
 end
+-- 2. available = min(Burst, tokens + elapsed_seconds * Rate)。
+-- 时钟回退时不补充令牌，也不把参考时间往回移动。
+now = math.max(now, last)
+local elapsed = (now - last) / 1000000
+tokens = math.min(capacity, tokens + elapsed * rate)
 
--- 计算理论上的下一次放行时间
-local next_available_time = math.max(last_refreshed, now)
-
--- 判断是否允许请求
-local new_refreshed = next_available_time + requested * interval_per_token
-local allow_at_most = now + fill_time
-
-if new_refreshed <= allow_at_most then
-  -- 令牌足够，请求被允许
-  redis.call("SET", KEYS[1], new_refreshed, "EX", math.ceil(fill_time * 2))
-  
-  -- 计算剩余可用令牌数
-  local remaining_tokens = math.floor((allow_at_most - new_refreshed) / interval_per_token)
-  
-  return {1, remaining_tokens}
-else
-  -- 令牌不足，拒绝请求
-  local remaining_tokens = math.floor((allow_at_most - next_available_time) / interval_per_token)
-  
-  return {0, remaining_tokens}
+-- 3. 令牌足够才扣减；拒绝请求也保存已补充的小数令牌。
+local allowed = 0
+if requested <= tokens then
+  tokens = tokens - requested
+  allowed = 1
 end
+-- 4. 显式格式化，避免 Lua 隐式转字符串时丢失令牌小数或微秒时间精度。
+-- TTL 取两倍回满时间（最短 1 秒），使过期时的桶已恢复满额。
+-- SET 同时替换状态及 TTL；不先删旧键，避免转换中途丢弃状态。
+local value = string.format("%.17g,%.0f", tokens, now)
+redis.call("SET", KEYS[1], value, "EX", math.max(1, math.ceil(2 * capacity / rate)))
+return {allowed, math.floor(tokens)}
 `
+
+func validRedisLimit(limit Limit) bool {
+	if !limit.valid() || int64(limit.Burst) > maxRedisExactInteger {
+		return false
+	}
+	// 限制过期时间在 Redis/Lua 可安全表示的范围内，拒绝导致溢出的极小 Rate。
+	horizon := 2 * float64(limit.Burst) / limit.Rate
+	return !math.IsInf(horizon, 1) && horizon <= float64(maxRedisTTLSeconds)
+}
 
 // distributedLimiter 分布式限流器实现（非导出）
 type distributedLimiter struct {
@@ -138,12 +154,18 @@ func (l *distributedLimiter) AllowN(ctx context.Context, key string, limit Limit
 		return false, ErrKeyEmpty
 	}
 
-	if !limit.valid() {
+	if !validRedisLimit(limit) {
 		return false, ErrInvalidLimit
 	}
 
 	if n <= 0 {
 		return false, ErrInvalidLimit
+	}
+	if n > limit.Burst {
+		if l.deniedCounter != nil {
+			l.deniedCounter.Inc(ctx, metrics.L(LabelMode, "distributed"))
+		}
+		return false, nil
 	}
 
 	// 构建 Redis key

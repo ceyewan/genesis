@@ -169,17 +169,19 @@ func New(cfg *Config, opts ...Option) (Idempotency, error) {
 		memoryMaxEntries: defaultMemoryMaxEntries,
 	}
 	for _, o := range opts {
-		o(&opt)
+		if o != nil {
+			o(&opt)
+		}
 	}
 	limits := componentLimits{
 		maxKeyBytes:    opt.maxKeyBytes,
 		maxResultBytes: opt.maxResultBytes,
 	}
 
-	// 派生 Logger（添加 component 字段）
+	// 派生组件日志命名空间。
 	logger := opt.logger
 	if logger != nil {
-		logger = logger.With(clog.String("component", "idem"))
+		logger = logger.WithNamespace("idem")
 	}
 	if opt.store != nil {
 		return newIdempotencyWithLimits(cfg, opt.store, logger, limits), nil
