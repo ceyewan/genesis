@@ -18,7 +18,7 @@ func TestExamplesCopyToExternalModule(t *testing.T) {
 	require.NoError(t, err)
 	dir := t.TempDir()
 	// replace 只用于编译当前候选源码；外部 module 名称使 internal 导入仍被 Go 拒绝。
-	module := "module example.org/genesis-consumer\n\ngo 1.26\n\nrequire github.com/ceyewan/genesis v1.0.0-rc.3\nreplace github.com/ceyewan/genesis => " + filepath.ToSlash(root) + "\n"
+	module := "module example.org/genesis-consumer\n\ngo 1.26\n\nrequire github.com/ceyewan/genesis v1.0.0\nreplace github.com/ceyewan/genesis => " + filepath.ToSlash(root) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o644))
 	// 文档直接引用可运行代码；外部复制验收编译同一份源码，不维护文档代码副本。
 	for _, name := range []string{"mq", "dlock", "connector", "cached-query"} {
