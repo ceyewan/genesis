@@ -2,8 +2,9 @@
 
 ## 漏洞扫描
 
-CI 当前未运行 `govulncheck`，因此不能声明“无已知可达漏洞”。`go mod verify` 只验证
-依赖内容与校验和，不等同于漏洞扫描。
+CI 运行固定版本 `govulncheck` 的源码可达性扫描；工具版本见 `Makefile`。
+扫描通过仅表示当前数据库和扫描平台未报告已知可达漏洞，不是没有安全风险的保证。
+`go mod verify` 只验证依赖内容与校验和，不等同于漏洞扫描。
 
 发布前运行 `make vulncheck`，使用 `Makefile` 固定版本的 `govulncheck` 扫描全仓源码，
 默认访问 `https://vuln.go.dev` 并发送模块/包元数据。联网扫描须得到维护者同意；

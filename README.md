@@ -6,7 +6,7 @@ Genesis 将日志、配置、连接管理、缓存、分布式锁、消息、认
 服务发现等通用能力沉淀成可以按需组合的 Go 包。它不接管应用生命周期，也不要求
 使用依赖注入容器。
 
-最低 Go 版本以 `go.mod` 为准。首个稳定版本按 `v1.0.0` 准备，
+最低支持 Go `1.26.9`，以 `go.mod` 为准。`v1.0.0` 是首个稳定版本，
 正式发布状态以 [GitHub Releases](https://github.com/ceyewan/genesis/releases) 为准。
 稳定版本遵守 SemVer；CI 通过不会自动创建标签或发布新版本。
 
